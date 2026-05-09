@@ -142,3 +142,49 @@ def test_range_movers_excludes_stocks_below_threshold(tmp_path):
     report = RangeMoverService(settings, token_store).nifty_500_range_movers(threshold_percent=5.0)
 
     assert report["match_count"] == 0
+
+
+def test_range_movers_ignore_high_before_low(tmp_path):
+    token_store, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_symbol(universe_store, instrument_store, "INE000000001", "DROP", "1")
+    settings = Settings(app_secret_key="a" * 44, data_dir=tmp_path)
+    window = historical_window(settings)
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        45,
+        window,
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+    historical_store.upsert_candles(
+        item,
+        [
+            {
+                "timestamp": 1714526100,
+                "trading_date": window.from_date.isoformat(),
+                "open": 118.0,
+                "high": 120.0,
+                "low": 110.0,
+                "close": 112.0,
+                "volume": 1000.0,
+                "open_interest": None,
+            },
+            {
+                "timestamp": 1714612500,
+                "trading_date": date.fromordinal(window.from_date.toordinal() + 1).isoformat(),
+                "open": 103.0,
+                "high": 104.0,
+                "low": 100.0,
+                "close": 101.0,
+                "volume": 1000.0,
+                "open_interest": None,
+            },
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+    historical_store.mark_item_done(item["id"], 2)
+    historical_store.finish_run_if_complete(run_id)
+
+    report = RangeMoverService(settings, token_store).nifty_500_range_movers(threshold_percent=5.0)
+
+    assert report["match_count"] == 0

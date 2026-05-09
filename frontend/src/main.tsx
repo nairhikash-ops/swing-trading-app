@@ -435,7 +435,7 @@ function App() {
 
   async function loadRangeMovers() {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/analytics/nifty500/range-movers?threshold_percent=5&limit=500`);
+      const response = await fetch(`${apiBaseUrl}/api/analytics/nifty500/upward-movers?threshold_percent=5&limit=500`);
       if (!response.ok) throw new Error(await readError(response));
       setRangeMoverReport(await response.json());
     } catch (error) {
@@ -621,7 +621,7 @@ function App() {
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Momentum Scan</p>
-            <h2>45-Day High-Low Move Above 5%</h2>
+            <h2>45-Day Upward Move Above 5%</h2>
           </div>
           <TrendingUp size={22} />
         </div>

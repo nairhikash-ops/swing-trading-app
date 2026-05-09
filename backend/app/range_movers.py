@@ -70,38 +70,26 @@ class RangeMoverService:
                     "industry": row["industry"],
                     "isin": row["isin"],
                     "security_id": row["security_id"],
-                    "lowest_low": None,
-                    "lowest_low_date": None,
-                    "highest_high": None,
-                    "highest_high_date": None,
                     "candle_count": 0,
+                    "candles": [],
                 },
             )
-            low = float(row["low"])
-            high = float(row["high"])
             current["candle_count"] += 1
-            if current["lowest_low"] is None or low < current["lowest_low"]:
-                current["lowest_low"] = low
-                current["lowest_low_date"] = row["trading_date"]
-            if current["highest_high"] is None or high > current["highest_high"]:
-                current["highest_high"] = high
-                current["highest_high_date"] = row["trading_date"]
+            current["candles"].append(
+                {
+                    "trading_date": row["trading_date"],
+                    "low": float(row["low"]),
+                    "high": float(row["high"]),
+                }
+            )
 
         items = []
         for item in grouped.values():
-            lowest_low = item["lowest_low"]
-            highest_high = item["highest_high"]
-            if lowest_low is None or highest_high is None or lowest_low <= 0:
+            best_move = best_upward_move(item["candles"])
+            if best_move is None or best_move["move_percent"] < threshold_percent:
                 continue
-            move_percent = ((highest_high - lowest_low) / lowest_low) * 100
-            if move_percent >= threshold_percent:
-                items.append(
-                    {
-                        **item,
-                        "move_percent": move_percent,
-                        "range_amount": highest_high - lowest_low,
-                    }
-                )
+            item.pop("candles")
+            items.append({**item, **best_move})
 
         items.sort(key=lambda value: value["move_percent"], reverse=True)
         return {
@@ -114,3 +102,32 @@ class RangeMoverService:
             "match_count": len(items),
             "items": items[: min(max(limit, 1), 500)],
         }
+
+
+def best_upward_move(candles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    lowest_low = None
+    lowest_low_date = None
+    best = None
+
+    for candle in candles:
+        high = candle["high"]
+        low = candle["low"]
+        trading_date = candle["trading_date"]
+
+        if lowest_low is not None and lowest_low > 0:
+            move_percent = ((high - lowest_low) / lowest_low) * 100
+            if best is None or move_percent > best["move_percent"]:
+                best = {
+                    "lowest_low": lowest_low,
+                    "lowest_low_date": lowest_low_date,
+                    "highest_high": high,
+                    "highest_high_date": trading_date,
+                    "move_percent": move_percent,
+                    "range_amount": high - lowest_low,
+                }
+
+        if lowest_low is None or low < lowest_low:
+            lowest_low = low
+            lowest_low_date = trading_date
+
+    return best

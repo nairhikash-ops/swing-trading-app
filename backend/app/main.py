@@ -275,8 +275,9 @@ async def quality_nifty_500_report(
     return QualityReportResponse(**quality_service.report(status_filter=status, limit=limit))
 
 
+@app.get("/api/analytics/nifty500/upward-movers", response_model=RangeMoverReportResponse)
 @app.get("/api/analytics/nifty500/range-movers", response_model=RangeMoverReportResponse)
-async def analytics_nifty_500_range_movers(
+async def analytics_nifty_500_upward_movers(
     threshold_percent: float = Query(default=5.0, ge=0.1, le=100.0),
     limit: int = Query(default=500, ge=1, le=500),
     range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
