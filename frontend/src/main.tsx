@@ -79,6 +79,37 @@ type InstrumentItem = {
   mtf_leverage: string;
 };
 
+type UniverseStatus = {
+  index_name: string;
+  total_count: number;
+  active_count: number;
+  industry_count: number;
+  last_import?: {
+    id: number;
+    source_url: string;
+    source_columns_json: string;
+    total_rows_seen: number;
+    imported_rows: number;
+    inserted_rows: number;
+    updated_rows: number;
+    unchanged_rows: number;
+    deactivated_rows: number;
+    completed_at?: string | null;
+    error: string;
+  } | null;
+};
+
+type UniverseItem = {
+  id: number;
+  index_name: string;
+  company_name: string;
+  industry: string;
+  symbol: string;
+  series: string;
+  isin: string;
+  raw: Record<string, string>;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -90,6 +121,9 @@ function App() {
   const [instrumentStatus, setInstrumentStatus] = useState<InstrumentStatus | null>(null);
   const [instrumentResults, setInstrumentResults] = useState<InstrumentItem[]>([]);
   const [instrumentQuery, setInstrumentQuery] = useState("");
+  const [universeStatus, setUniverseStatus] = useState<UniverseStatus | null>(null);
+  const [universeResults, setUniverseResults] = useState<UniverseItem[]>([]);
+  const [universeQuery, setUniverseQuery] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -142,6 +176,47 @@ function App() {
       setMessage(error instanceof Error ? error.message : "Unable to refresh instrument master.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadUniverseStatus() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/status`);
+      if (!response.ok) throw new Error(await readError(response));
+      setUniverseStatus(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load Nifty 500 status.");
+    }
+  }
+
+  async function refreshUniverse() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/refresh`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = await response.json();
+      setMessage(`Imported ${formatNumber(data.imported_rows)} Nifty 500 constituents from NSE.`);
+      await loadUniverseStatus();
+      await loadUniverse(universeQuery);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh Nifty 500 universe.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadUniverse(query = universeQuery) {
+    const trimmed = query.trim();
+    setUniverseQuery(query);
+    try {
+      const params = new URLSearchParams({ limit: "600" });
+      if (trimmed) params.set("query", trimmed);
+      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/constituents?${params.toString()}`);
+      if (!response.ok) throw new Error(await readError(response));
+      setUniverseResults(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load Nifty 500 constituents.");
     }
   }
 
@@ -206,6 +281,8 @@ function App() {
   useEffect(() => {
     loadStatus();
     loadInstrumentStatus();
+    loadUniverseStatus();
+    loadUniverse();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -313,6 +390,81 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Universe</p>
+            <h2>Nifty 500 Constituents</h2>
+          </div>
+          <Database size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Active stocks" value={formatNumber(universeStatus?.active_count)} />
+          <StatusRow label="Stored rows" value={formatNumber(universeStatus?.total_count)} />
+          <StatusRow label="Industries" value={formatNumber(universeStatus?.industry_count)} />
+          <StatusRow label="Last import" value={formatDate(universeStatus?.last_import?.completed_at)} />
+          <StatusRow label="Source rows seen" value={formatNumber(universeStatus?.last_import?.total_rows_seen)} />
+          <StatusRow label="Inserted" value={formatNumber(universeStatus?.last_import?.inserted_rows)} />
+          <StatusRow label="Updated" value={formatNumber(universeStatus?.last_import?.updated_rows)} />
+          <StatusRow label="Deactivated" value={formatNumber(universeStatus?.last_import?.deactivated_rows)} />
+        </dl>
+
+        {universeStatus?.last_import?.error ? <p className="error-text">{universeStatus.last_import.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={refreshUniverse} disabled={busy}>
+            <RefreshCcw size={17} />
+            Refresh Nifty 500
+          </button>
+        </div>
+
+        <label className="search-label">
+          Search Nifty 500 universe
+          <div className="search-row">
+            <input
+              value={universeQuery}
+              onChange={(event) => loadUniverse(event.target.value)}
+              placeholder="RELIANCE, bank, Financial Services"
+            />
+            <button type="button" className="secondary" onClick={() => loadUniverse()} disabled={busy}>
+              <Search size={17} />
+            </button>
+          </div>
+        </label>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Industry</th>
+                <th>Symbol</th>
+                <th>Series</th>
+                <th>ISIN</th>
+              </tr>
+            </thead>
+            <tbody>
+              {universeResults.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>No constituents loaded.</td>
+                </tr>
+              ) : (
+                universeResults.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.company_name || "-"}</td>
+                    <td>{item.industry || "-"}</td>
+                    <td>{item.symbol || "-"}</td>
+                    <td>{item.series || "-"}</td>
+                    <td>{item.isin || "-"}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel instruments-panel">

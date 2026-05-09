@@ -20,6 +20,7 @@ Current implementation stage: **Dhan API foundation**.
 - No stock data fetching, no AI, no order placement.
 - Fetch and store the Dhan detailed instrument master for NSE equity segment only.
 - Preserve all Dhan CSV fields as raw metadata plus normalized lookup columns.
+- Fetch and store the official Nifty 500 constituent CSV from NSE, preserving every source column as raw metadata.
 
 ## Run Locally
 

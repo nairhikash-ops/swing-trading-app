@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     dhan_instruments_detailed_url: str = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
     dhan_instrument_exchange: str = "NSE"
     dhan_instrument_segment: str = "E"
+    nifty_500_constituents_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
     dhan_renew_before_minutes: int = Field(default=180, ge=5, le=23 * 60)
     dhan_status_stale_minutes: int = Field(default=15, ge=1, le=24 * 60)
     dhan_renew_check_interval_seconds: int = Field(default=900, ge=60, le=24 * 3600)

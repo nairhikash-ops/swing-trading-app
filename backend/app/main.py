@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.schemas import (
     HealthResponse,
@@ -13,6 +14,9 @@ from app.schemas import (
     RenewResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
+    UniverseConstituentItem,
+    UniverseImportSummary,
+    UniverseStatusResponse,
 )
 from app.scheduler import RenewalScheduler
 from app.store import TokenStore
@@ -28,15 +32,22 @@ def build_instrument_service(settings: Settings) -> InstrumentMasterService:
     return InstrumentMasterService(settings=settings, store=InstrumentMasterStore(token_store))
 
 
+def build_universe_service(settings: Settings) -> IndexUniverseService:
+    token_store = TokenStore(settings.database_path)
+    return IndexUniverseService(settings=settings, store=IndexUniverseStore(token_store))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     token_service = build_token_service(settings)
     instrument_service = build_instrument_service(settings)
+    universe_service = build_universe_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
     app.state.instrument_service = instrument_service
+    app.state.universe_service = universe_service
     scheduler.start()
     try:
         yield
@@ -61,6 +72,10 @@ def get_token_service_dep() -> TokenService:
 
 def get_instrument_service_dep() -> InstrumentMasterService:
     return app.state.instrument_service
+
+
+def get_universe_service_dep() -> IndexUniverseService:
+    return app.state.universe_service
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -132,3 +147,33 @@ async def instrument_search(
     instrument_service: InstrumentMasterService = Depends(get_instrument_service_dep),
 ) -> list[InstrumentSearchItem]:
     return [InstrumentSearchItem.model_validate(item) for item in instrument_service.search(query, exchange_id, limit)]
+
+
+@app.get("/api/universe/nifty500/status", response_model=UniverseStatusResponse)
+async def nifty_500_status(
+    universe_service: IndexUniverseService = Depends(get_universe_service_dep),
+) -> UniverseStatusResponse:
+    return UniverseStatusResponse(**universe_service.nifty_500_status())
+
+
+@app.post("/api/universe/nifty500/refresh", response_model=UniverseImportSummary)
+async def nifty_500_refresh(
+    universe_service: IndexUniverseService = Depends(get_universe_service_dep),
+) -> UniverseImportSummary:
+    try:
+        stats = await universe_service.refresh_nifty_500()
+        return UniverseImportSummary(**stats.__dict__)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Nifty 500 refresh failed: {exc}") from exc
+
+
+@app.get("/api/universe/nifty500/constituents", response_model=list[UniverseConstituentItem])
+async def nifty_500_constituents(
+    query: str = Query(default="", max_length=64),
+    limit: int = Query(default=600, ge=1, le=1000),
+    universe_service: IndexUniverseService = Depends(get_universe_service_dep),
+) -> list[UniverseConstituentItem]:
+    return [
+        UniverseConstituentItem.model_validate(item)
+        for item in universe_service.nifty_500_constituents(query=query, limit=limit)
+    ]

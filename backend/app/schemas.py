@@ -88,3 +88,37 @@ class InstrumentSearchItem(BaseModel):
     asm_gsm_flag: str
     mtf_leverage: str
     raw: dict
+
+
+class UniverseImportSummary(BaseModel):
+    run_id: int
+    index_name: str
+    source_url: str
+    source_columns: list[str]
+    total_rows_seen: int
+    imported_rows: int
+    inserted_rows: int
+    updated_rows: int
+    unchanged_rows: int
+    deactivated_rows: int
+    started_at: datetime
+    completed_at: datetime
+
+
+class UniverseStatusResponse(BaseModel):
+    index_name: str
+    total_count: int
+    active_count: int
+    industry_count: int
+    last_import: dict | None = None
+
+
+class UniverseConstituentItem(BaseModel):
+    id: int
+    index_name: str
+    company_name: str
+    industry: str
+    symbol: str
+    series: str
+    isin: str
+    raw: dict
