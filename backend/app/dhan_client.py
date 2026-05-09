@@ -79,6 +79,37 @@ class DhanClient:
         response.raise_for_status()
         return response.text
 
+    async def historical_daily(
+        self,
+        access_token: str,
+        security_id: str,
+        exchange_segment: str,
+        instrument: str,
+        from_date: str,
+        to_date: str,
+    ) -> dict[str, Any]:
+        payload = {
+            "securityId": security_id,
+            "exchangeSegment": exchange_segment,
+            "instrument": instrument,
+            "expiryCode": 0,
+            "oi": False,
+            "fromDate": from_date,
+            "toDate": to_date,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                f"{self.base_url}/v2/charts/historical",
+                headers={
+                    "access-token": access_token,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        return response.json()
+
 
 def _parse_optional_datetime(value: Any) -> datetime | None:
     if value is None or str(value).strip() == "":

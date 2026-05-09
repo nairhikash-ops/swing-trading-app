@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     dhan_instrument_exchange: str = "NSE"
     dhan_instrument_segment: str = "E"
     nifty_500_constituents_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+    historical_lookback_calendar_days: int = Field(default=45, ge=1, le=365)
+    dhan_historical_exchange_segment: str = "NSE_EQ"
+    dhan_historical_instrument: str = "EQUITY"
+    dhan_historical_rps: float = Field(default=2.0, ge=0.2, le=10.0)
+    dhan_historical_max_retries: int = Field(default=3, ge=0, le=8)
+    historical_finalized_after_hour_ist: int = Field(default=18, ge=0, le=23)
     dhan_renew_before_minutes: int = Field(default=180, ge=5, le=23 * 60)
     dhan_status_stale_minutes: int = Field(default=15, ge=1, le=24 * 60)
     dhan_renew_check_interval_seconds: int = Field(default=900, ge=60, le=24 * 3600)

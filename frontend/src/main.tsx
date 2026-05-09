@@ -110,6 +110,52 @@ type UniverseItem = {
   raw: Record<string, string>;
 };
 
+type HistoricalStatus = {
+  id: number;
+  universe_name: string;
+  lookback_calendar_days: number;
+  from_date: string;
+  to_date_exclusive: string;
+  status: string;
+  total_symbols: number;
+  mapped_symbols: number;
+  skipped_symbols: number;
+  queued_count: number;
+  fetching_count: number;
+  done_count: number;
+  failed_count: number;
+  skipped_count: number;
+  candles_received: number;
+  stored_candle_count: number;
+  error: string;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+};
+
+type HistoricalItem = {
+  id: number;
+  run_id: number;
+  company_name: string;
+  industry: string;
+  symbol: string;
+  isin: string;
+  security_id: string;
+  status: string;
+  attempts: number;
+  candles_received: number;
+  error: string;
+};
+
+type DailyCandle = {
+  trading_date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -124,6 +170,10 @@ function App() {
   const [universeStatus, setUniverseStatus] = useState<UniverseStatus | null>(null);
   const [universeResults, setUniverseResults] = useState<UniverseItem[]>([]);
   const [universeQuery, setUniverseQuery] = useState("");
+  const [historicalStatus, setHistoricalStatus] = useState<HistoricalStatus | null>(null);
+  const [historicalItems, setHistoricalItems] = useState<HistoricalItem[]>([]);
+  const [candleSymbol, setCandleSymbol] = useState("RELIANCE");
+  const [candles, setCandles] = useState<DailyCandle[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -236,6 +286,64 @@ function App() {
     }
   }
 
+  async function loadHistoricalStatus() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/status`);
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as HistoricalStatus | null;
+      setHistoricalStatus(data);
+      if (data?.id && data.failed_count > 0) {
+        await loadHistoricalItems(data.id, "failed");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load historical fetch status.");
+    }
+  }
+
+  async function startHistoricalFetch() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/refresh`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as HistoricalStatus;
+      setHistoricalStatus(data);
+      setMessage(`Historical fetch run ${data.id} started or resumed.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to start historical fetch.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadHistoricalItems(runId = historicalStatus?.id, itemStatus = "failed") {
+    if (!runId) return;
+    try {
+      const params = new URLSearchParams({ run_id: String(runId), status: itemStatus, limit: "50" });
+      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/items?${params.toString()}`);
+      if (!response.ok) throw new Error(await readError(response));
+      setHistoricalItems(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load historical fetch items.");
+    }
+  }
+
+  async function loadCandles(symbol = candleSymbol) {
+    const trimmed = symbol.trim();
+    setCandleSymbol(symbol);
+    if (!trimmed) {
+      setCandles([]);
+      return;
+    }
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/historical/candles?symbol=${encodeURIComponent(trimmed)}&limit=10`);
+      if (!response.ok) throw new Error(await readError(response));
+      setCandles(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load stored candles.");
+    }
+  }
+
   async function renewToken() {
     setBusy(true);
     setMessage("");
@@ -283,9 +391,25 @@ function App() {
     loadInstrumentStatus();
     loadUniverseStatus();
     loadUniverse();
+    loadHistoricalStatus();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!historicalStatus || !["queued", "running"].includes(historicalStatus.status)) return;
+    const timer = window.setInterval(() => loadHistoricalStatus(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [historicalStatus?.id, historicalStatus?.status]);
+
+  const historicalProgress =
+    historicalStatus && historicalStatus.total_symbols > 0
+      ? Math.round(
+          ((historicalStatus.done_count + historicalStatus.failed_count + historicalStatus.skipped_count) /
+            historicalStatus.total_symbols) *
+            100,
+        )
+      : 0;
 
   return (
     <main className="app-shell">
@@ -390,6 +514,116 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Historical Data</p>
+            <h2>Nifty 500 Rolling 45 Days</h2>
+          </div>
+          <Clock size={22} />
+        </div>
+
+        <div className="progress-track" aria-label="Historical fetch progress">
+          <span style={{ width: `${historicalProgress}%` }} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Run status" value={historicalStatus?.status ?? "-"} />
+          <StatusRow label="Progress" value={`${historicalProgress}%`} />
+          <StatusRow label="Window from" value={historicalStatus?.from_date ?? "-"} />
+          <StatusRow label="Window to" value={historicalStatus?.to_date_exclusive ?? "-"} />
+          <StatusRow label="Mapped" value={formatNumber(historicalStatus?.mapped_symbols)} />
+          <StatusRow label="Done" value={formatNumber(historicalStatus?.done_count)} />
+          <StatusRow label="Failed" value={formatNumber(historicalStatus?.failed_count)} />
+          <StatusRow label="Skipped" value={formatNumber(historicalStatus?.skipped_count)} />
+          <StatusRow label="Candles received" value={formatNumber(historicalStatus?.candles_received)} />
+          <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
+          <StatusRow label="Updated" value={formatDate(historicalStatus?.updated_at)} />
+          <StatusRow label="Completed" value={formatDate(historicalStatus?.completed_at)} />
+        </dl>
+
+        {historicalStatus?.error ? <p className="error-text">{historicalStatus.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={startHistoricalFetch} disabled={busy}>
+            <RefreshCcw size={17} />
+            Start / resume fetch
+          </button>
+          <button className="secondary" onClick={() => loadHistoricalStatus()} disabled={busy}>
+            <Wifi size={17} />
+            Check status
+          </button>
+        </div>
+
+        {historicalItems.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Failed symbol</th>
+                  <th>Company</th>
+                  <th>Attempts</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historicalItems.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{formatNumber(item.attempts)}</td>
+                    <td>{item.error || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        <label className="search-label">
+          Inspect stored candles
+          <div className="search-row">
+            <input
+              value={candleSymbol}
+              onChange={(event) => loadCandles(event.target.value)}
+              placeholder="RELIANCE"
+            />
+            <button type="button" className="secondary" onClick={() => loadCandles()} disabled={busy}>
+              <Search size={17} />
+            </button>
+          </div>
+        </label>
+
+        {candles.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Open</th>
+                  <th>High</th>
+                  <th>Low</th>
+                  <th>Close</th>
+                  <th>Volume</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candles.map((candle) => (
+                  <tr key={candle.trading_date}>
+                    <td>{candle.trading_date}</td>
+                    <td>{formatPrice(candle.open)}</td>
+                    <td>{formatPrice(candle.high)}</td>
+                    <td>{formatPrice(candle.low)}</td>
+                    <td>{formatPrice(candle.close)}</td>
+                    <td>{formatNumber(candle.volume)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
 
       <section className="panel instruments-panel">
@@ -590,6 +824,11 @@ function formatDate(value?: string | null) {
 function formatNumber(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return new Intl.NumberFormat("en-IN").format(value);
+}
+
+function formatPrice(value?: number | null) {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
 }
 
 async function readError(response: Response) {

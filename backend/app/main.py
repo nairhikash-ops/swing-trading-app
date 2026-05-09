@@ -4,10 +4,14 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.historical_data import HistoricalDataService, HistoricalDataStore
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.schemas import (
+    DailyCandleItem,
     HealthResponse,
+    HistoricalFetchItem,
+    HistoricalFetchStatusResponse,
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
@@ -37,17 +41,28 @@ def build_universe_service(settings: Settings) -> IndexUniverseService:
     return IndexUniverseService(settings=settings, store=IndexUniverseStore(token_store))
 
 
+def build_historical_service(settings: Settings) -> HistoricalDataService:
+    token_store = TokenStore(settings.database_path)
+    return HistoricalDataService(
+        settings=settings,
+        token_store=token_store,
+        store=HistoricalDataStore(token_store),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     token_service = build_token_service(settings)
     instrument_service = build_instrument_service(settings)
     universe_service = build_universe_service(settings)
+    historical_service = build_historical_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
     app.state.instrument_service = instrument_service
     app.state.universe_service = universe_service
+    app.state.historical_service = historical_service
     scheduler.start()
     try:
         yield
@@ -76,6 +91,10 @@ def get_instrument_service_dep() -> InstrumentMasterService:
 
 def get_universe_service_dep() -> IndexUniverseService:
     return app.state.universe_service
+
+
+def get_historical_service_dep() -> HistoricalDataService:
+    return app.state.historical_service
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -176,4 +195,48 @@ async def nifty_500_constituents(
     return [
         UniverseConstituentItem.model_validate(item)
         for item in universe_service.nifty_500_constituents(query=query, limit=limit)
+    ]
+
+
+@app.get("/api/historical/nifty500/status", response_model=HistoricalFetchStatusResponse | None)
+async def historical_nifty_500_status(
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+) -> HistoricalFetchStatusResponse | None:
+    status = historical_service.latest_status()
+    return HistoricalFetchStatusResponse(**status) if status else None
+
+
+@app.post("/api/historical/nifty500/refresh", response_model=HistoricalFetchStatusResponse)
+async def historical_nifty_500_refresh(
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+) -> HistoricalFetchStatusResponse:
+    try:
+        status = await historical_service.start_or_resume_nifty_500_fetch()
+        return HistoricalFetchStatusResponse(**status)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/historical/nifty500/items", response_model=list[HistoricalFetchItem])
+async def historical_nifty_500_items(
+    run_id: int = Query(ge=1),
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+) -> list[HistoricalFetchItem]:
+    return [
+        HistoricalFetchItem.model_validate(item)
+        for item in historical_service.items(run_id=run_id, status=status, limit=limit)
+    ]
+
+
+@app.get("/api/historical/candles", response_model=list[DailyCandleItem])
+async def historical_candles(
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=80, ge=1, le=500),
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+) -> list[DailyCandleItem]:
+    return [
+        DailyCandleItem.model_validate(item)
+        for item in historical_service.candles_for_symbol(symbol=symbol, limit=limit)
     ]

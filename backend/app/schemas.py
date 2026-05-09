@@ -122,3 +122,62 @@ class UniverseConstituentItem(BaseModel):
     series: str
     isin: str
     raw: dict
+
+
+class HistoricalFetchStatusResponse(BaseModel):
+    id: int
+    universe_name: str
+    lookback_calendar_days: int
+    from_date: str
+    to_date_exclusive: str
+    status: str
+    total_symbols: int
+    mapped_symbols: int
+    skipped_symbols: int
+    queued_count: int
+    fetching_count: int
+    done_count: int
+    failed_count: int
+    skipped_count: int
+    candles_received: int
+    stored_candle_count: int
+    error: str
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class HistoricalFetchItem(BaseModel):
+    id: int
+    run_id: int
+    index_constituent_id: int
+    instrument_id: int | None = None
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    status: str
+    attempts: int
+    candles_received: int
+    error: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class DailyCandleItem(BaseModel):
+    instrument_id: int
+    security_id: str
+    exchange_segment: str
+    instrument: str
+    trading_date: str
+    source_timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    open_interest: float | None = None
+    source: str
+    fetched_at: datetime
