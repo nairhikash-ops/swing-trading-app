@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, CheckCircle2, Clock, RefreshCcw, Save, Shield, Wifi } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Database, RefreshCcw, Save, Search, Shield, Wifi } from "lucide-react";
 import "./styles.css";
 
 type TokenState =
@@ -38,6 +38,47 @@ type RenewResponse = {
   message: string;
 };
 
+type InstrumentStatus = {
+  total_count: number;
+  active_count: number;
+  nse_count: number;
+  active_nse_count: number;
+  last_import?: {
+    id: number;
+    source_url: string;
+    source_columns_json: string;
+    total_rows_seen: number;
+    imported_rows: number;
+    inserted_rows: number;
+    updated_rows: number;
+    unchanged_rows: number;
+    deactivated_rows: number;
+    completed_at?: string | null;
+    error: string;
+  } | null;
+};
+
+type InstrumentItem = {
+  id: number;
+  exchange_id: string;
+  segment: string;
+  security_id: string;
+  isin: string;
+  instrument: string;
+  symbol_name: string;
+  display_name: string;
+  instrument_type: string;
+  series: string;
+  lot_size?: number | null;
+  expiry_date: string;
+  strike_price?: number | null;
+  option_type: string;
+  tick_size?: number | null;
+  buy_sell_indicator: string;
+  asm_gsm_flag: string;
+  mtf_leverage: string;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -46,6 +87,9 @@ const apiBaseUrl =
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
+  const [instrumentStatus, setInstrumentStatus] = useState<InstrumentStatus | null>(null);
+  const [instrumentResults, setInstrumentResults] = useState<InstrumentItem[]>([]);
+  const [instrumentQuery, setInstrumentQuery] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -69,6 +113,51 @@ function App() {
       setMessage(error instanceof Error ? error.message : "Unable to load Dhan status.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadInstrumentStatus() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/instruments/status`);
+      if (!response.ok) throw new Error(await readError(response));
+      setInstrumentStatus(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load instrument master status.");
+    }
+  }
+
+  async function refreshInstruments() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/instruments/refresh`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = await response.json();
+      setMessage(`Imported ${formatNumber(data.imported_rows)} NSE instruments from Dhan.`);
+      await loadInstrumentStatus();
+      if (instrumentQuery.trim()) {
+        await searchInstruments(instrumentQuery);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh instrument master.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchInstruments(query = instrumentQuery) {
+    const trimmed = query.trim();
+    setInstrumentQuery(query);
+    if (!trimmed) {
+      setInstrumentResults([]);
+      return;
+    }
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/instruments/search?query=${encodeURIComponent(trimmed)}&limit=10`);
+      if (!response.ok) throw new Error(await readError(response));
+      setInstrumentResults(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to search instruments.");
     }
   }
 
@@ -116,6 +205,7 @@ function App() {
 
   useEffect(() => {
     loadStatus();
+    loadInstrumentStatus();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -223,6 +313,87 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Master Data</p>
+            <h2>NSE Instrument Master</h2>
+          </div>
+          <Database size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Active NSE rows" value={formatNumber(instrumentStatus?.active_nse_count)} />
+          <StatusRow label="Stored NSE rows" value={formatNumber(instrumentStatus?.nse_count)} />
+          <StatusRow label="Last import" value={formatDate(instrumentStatus?.last_import?.completed_at)} />
+          <StatusRow label="Source rows seen" value={formatNumber(instrumentStatus?.last_import?.total_rows_seen)} />
+          <StatusRow label="Inserted" value={formatNumber(instrumentStatus?.last_import?.inserted_rows)} />
+          <StatusRow label="Updated" value={formatNumber(instrumentStatus?.last_import?.updated_rows)} />
+          <StatusRow label="Unchanged" value={formatNumber(instrumentStatus?.last_import?.unchanged_rows)} />
+          <StatusRow label="Deactivated" value={formatNumber(instrumentStatus?.last_import?.deactivated_rows)} />
+        </dl>
+
+        {instrumentStatus?.last_import?.error ? <p className="error-text">{instrumentStatus.last_import.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={refreshInstruments} disabled={busy}>
+            <RefreshCcw size={17} />
+            Refresh from Dhan
+          </button>
+        </div>
+
+        <label className="search-label">
+          Search stored NSE instruments
+          <div className="search-row">
+            <input
+              value={instrumentQuery}
+              onChange={(event) => searchInstruments(event.target.value)}
+              placeholder="RELIANCE, HDFCBANK, NIFTY"
+            />
+            <button type="button" className="secondary" onClick={() => searchInstruments()} disabled={busy}>
+              <Search size={17} />
+            </button>
+          </div>
+        </label>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Display</th>
+                <th>Security ID</th>
+                <th>ISIN</th>
+                <th>Segment</th>
+                <th>Type</th>
+                <th>Series</th>
+                <th>Lot</th>
+              </tr>
+            </thead>
+            <tbody>
+              {instrumentResults.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>No search results.</td>
+                </tr>
+              ) : (
+                instrumentResults.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.symbol_name || "-"}</td>
+                    <td>{item.display_name || "-"}</td>
+                    <td>{item.security_id || "-"}</td>
+                    <td>{item.isin || "-"}</td>
+                    <td>{item.segment || "-"}</td>
+                    <td>{item.instrument_type || item.instrument || "-"}</td>
+                    <td>{item.series || "-"}</td>
+                    <td>{formatNumber(item.lot_size)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {message ? <p className="message">{message}</p> : null}

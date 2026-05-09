@@ -73,6 +73,12 @@ class DhanClient:
             raw=payload,
         )
 
+    async def fetch_instrument_master_csv(self, url: str) -> str:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            response = await client.get(url, headers={"Accept": "text/csv,*/*"})
+        response.raise_for_status()
+        return response.text
+
 
 def _parse_optional_datetime(value: Any) -> datetime | None:
     if value is None or str(value).strip() == "":

@@ -42,3 +42,48 @@ class RenewResponse(BaseModel):
     renewed: bool
     status: TokenStatusResponse
     message: str
+
+
+class InstrumentImportSummary(BaseModel):
+    run_id: int
+    source_url: str
+    exchange_filter: str
+    source_columns: list[str]
+    total_rows_seen: int
+    imported_rows: int
+    inserted_rows: int
+    updated_rows: int
+    unchanged_rows: int
+    deactivated_rows: int
+    started_at: datetime
+    completed_at: datetime
+
+
+class InstrumentMasterStatusResponse(BaseModel):
+    total_count: int
+    active_count: int
+    nse_count: int
+    active_nse_count: int
+    last_import: dict | None = None
+
+
+class InstrumentSearchItem(BaseModel):
+    id: int
+    exchange_id: str
+    segment: str
+    security_id: str
+    isin: str
+    instrument: str
+    symbol_name: str
+    display_name: str
+    instrument_type: str
+    series: str
+    lot_size: float | None = None
+    expiry_date: str
+    strike_price: float | None = None
+    option_type: str
+    tick_size: float | None = None
+    buy_sell_indicator: str
+    asm_gsm_flag: str
+    mtf_leverage: str
+    raw: dict

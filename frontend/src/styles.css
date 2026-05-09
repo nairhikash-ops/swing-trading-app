@@ -149,6 +149,16 @@ h2 {
   margin: 0;
 }
 
+.status-list.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.status-list.compact dt,
+.status-list.compact dd {
+  grid-column: auto;
+}
+
 dt {
   color: #68746d;
   font-size: 0.9rem;
@@ -200,6 +210,46 @@ textarea {
   margin-top: 22px;
 }
 
+.instruments-panel {
+  margin-top: 18px;
+}
+
+.search-label {
+  margin-top: 20px;
+}
+
+.search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+}
+
+.table-wrap {
+  width: 100%;
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 820px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e0e7e3;
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #59665f;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
 .message,
 .error-text {
   border-radius: 6px;
@@ -229,5 +279,9 @@ textarea {
   .status-list {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .status-list.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
