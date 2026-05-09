@@ -234,6 +234,7 @@ const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
     ? configuredApiBaseUrl
     : `${window.location.protocol}//${window.location.hostname}:8000`;
+const rangeMoverThresholdOptions = [5, 10, 15, 20, 30, 40, 50];
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
@@ -249,6 +250,7 @@ function App() {
   const [candles, setCandles] = useState<DailyCandle[]>([]);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
+  const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -433,14 +435,22 @@ function App() {
     }
   }
 
-  async function loadRangeMovers() {
+  async function loadRangeMovers(threshold = rangeMoverThreshold) {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/analytics/nifty500/upward-movers?threshold_percent=5&limit=500`);
+      const response = await fetch(
+        `${apiBaseUrl}/api/analytics/nifty500/upward-movers?threshold_percent=${threshold}&limit=500`,
+      );
       if (!response.ok) throw new Error(await readError(response));
       setRangeMoverReport(await response.json());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load range movers.");
     }
+  }
+
+  function changeRangeMoverThreshold(value: string) {
+    const nextThreshold = Number(value);
+    setRangeMoverThreshold(nextThreshold);
+    loadRangeMovers(nextThreshold);
   }
 
   async function renewToken() {
@@ -621,7 +631,7 @@ function App() {
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Momentum Scan</p>
-            <h2>45-Day Upward Move Above 5%</h2>
+            <h2>45-Day Upward Move Above {rangeMoverThreshold}%</h2>
           </div>
           <TrendingUp size={22} />
         </div>
@@ -636,7 +646,17 @@ function App() {
         </dl>
 
         <div className="button-row">
-          <button className="secondary" onClick={loadRangeMovers} disabled={busy}>
+          <label className="inline-control">
+            Minimum upward move
+            <select value={rangeMoverThreshold} onChange={(event) => changeRangeMoverThreshold(event.target.value)}>
+              {rangeMoverThresholdOptions.map((value) => (
+                <option key={value} value={value}>
+                  {value}%
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="secondary" onClick={() => loadRangeMovers()} disabled={busy}>
             <RefreshCcw size={17} />
             Recheck movers
           </button>

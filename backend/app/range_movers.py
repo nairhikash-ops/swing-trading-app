@@ -15,7 +15,7 @@ class RangeMoverService:
     def _connect(self):
         return self.token_store._connect()
 
-    def nifty_500_range_movers(self, threshold_percent: float = 5.0, limit: int = 500) -> dict[str, Any]:
+    def nifty_500_range_movers(self, threshold_percent: float = 20.0, limit: int = 500) -> dict[str, Any]:
         window = historical_window(self.settings)
         from_date = window.from_date.isoformat()
         to_date_exclusive = window.to_date_exclusive.isoformat()

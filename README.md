@@ -23,7 +23,7 @@ Current implementation stage: **Dhan API foundation**.
 - Fetch and store the official Nifty 500 constituent CSV from NSE, preserving every source column as raw metadata.
 - Fetch rolling 45-calendar-day Dhan daily candles for mapped Nifty 500 stocks through a resumable, rate-limited job.
 - Run automated Nifty 500 candle quality checks and show only exceptions for review.
-- Scan the latest 45-day Nifty 500 candle window for stocks whose later high is at least 5% above an earlier low.
+- Scan the latest 45-day Nifty 500 candle window for stocks whose later high clears a selectable upward-move threshold; the default is 20%.
 
 ## Run Locally
 

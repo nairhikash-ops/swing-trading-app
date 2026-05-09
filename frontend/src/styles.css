@@ -19,6 +19,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -179,6 +180,7 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #c9d3cd;
@@ -206,8 +208,16 @@ textarea {
 .button-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: 10px;
   margin-top: 22px;
+}
+
+.inline-control {
+  display: grid;
+  width: min(220px, 100%);
+  gap: 7px;
+  margin: 0;
 }
 
 .progress-track {
