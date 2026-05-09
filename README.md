@@ -22,6 +22,7 @@ Current implementation stage: **Dhan API foundation**.
 - Preserve all Dhan CSV fields as raw metadata plus normalized lookup columns.
 - Fetch and store the official Nifty 500 constituent CSV from NSE, preserving every source column as raw metadata.
 - Fetch rolling 45-calendar-day Dhan daily candles for mapped Nifty 500 stocks through a resumable, rate-limited job.
+- Run automated Nifty 500 candle quality checks and show only exceptions for review.
 
 ## Run Locally
 
@@ -50,3 +51,4 @@ Frontend: `http://localhost:5173`
 - If renewal is missed and the token expires, use the manual fallback screen.
 - The NSE equity instrument master is stored in SQLite and can be refreshed from Dhan on demand.
 - Historical Dhan fetches run one mapped Nifty 500 instrument at a time, retry temporary failures, and record per-symbol failures without deleting successful candles.
+- Data quality checks classify each stock as healthy, warning, or blocked before future analysis uses the candle cache.

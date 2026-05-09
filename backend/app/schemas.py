@@ -181,3 +181,39 @@ class DailyCandleItem(BaseModel):
     open_interest: float | None = None
     source: str
     fetched_at: datetime
+
+
+class QualityItem(BaseModel):
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    quality_status: str
+    issues: list[str]
+    latest_candle_date: str | None = None
+    expected_sessions: int
+    candle_count: int
+    missing_sessions: int
+    invalid_ohlc_count: int
+    zero_volume_count: int
+    negative_volume_count: int
+    extreme_move_count: int
+    fetch_status: str
+    fetch_error: str
+
+
+class QualityReportResponse(BaseModel):
+    generated_at: datetime
+    historical_run_id: int | None = None
+    historical_run_status: str
+    from_date: str
+    to_date_exclusive: str
+    latest_expected_session: str | None = None
+    expected_session_count: int
+    total_symbols: int
+    healthy_count: int
+    warning_count: int
+    blocked_count: int
+    issue_counts: dict[str, int]
+    items: list[QualityItem]

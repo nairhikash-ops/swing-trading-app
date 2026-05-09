@@ -156,6 +156,42 @@ type DailyCandle = {
   volume: number;
 };
 
+type QualityItem = {
+  symbol: string;
+  company_name: string;
+  industry: string;
+  isin: string;
+  security_id: string;
+  quality_status: "healthy" | "warning" | "blocked";
+  issues: string[];
+  latest_candle_date?: string | null;
+  expected_sessions: number;
+  candle_count: number;
+  missing_sessions: number;
+  invalid_ohlc_count: number;
+  zero_volume_count: number;
+  negative_volume_count: number;
+  extreme_move_count: number;
+  fetch_status: string;
+  fetch_error: string;
+};
+
+type QualityReport = {
+  generated_at: string;
+  historical_run_id?: number | null;
+  historical_run_status: string;
+  from_date: string;
+  to_date_exclusive: string;
+  latest_expected_session?: string | null;
+  expected_session_count: number;
+  total_symbols: number;
+  healthy_count: number;
+  warning_count: number;
+  blocked_count: number;
+  issue_counts: Record<string, number>;
+  items: QualityItem[];
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -174,6 +210,7 @@ function App() {
   const [historicalItems, setHistoricalItems] = useState<HistoricalItem[]>([]);
   const [candleSymbol, setCandleSymbol] = useState("RELIANCE");
   const [candles, setCandles] = useState<DailyCandle[]>([]);
+  const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -344,6 +381,16 @@ function App() {
     }
   }
 
+  async function loadQualityReport() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/quality/nifty500/report?status=exceptions&limit=100`);
+      if (!response.ok) throw new Error(await readError(response));
+      setQualityReport(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load data quality report.");
+    }
+  }
+
   async function renewToken() {
     setBusy(true);
     setMessage("");
@@ -392,6 +439,7 @@ function App() {
     loadUniverseStatus();
     loadUniverse();
     loadHistoricalStatus();
+    loadQualityReport();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -514,6 +562,69 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Quality</p>
+            <h2>Nifty 500 Data Checks</h2>
+          </div>
+          <CheckCircle2 size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Healthy" value={formatNumber(qualityReport?.healthy_count)} />
+          <StatusRow label="Warnings" value={formatNumber(qualityReport?.warning_count)} />
+          <StatusRow label="Blocked" value={formatNumber(qualityReport?.blocked_count)} />
+          <StatusRow label="Expected sessions" value={formatNumber(qualityReport?.expected_session_count)} />
+          <StatusRow label="Latest session" value={qualityReport?.latest_expected_session ?? "-"} />
+          <StatusRow label="Historical run" value={qualityReport?.historical_run_status ?? "-"} />
+          <StatusRow label="Generated" value={formatDate(qualityReport?.generated_at)} />
+          <StatusRow label="Exceptions shown" value={formatNumber(qualityReport?.items.length)} />
+        </dl>
+
+        <div className="button-row">
+          <button className="secondary" onClick={loadQualityReport} disabled={busy}>
+            <RefreshCcw size={17} />
+            Recheck quality
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Symbol</th>
+                <th>Company</th>
+                <th>Latest</th>
+                <th>Candles</th>
+                <th>Missing</th>
+                <th>Issues</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!qualityReport || qualityReport.items.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No quality exceptions.</td>
+                </tr>
+              ) : (
+                qualityReport.items.map((item) => (
+                  <tr key={item.symbol}>
+                    <td>{item.quality_status}</td>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{item.latest_candle_date ?? "-"}</td>
+                    <td>{formatNumber(item.candle_count)}</td>
+                    <td>{formatNumber(item.missing_sessions)}</td>
+                    <td>{formatIssues(item.issues)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel instruments-panel">
@@ -829,6 +940,11 @@ function formatNumber(value?: number | null) {
 function formatPrice(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatIssues(value: string[]) {
+  if (value.length === 0) return "-";
+  return value.map((item) => item.replaceAll("_", " ")).join(", ");
 }
 
 async function readError(response: Response) {

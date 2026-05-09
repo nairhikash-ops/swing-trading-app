@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.data_quality import DataQualityService
 from app.historical_data import HistoricalDataService, HistoricalDataStore
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
@@ -15,6 +16,7 @@ from app.schemas import (
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
+    QualityReportResponse,
     RenewResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
@@ -50,6 +52,10 @@ def build_historical_service(settings: Settings) -> HistoricalDataService:
     )
 
 
+def build_quality_service(settings: Settings) -> DataQualityService:
+    return DataQualityService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -57,12 +63,14 @@ async def lifespan(app: FastAPI):
     instrument_service = build_instrument_service(settings)
     universe_service = build_universe_service(settings)
     historical_service = build_historical_service(settings)
+    quality_service = build_quality_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
     app.state.instrument_service = instrument_service
     app.state.universe_service = universe_service
     app.state.historical_service = historical_service
+    app.state.quality_service = quality_service
     scheduler.start()
     try:
         yield
@@ -95,6 +103,10 @@ def get_universe_service_dep() -> IndexUniverseService:
 
 def get_historical_service_dep() -> HistoricalDataService:
     return app.state.historical_service
+
+
+def get_quality_service_dep() -> DataQualityService:
+    return app.state.quality_service
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -240,3 +252,12 @@ async def historical_candles(
         DailyCandleItem.model_validate(item)
         for item in historical_service.candles_for_symbol(symbol=symbol, limit=limit)
     ]
+
+
+@app.get("/api/quality/nifty500/report", response_model=QualityReportResponse)
+async def quality_nifty_500_report(
+    status: str = Query(default="exceptions", max_length=32),
+    limit: int = Query(default=200, ge=1, le=500),
+    quality_service: DataQualityService = Depends(get_quality_service_dep),
+) -> QualityReportResponse:
+    return QualityReportResponse(**quality_service.report(status_filter=status, limit=limit))
