@@ -531,7 +531,7 @@ class HistoricalDataService:
             else:
                 run_id = int(active_run["id"])
             if self._task is None or self._task.done():
-                self._task = asyncio.create_task(self._run_fetch(run_id))
+                self._task = asyncio.create_task(asyncio.to_thread(self._run_fetch_sync, run_id))
             status = self.store.status(run_id)
             return status or {}
 
@@ -543,6 +543,9 @@ class HistoricalDataService:
 
     def candles_for_symbol(self, symbol: str, limit: int = 80) -> list[dict[str, Any]]:
         return self.store.candles_for_symbol(symbol, limit)
+
+    def _run_fetch_sync(self, run_id: int) -> None:
+        asyncio.run(self._run_fetch(run_id))
 
     async def _run_fetch(self, run_id: int) -> None:
         self.store.prepare_run(run_id)
