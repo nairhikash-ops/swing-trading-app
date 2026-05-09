@@ -230,6 +230,7 @@ class InstrumentMasterStore:
             run = conn.execute(
                 """
                 SELECT * FROM instrument_import_runs
+                WHERE completed_at IS NOT NULL
                 ORDER BY id DESC
                 LIMIT 1
                 """

@@ -81,3 +81,15 @@ async def test_symbol_rename_updates_existing_identity_and_deactivates_missing_r
     assert stats.deactivated_rows == 1
     assert service.status()["active_nse_count"] == 1
     assert results[0]["symbol_name"] == "HDFCBANKNEW"
+
+
+@pytest.mark.asyncio
+async def test_status_reports_latest_completed_import(tmp_path):
+    service = make_service(tmp_path, CSV_ONE)
+    await service.refresh()
+    service.store.start_import("https://example.invalid/master.csv", "NSE", ["EXCH_ID"])
+
+    status = service.status()
+
+    assert status["last_import"]["completed_at"] is not None
+    assert status["last_import"]["imported_rows"] == 2
