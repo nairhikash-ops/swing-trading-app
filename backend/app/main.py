@@ -8,6 +8,7 @@ from app.data_quality import DataQualityService
 from app.historical_data import HistoricalDataService, HistoricalDataStore
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
+from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
     HealthResponse,
@@ -17,6 +18,7 @@ from app.schemas import (
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
     QualityReportResponse,
+    RangeMoverReportResponse,
     RenewResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
@@ -56,6 +58,10 @@ def build_quality_service(settings: Settings) -> DataQualityService:
     return DataQualityService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_range_mover_service(settings: Settings) -> RangeMoverService:
+    return RangeMoverService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -64,6 +70,7 @@ async def lifespan(app: FastAPI):
     universe_service = build_universe_service(settings)
     historical_service = build_historical_service(settings)
     quality_service = build_quality_service(settings)
+    range_mover_service = build_range_mover_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
@@ -71,6 +78,7 @@ async def lifespan(app: FastAPI):
     app.state.universe_service = universe_service
     app.state.historical_service = historical_service
     app.state.quality_service = quality_service
+    app.state.range_mover_service = range_mover_service
     scheduler.start()
     try:
         yield
@@ -107,6 +115,10 @@ def get_historical_service_dep() -> HistoricalDataService:
 
 def get_quality_service_dep() -> DataQualityService:
     return app.state.quality_service
+
+
+def get_range_mover_service_dep() -> RangeMoverService:
+    return app.state.range_mover_service
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -261,3 +273,14 @@ async def quality_nifty_500_report(
     quality_service: DataQualityService = Depends(get_quality_service_dep),
 ) -> QualityReportResponse:
     return QualityReportResponse(**quality_service.report(status_filter=status, limit=limit))
+
+
+@app.get("/api/analytics/nifty500/range-movers", response_model=RangeMoverReportResponse)
+async def analytics_nifty_500_range_movers(
+    threshold_percent: float = Query(default=5.0, ge=0.1, le=100.0),
+    limit: int = Query(default=500, ge=1, le=500),
+    range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
+) -> RangeMoverReportResponse:
+    return RangeMoverReportResponse(
+        **range_mover_service.nifty_500_range_movers(threshold_percent=threshold_percent, limit=limit)
+    )

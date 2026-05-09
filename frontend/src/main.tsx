@@ -1,7 +1,18 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, CheckCircle2, Clock, Database, RefreshCcw, Save, Search, Shield, Wifi } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Database,
+  RefreshCcw,
+  Save,
+  Search,
+  Shield,
+  TrendingUp,
+  Wifi,
+} from "lucide-react";
 import "./styles.css";
 
 type TokenState =
@@ -192,6 +203,32 @@ type QualityReport = {
   items: QualityItem[];
 };
 
+type RangeMoverItem = {
+  symbol: string;
+  company_name: string;
+  industry: string;
+  isin: string;
+  security_id: string;
+  lowest_low: number;
+  lowest_low_date: string;
+  highest_high: number;
+  highest_high_date: string;
+  move_percent: number;
+  range_amount: number;
+  candle_count: number;
+};
+
+type RangeMoverReport = {
+  generated_at: string;
+  historical_run_id?: number | null;
+  from_date: string;
+  to_date_exclusive: string;
+  threshold_percent: number;
+  total_scanned: number;
+  match_count: number;
+  items: RangeMoverItem[];
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -211,6 +248,7 @@ function App() {
   const [candleSymbol, setCandleSymbol] = useState("RELIANCE");
   const [candles, setCandles] = useState<DailyCandle[]>([]);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
+  const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -395,6 +433,16 @@ function App() {
     }
   }
 
+  async function loadRangeMovers() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/analytics/nifty500/range-movers?threshold_percent=5&limit=500`);
+      if (!response.ok) throw new Error(await readError(response));
+      setRangeMoverReport(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load range movers.");
+    }
+  }
+
   async function renewToken() {
     setBusy(true);
     setMessage("");
@@ -444,6 +492,7 @@ function App() {
     loadUniverse();
     loadHistoricalStatus();
     loadQualityReport();
+    loadRangeMovers();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -566,6 +615,69 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Momentum Scan</p>
+            <h2>45-Day High-Low Move Above 5%</h2>
+          </div>
+          <TrendingUp size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Matches" value={formatNumber(rangeMoverReport?.match_count)} />
+          <StatusRow label="Scanned" value={formatNumber(rangeMoverReport?.total_scanned)} />
+          <StatusRow label="Threshold" value={formatPercent(rangeMoverReport?.threshold_percent)} />
+          <StatusRow label="Window from" value={rangeMoverReport?.from_date ?? "-"} />
+          <StatusRow label="Window to" value={rangeMoverReport?.to_date_exclusive ?? "-"} />
+          <StatusRow label="Generated" value={formatDate(rangeMoverReport?.generated_at)} />
+        </dl>
+
+        <div className="button-row">
+          <button className="secondary" onClick={loadRangeMovers} disabled={busy}>
+            <RefreshCcw size={17} />
+            Recheck movers
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Company</th>
+                <th>Industry</th>
+                <th>Low</th>
+                <th>Low date</th>
+                <th>High</th>
+                <th>High date</th>
+                <th>Move</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!rangeMoverReport || rangeMoverReport.items.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>No stocks crossed the threshold.</td>
+                </tr>
+              ) : (
+                rangeMoverReport.items.map((item) => (
+                  <tr key={item.symbol}>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{item.industry}</td>
+                    <td>{formatPrice(item.lowest_low)}</td>
+                    <td>{item.lowest_low_date}</td>
+                    <td>{formatPrice(item.highest_high)}</td>
+                    <td>{item.highest_high_date}</td>
+                    <td>{formatPercent(item.move_percent)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel instruments-panel">
@@ -944,6 +1056,11 @@ function formatNumber(value?: number | null) {
 function formatPrice(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatPercent(value?: number | null) {
+  if (value === null || value === undefined) return "-";
+  return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}%`;
 }
 
 function formatIssues(value: string[]) {

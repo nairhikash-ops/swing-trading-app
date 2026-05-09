@@ -217,3 +217,29 @@ class QualityReportResponse(BaseModel):
     blocked_count: int
     issue_counts: dict[str, int]
     items: list[QualityItem]
+
+
+class RangeMoverItem(BaseModel):
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    lowest_low: float
+    lowest_low_date: str
+    highest_high: float
+    highest_high_date: str
+    move_percent: float
+    range_amount: float
+    candle_count: int
+
+
+class RangeMoverReportResponse(BaseModel):
+    generated_at: datetime
+    historical_run_id: int | None = None
+    from_date: str
+    to_date_exclusive: str
+    threshold_percent: float
+    total_scanned: int
+    match_count: int
+    items: list[RangeMoverItem]
