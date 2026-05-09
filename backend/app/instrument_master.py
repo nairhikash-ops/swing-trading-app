@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
@@ -44,6 +45,7 @@ class ImportStats:
     run_id: int
     source_url: str
     exchange_filter: str
+    segment_filter: str
     source_columns: list[str]
     total_rows_seen: int
     imported_rows: int
@@ -71,6 +73,7 @@ class InstrumentMasterStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_url TEXT NOT NULL,
                     exchange_filter TEXT NOT NULL,
+                    segment_filter TEXT NOT NULL DEFAULT '',
                     source_columns_json TEXT NOT NULL,
                     total_rows_seen INTEGER NOT NULL DEFAULT 0,
                     imported_rows INTEGER NOT NULL DEFAULT 0,
@@ -84,6 +87,11 @@ class InstrumentMasterStore:
                 )
                 """
             )
+            try:
+                conn.execute("ALTER TABLE instrument_import_runs ADD COLUMN segment_filter TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS instruments (
@@ -128,15 +136,15 @@ class InstrumentMasterStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_instruments_security ON instruments(security_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_instruments_isin ON instruments(isin)")
 
-    def start_import(self, source_url: str, exchange_filter: str, source_columns: list[str]) -> int:
+    def start_import(self, source_url: str, exchange_filter: str, segment_filter: str, source_columns: list[str]) -> int:
         started_at = now_utc().isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO instrument_import_runs (source_url, exchange_filter, source_columns_json, started_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO instrument_import_runs (source_url, exchange_filter, segment_filter, source_columns_json, started_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (source_url, exchange_filter, json.dumps(source_columns), started_at),
+                (source_url, exchange_filter, segment_filter, json.dumps(source_columns), started_at),
             )
             return int(cursor.lastrowid)
 
@@ -163,7 +171,7 @@ class InstrumentMasterStore:
                 ),
             )
 
-    def upsert_rows(self, run_id: int, rows: list[dict[str, str]], exchange_filter: str) -> dict[str, int]:
+    def upsert_rows(self, run_id: int, rows: list[dict[str, str]], exchange_filter: str, segment_filter: str) -> dict[str, int]:
         stats = {
             "imported_rows": 0,
             "inserted_rows": 0,
@@ -174,6 +182,16 @@ class InstrumentMasterStore:
         seen_keys: set[str] = set()
         timestamp = now_utc().isoformat()
         with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE instruments
+                SET active = 0, updated_at = ?
+                WHERE exchange_id = ? AND segment <> ? AND active = 1
+                """,
+                (timestamp, exchange_filter, segment_filter),
+            )
+            stats["deactivated_rows"] += cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
             for raw_row in rows:
                 row = normalize_row(raw_row)
                 natural_key = build_natural_key(row)
@@ -208,11 +226,11 @@ class InstrumentMasterStore:
                     f"""
                     UPDATE instruments
                     SET active = 0, updated_at = ?
-                    WHERE exchange_id = ? AND natural_key NOT IN ({placeholders})
+                    WHERE exchange_id = ? AND segment = ? AND natural_key NOT IN ({placeholders})
                     """,
-                    (timestamp, exchange_filter, *seen_keys),
+                    (timestamp, exchange_filter, segment_filter, *seen_keys),
                 )
-                stats["deactivated_rows"] = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                stats["deactivated_rows"] += cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return stats
 
     def status(self) -> dict[str, Any]:
@@ -222,8 +240,8 @@ class InstrumentMasterStore:
                 SELECT
                     COUNT(*) AS total_count,
                     SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active_count,
-                    SUM(CASE WHEN exchange_id = 'NSE' THEN 1 ELSE 0 END) AS nse_count,
-                    SUM(CASE WHEN exchange_id = 'NSE' AND active = 1 THEN 1 ELSE 0 END) AS active_nse_count
+                    SUM(CASE WHEN exchange_id = 'NSE' AND segment = 'E' THEN 1 ELSE 0 END) AS nse_count,
+                    SUM(CASE WHEN exchange_id = 'NSE' AND segment = 'E' AND active = 1 THEN 1 ELSE 0 END) AS active_nse_count
                 FROM instruments
                 """
             ).fetchone()
@@ -243,13 +261,13 @@ class InstrumentMasterStore:
             "last_import": dict(run) if run else None,
         }
 
-    def search(self, query: str, exchange_id: str, limit: int) -> list[dict[str, Any]]:
+    def search(self, query: str, exchange_id: str, segment: str, limit: int) -> list[dict[str, Any]]:
         term = f"%{query.strip().upper()}%"
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM instruments
-                WHERE active = 1 AND exchange_id = ?
+                WHERE active = 1 AND exchange_id = ? AND segment = ?
                   AND (
                     UPPER(symbol_name) LIKE ?
                     OR UPPER(display_name) LIKE ?
@@ -272,6 +290,7 @@ class InstrumentMasterStore:
                 """,
                 (
                     exchange_id.upper(),
+                    segment.upper(),
                     term,
                     term,
                     term,
@@ -295,12 +314,13 @@ class InstrumentMasterService:
     async def refresh(self) -> ImportStats:
         source_url = self.settings.dhan_instruments_detailed_url
         exchange_filter = self.settings.dhan_instrument_exchange.upper()
+        segment_filter = self.settings.dhan_instrument_segment.upper()
         csv_text = await self.dhan_client.fetch_instrument_master_csv(source_url)
-        source_columns, total_rows, rows = parse_instrument_csv(csv_text, exchange_filter)
-        run_id = self.store.start_import(source_url, exchange_filter, source_columns)
+        source_columns, total_rows, rows = parse_instrument_csv(csv_text, exchange_filter, segment_filter)
+        run_id = self.store.start_import(source_url, exchange_filter, segment_filter, source_columns)
         stats = {"total_rows_seen": total_rows}
         try:
-            stats.update(self.store.upsert_rows(run_id, rows, exchange_filter))
+            stats.update(self.store.upsert_rows(run_id, rows, exchange_filter, segment_filter))
             self.store.finish_import(run_id, stats)
         except Exception as exc:
             self.store.finish_import(run_id, stats, str(exc))
@@ -310,6 +330,7 @@ class InstrumentMasterService:
             run_id=run_id,
             source_url=source_url,
             exchange_filter=exchange_filter,
+            segment_filter=segment_filter,
             source_columns=source_columns,
             total_rows_seen=total_rows,
             imported_rows=stats["imported_rows"],
@@ -327,10 +348,10 @@ class InstrumentMasterService:
     def search(self, query: str, exchange_id: str = "NSE", limit: int = 25) -> list[dict[str, Any]]:
         if not query.strip():
             return []
-        return self.store.search(query, exchange_id, min(max(limit, 1), 100))
+        return self.store.search(query, exchange_id, self.settings.dhan_instrument_segment, min(max(limit, 1), 100))
 
 
-def parse_instrument_csv(csv_text: str, exchange_filter: str) -> tuple[list[str], int, list[dict[str, str]]]:
+def parse_instrument_csv(csv_text: str, exchange_filter: str, segment_filter: str = "E") -> tuple[list[str], int, list[dict[str, str]]]:
     reader = csv.DictReader(StringIO(csv_text.lstrip("\ufeff")))
     if not reader.fieldnames:
         raise ValueError("Dhan instrument master CSV has no header row.")
@@ -344,7 +365,10 @@ def parse_instrument_csv(csv_text: str, exchange_filter: str) -> tuple[list[str]
             for key, value in raw.items()
             if key is not None and clean_column(key)
         }
-        if normalized.get("EXCH_ID", "").upper() == exchange_filter.upper():
+        if (
+            normalized.get("EXCH_ID", "").upper() == exchange_filter.upper()
+            and normalized.get("SEGMENT", "").upper() == segment_filter.upper()
+        ):
             rows.append(normalized)
     return source_columns, total_rows, rows
 

@@ -48,6 +48,7 @@ class InstrumentImportSummary(BaseModel):
     run_id: int
     source_url: str
     exchange_filter: str
+    segment_filter: str
     source_columns: list[str]
     total_rows_seen: int
     imported_rows: int

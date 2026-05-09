@@ -18,7 +18,7 @@ Current implementation stage: **Dhan API foundation**.
 - Run an automatic renewal loop before expiry.
 - Provide a manual fallback update flow if the server was offline or renewal failed.
 - No stock data fetching, no AI, no order placement.
-- Fetch and store the Dhan detailed instrument master for NSE.
+- Fetch and store the Dhan detailed instrument master for NSE equity segment only.
 - Preserve all Dhan CSV fields as raw metadata plus normalized lookup columns.
 
 ## Run Locally
@@ -46,4 +46,4 @@ Frontend: `http://localhost:5173`
 - API responses never return the full access token.
 - Automatic renewal only works while the token is still active.
 - If renewal is missed and the token expires, use the manual fallback screen.
-- The NSE instrument master is stored in SQLite and can be refreshed from Dhan on demand.
+- The NSE equity instrument master is stored in SQLite and can be refreshed from Dhan on demand.

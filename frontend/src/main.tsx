@@ -325,8 +325,8 @@ function App() {
         </div>
 
         <dl className="status-list compact">
-          <StatusRow label="Active NSE rows" value={formatNumber(instrumentStatus?.active_nse_count)} />
-          <StatusRow label="Stored NSE rows" value={formatNumber(instrumentStatus?.nse_count)} />
+          <StatusRow label="Active NSE equities" value={formatNumber(instrumentStatus?.active_nse_count)} />
+          <StatusRow label="Stored NSE equities" value={formatNumber(instrumentStatus?.nse_count)} />
           <StatusRow label="Last import" value={formatDate(instrumentStatus?.last_import?.completed_at)} />
           <StatusRow label="Source rows seen" value={formatNumber(instrumentStatus?.last_import?.total_rows_seen)} />
           <StatusRow label="Inserted" value={formatNumber(instrumentStatus?.last_import?.inserted_rows)} />
@@ -345,7 +345,7 @@ function App() {
         </div>
 
         <label className="search-label">
-          Search stored NSE instruments
+          Search stored NSE equities
           <div className="search-row">
             <input
               value={instrumentQuery}
