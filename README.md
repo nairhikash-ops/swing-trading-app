@@ -1,1 +1,46 @@
 # swing-trading-app
+
+Private NSE swing-trading advisory project.
+
+Current implementation stage: **Dhan API token system only**.
+
+## Branch Rules
+
+- `develop`: active development.
+- `main`: production-ready code only.
+- Production remains untouched until `develop` is tested and intentionally merged.
+
+## Stage 1 Scope
+
+- Store a Dhan access token server-side only.
+- Check token/account status using Dhan `GET /v2/profile`.
+- Renew active web-generated tokens using Dhan `GET /v2/RenewToken`.
+- Run an automatic renewal loop before expiry.
+- Provide a manual fallback update flow if the server was offline or renewal failed.
+- No stock data fetching, no AI, no order placement.
+
+## Run Locally
+
+Create `.env` from the example and set `APP_SECRET_KEY` before storing a token.
+
+```powershell
+Copy-Item .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Start with Docker:
+
+```powershell
+docker compose up --build
+```
+
+Backend: `http://localhost:8000/api/health`
+
+Frontend: `http://localhost:5173`
+
+## Safety
+
+- Dhan tokens are encrypted before being written to disk.
+- API responses never return the full access token.
+- Automatic renewal only works while the token is still active.
+- If renewal is missed and the token expires, use the manual fallback screen.
