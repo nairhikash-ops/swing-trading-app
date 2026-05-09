@@ -129,6 +129,90 @@ class HistoricalDataStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def coverage_status(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> dict[str, Any]:
+        timestamp = now_utc().isoformat()
+        with self._connect() as conn:
+            total = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_symbols,
+                    SUM(CASE WHEN i.id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_symbols,
+                    SUM(CASE WHEN i.id IS NULL THEN 1 ELSE 0 END) AS skipped_symbols
+                FROM index_constituents ic
+                LEFT JOIN instruments i ON i.active = 1
+                  AND i.exchange_id = 'NSE'
+                  AND i.segment = 'E'
+                  AND i.instrument = 'EQUITY'
+                  AND i.isin = ic.isin
+                WHERE ic.index_name = ? AND ic.active = 1
+                """,
+                (universe_name,),
+            ).fetchone()
+            mapped_symbols = int(total["mapped_symbols"] or 0)
+            complete_symbols = conn.execute(
+                """
+                SELECT COUNT(*) AS complete_symbols
+                FROM (
+                    SELECT i.id AS instrument_id
+                    FROM index_constituents ic
+                    JOIN instruments i ON i.active = 1
+                      AND i.exchange_id = 'NSE'
+                      AND i.segment = 'E'
+                      AND i.instrument = 'EQUITY'
+                      AND i.isin = ic.isin
+                    JOIN daily_candles dc ON dc.instrument_id = i.id
+                      AND dc.trading_date >= ?
+                      AND dc.trading_date < ?
+                    WHERE ic.index_name = ? AND ic.active = 1
+                    GROUP BY i.id
+                    HAVING COUNT(dc.trading_date) > 0
+                ) covered
+                """,
+                (window.from_date.isoformat(), window.to_date_exclusive.isoformat(), universe_name),
+            ).fetchone()
+            stored_candles = conn.execute(
+                """
+                SELECT COUNT(*) AS stored_candle_count
+                FROM daily_candles dc
+                WHERE dc.trading_date >= ? AND dc.trading_date < ?
+                  AND dc.instrument_id IN (
+                    SELECT i.id
+                    FROM index_constituents ic
+                    JOIN instruments i ON i.active = 1
+                      AND i.exchange_id = 'NSE'
+                      AND i.segment = 'E'
+                      AND i.instrument = 'EQUITY'
+                      AND i.isin = ic.isin
+                    WHERE ic.index_name = ? AND ic.active = 1
+                  )
+                """,
+                (window.from_date.isoformat(), window.to_date_exclusive.isoformat(), universe_name),
+            ).fetchone()
+
+        complete = mapped_symbols > 0 and int(complete_symbols["complete_symbols"] or 0) == mapped_symbols
+        return {
+            "id": 0,
+            "universe_name": universe_name,
+            "lookback_calendar_days": lookback_days,
+            "from_date": window.from_date.isoformat(),
+            "to_date_exclusive": window.to_date_exclusive.isoformat(),
+            "status": "up_to_date" if complete else "missing_data",
+            "total_symbols": int(total["total_symbols"] or 0),
+            "mapped_symbols": mapped_symbols,
+            "skipped_symbols": int(total["skipped_symbols"] or 0),
+            "queued_count": 0,
+            "fetching_count": 0,
+            "done_count": mapped_symbols if complete else int(complete_symbols["complete_symbols"] or 0),
+            "failed_count": 0,
+            "skipped_count": int(total["skipped_symbols"] or 0),
+            "candles_received": 0,
+            "stored_candle_count": int(stored_candles["stored_candle_count"] or 0),
+            "error": "" if complete else "Some mapped instruments do not have candles in the current window.",
+            "started_at": timestamp,
+            "updated_at": timestamp,
+            "completed_at": timestamp,
+        }
+
     def create_run(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> int:
         timestamp = now_utc().isoformat()
         with self._connect() as conn:
@@ -523,6 +607,13 @@ class HistoricalDataService:
             if active_run is None:
                 self._access_token()
                 window = historical_window(self.settings)
+                coverage = self.store.coverage_status(
+                    NIFTY_500_INDEX_NAME,
+                    self.settings.historical_lookback_calendar_days,
+                    window,
+                )
+                if coverage["status"] == "up_to_date":
+                    return coverage
                 run_id = self.store.create_run(
                     NIFTY_500_INDEX_NAME,
                     self.settings.historical_lookback_calendar_days,

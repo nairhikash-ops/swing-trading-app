@@ -345,7 +345,11 @@ function App() {
       if (!response.ok) throw new Error(await readError(response));
       const data = (await response.json()) as HistoricalStatus;
       setHistoricalStatus(data);
-      setMessage(`Historical fetch run ${data.id} started or resumed.`);
+      setMessage(
+        data.status === "up_to_date"
+          ? "Historical candles are already up to date. No Dhan fetch was started."
+          : `Historical fetch run ${data.id} started or resumed.`,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to start historical fetch.");
     } finally {
@@ -660,7 +664,7 @@ function App() {
         <div className="button-row">
           <button onClick={startHistoricalFetch} disabled={busy}>
             <RefreshCcw size={17} />
-            Start / resume fetch
+            Check / fetch missing
           </button>
           <button className="secondary" onClick={() => loadHistoricalStatus()} disabled={busy}>
             <Wifi size={17} />

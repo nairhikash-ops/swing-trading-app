@@ -152,3 +152,74 @@ def test_upsert_candles_is_idempotent(tmp_path):
 
     assert len(candles) == 1
     assert candles[0]["close"] == 106.0
+
+
+def test_coverage_status_reports_up_to_date_without_creating_run(tmp_path):
+    _, _, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    universe_run_id = universe_store.start_import("NIFTY_500", "source.csv", ["Company Name"])
+    universe_store.upsert_constituents(
+        universe_run_id,
+        "NIFTY_500",
+        [
+            {
+                "COMPANY NAME": "HDFC Bank Ltd.",
+                "INDUSTRY": "Financial Services",
+                "SYMBOL": "HDFCBANK",
+                "SERIES": "EQ",
+                "ISIN CODE": "INE040A01034",
+            }
+        ],
+    )
+    instrument_run_id = instrument_store.start_import("dhan.csv", "NSE", "E", ["EXCH_ID"])
+    instrument_store.upsert_rows(
+        instrument_run_id,
+        [
+            {
+                "EXCH_ID": "NSE",
+                "SEGMENT": "E",
+                "SECURITY_ID": "1333",
+                "ISIN": "INE040A01034",
+                "INSTRUMENT": "EQUITY",
+                "UNDERLYING_SYMBOL": "HDFCBANK",
+                "SYMBOL_NAME": "HDFC BANK LTD",
+                "DISPLAY_NAME": "HDFC Bank",
+                "SERIES": "EQ",
+            }
+        ],
+        "NSE",
+        "E",
+    )
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        45,
+        HistoricalWindow(from_date=date(2024, 5, 1), to_date_exclusive=date(2024, 5, 31)),
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+    historical_store.upsert_candles(
+        item,
+        [
+            {
+                "timestamp": 1714526100,
+                "trading_date": "2024-05-01",
+                "open": 100.0,
+                "high": 110.0,
+                "low": 99.0,
+                "close": 105.0,
+                "volume": 1000.0,
+                "open_interest": None,
+            }
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+    status = historical_store.coverage_status(
+        "NIFTY_500",
+        45,
+        HistoricalWindow(from_date=date(2024, 5, 1), to_date_exclusive=date(2024, 5, 31)),
+    )
+
+    assert status["status"] == "up_to_date"
+    assert status["id"] == 0
+    assert status["done_count"] == 1
+    assert status["stored_candle_count"] == 1
