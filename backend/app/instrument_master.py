@@ -254,14 +254,33 @@ class InstrumentMasterStore:
                     OR UPPER(display_name) LIKE ?
                     OR UPPER(security_id) LIKE ?
                     OR UPPER(isin) LIKE ?
+                    OR UPPER(underlying_symbol) LIKE ?
                   )
                 ORDER BY
-                  CASE WHEN UPPER(symbol_name) = ? THEN 0 ELSE 1 END,
+                  CASE
+                    WHEN UPPER(underlying_symbol) = ? THEN 0
+                    WHEN UPPER(symbol_name) = ? THEN 1
+                    WHEN UPPER(display_name) = ? THEN 2
+                    ELSE 3
+                  END,
+                  CASE WHEN segment = 'E' AND instrument = 'EQUITY' THEN 0 ELSE 1 END,
+                  CASE WHEN series = 'EQ' THEN 0 ELSE 1 END,
                   symbol_name,
                   display_name
                 LIMIT ?
                 """,
-                (exchange_id.upper(), term, term, term, term, query.strip().upper(), limit),
+                (
+                    exchange_id.upper(),
+                    term,
+                    term,
+                    term,
+                    term,
+                    term,
+                    query.strip().upper(),
+                    query.strip().upper(),
+                    query.strip().upper(),
+                    limit,
+                ),
             ).fetchall()
         return [instrument_row_to_dict(row) for row in rows]
 

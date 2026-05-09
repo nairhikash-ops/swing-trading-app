@@ -6,7 +6,7 @@ from app.store import TokenStore
 
 
 CSV_ONE = """EXCH_ID,SEGMENT,SECURITY_ID,ISIN,INSTRUMENT,UNDERLYING_SECURITY_ID,UNDERLYING_SYMBOL,SYMBOL_NAME,DISPLAY_NAME,INSTRUMENT_TYPE,SERIES,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,TICK_SIZE,BUY_SELL_INDICATOR,SM_UPPER_LIMIT,SM_LOWER_LIMIT,
-NSE,E,1333,INE040A01034,EQUITY,NA,NA,HDFCBANK,HDFC BANK LTD,EQUITY,EQ,1.0,NA,-0.01000,XX,0.0500,A,100.00,80.00,
+NSE,E,1333,INE040A01034,EQUITY,NA,HDFCBANK,HDFCBANK,HDFC BANK LTD,EQUITY,EQ,1.0,NA,-0.01000,XX,0.0500,A,100.00,80.00,
 BSE,E,500180,INE040A01034,EQUITY,NA,NA,HDFCBANK,HDFC BANK LTD,EQUITY,A,1.0,NA,-0.01000,XX,0.0500,A,100.00,80.00,
 NSE,D,12345,NA,FUTSTK,1333,HDFCBANK,HDFCBANK,HDFCBANK JAN FUT,FUTSTK,NA,550.0,2026-01-29,-0.01000,XX,0.0500,A,0,0,
 """
@@ -39,6 +39,18 @@ def test_parse_filters_nse_and_preserves_live_extra_columns():
     assert "SM_UPPER_LIMIT" in columns
     assert rows[0]["SM_UPPER_LIMIT"] == "100.00"
     assert all(row["EXCH_ID"] == "NSE" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_search_prefers_equity_for_exact_underlying_symbol(tmp_path):
+    service = make_service(tmp_path, CSV_ONE)
+    await service.refresh()
+
+    results = service.search("HDFCBANK")
+
+    assert results[0]["segment"] == "E"
+    assert results[0]["instrument"] == "EQUITY"
+    assert results[0]["security_id"] == "1333"
 
 
 @pytest.mark.asyncio
