@@ -77,14 +77,17 @@ def test_schema_mismatch_is_rejected(tmp_path):
     assert service.status()["schema_error_count"] == 1
 
 
-def test_date_mismatch_is_rejected(tmp_path):
+def test_filename_date_mismatch_is_saved_under_csv_date(tmp_path):
     service = make_service(tmp_path)
 
     result = service.import_files([(filename("08052026"), bhavcopy_csv("07-May-2026"))])
+    rows = service.rows_for_symbol("ALPHA", 10)
+    dates = {row["trade_date"] for row in rows}
 
-    assert result["rejected_count"] == 1
-    assert result["files"][0]["status"] == "schema_error"
-    assert service.coverage()["published_session_count"] == 0
+    assert result["accepted_count"] == 1
+    assert result["files"][0]["trade_date"] == "2026-05-07"
+    assert "2026-05-07" in dates
+    assert service.coverage()["published_session_count"] == 1
 
 
 def test_inbox_scan_imports_matching_files(tmp_path):
@@ -112,3 +115,15 @@ def test_wrong_requested_date_is_still_saved_under_actual_file_date(tmp_path):
     assert result["accepted_count"] == 1
     assert "2026-05-06" in dates
     assert service.status()["next_missing_date"] == "2026-05-07"
+
+
+def test_reupload_previous_schema_error_can_be_reprocessed(tmp_path):
+    service = make_service(tmp_path)
+
+    first = service.import_files([(filename(), bad_schema_csv())])
+    second = service.import_files([(filename(), bhavcopy_csv())])
+
+    assert first["rejected_count"] == 1
+    assert second["accepted_count"] == 1
+    assert second["files"][0]["status"] == "valid"
+    assert service.coverage()["published_session_count"] == 1

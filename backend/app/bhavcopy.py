@@ -202,7 +202,7 @@ class BhavcopyStore:
         uploaded_at = utc_now().isoformat()
 
         existing = self._file_by_checksum(checksum)
-        if existing:
+        if existing and existing["status"] == "valid":
             return {
                 "filename": safe_name,
                 "status": "duplicate",
@@ -219,12 +219,14 @@ class BhavcopyStore:
         row_count = 0
         status = "valid"
         error = ""
+        expected_date: date | None = None
 
         try:
             if len(content) > self.settings.bhavcopy_max_file_bytes:
                 raise BhavcopyImportError("File exceeds bhavcopy import size limit.")
-            trade_date = trade_date_from_filename(safe_name)
-            parsed = parse_bhavcopy_csv(content, trade_date)
+            expected_date = trade_date_from_filename(safe_name)
+            parsed = parse_bhavcopy_csv(content)
+            trade_date = parsed.trade_date
             source_columns = parsed.source_columns
             row_count = len(parsed.rows)
             stored_path = self._write_source_file(safe_name, content, trade_date, checksum)
@@ -232,43 +234,69 @@ class BhavcopyStore:
             status = "schema_error" if FILENAME_RE.match(safe_name) else "rejected"
             error = str(exc)
             if FILENAME_RE.match(safe_name):
-                trade_date = trade_date_from_filename(safe_name)
+                trade_date = expected_date or trade_date_from_filename(safe_name)
                 stored_path = self._write_source_file(safe_name, content, trade_date, checksum)
         except Exception as exc:
             status = "schema_error" if FILENAME_RE.match(safe_name) else "rejected"
             error = f"Unexpected import error: {exc}"
             if FILENAME_RE.match(safe_name):
-                trade_date = trade_date_from_filename(safe_name)
+                trade_date = expected_date or trade_date_from_filename(safe_name)
                 stored_path = self._write_source_file(safe_name, content, trade_date, checksum)
 
         with self.store.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO import_files (
-                    batch_id, original_filename, stored_path, checksum, trade_date, status,
-                    file_size_bytes, row_count, source_columns_json, error, uploaded_at, parsed_at
+            if existing:
+                file_id = int(existing["id"])
+                conn.execute(
+                    """
+                    UPDATE import_files
+                    SET batch_id = ?, original_filename = ?, stored_path = ?, trade_date = ?, status = ?,
+                        file_size_bytes = ?, row_count = ?, source_columns_json = ?, error = ?,
+                        uploaded_at = ?, parsed_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        batch_id,
+                        safe_name,
+                        stored_path,
+                        trade_date.isoformat() if trade_date else "",
+                        status,
+                        len(content),
+                        row_count,
+                        json.dumps(source_columns),
+                        error,
+                        uploaded_at,
+                        utc_now().isoformat() if status == "valid" else None,
+                        file_id,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    batch_id,
-                    safe_name,
-                    stored_path,
-                    checksum,
-                    trade_date.isoformat() if trade_date else "",
-                    status,
-                    len(content),
-                    row_count,
-                    json.dumps(source_columns),
-                    error,
-                    uploaded_at,
-                    utc_now().isoformat() if status == "valid" else None,
-                ),
-            )
-            file_id = int(cursor.lastrowid)
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO import_files (
+                        batch_id, original_filename, stored_path, checksum, trade_date, status,
+                        file_size_bytes, row_count, source_columns_json, error, uploaded_at, parsed_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        safe_name,
+                        stored_path,
+                        checksum,
+                        trade_date.isoformat() if trade_date else "",
+                        status,
+                        len(content),
+                        row_count,
+                        json.dumps(source_columns),
+                        error,
+                        uploaded_at,
+                        utc_now().isoformat() if status == "valid" else None,
+                    ),
+                )
+                file_id = int(cursor.lastrowid)
 
         if status == "valid" and trade_date:
-            parsed = parse_bhavcopy_csv(content, trade_date)
+            parsed = parse_bhavcopy_csv(content)
             self._publish(file_id, parsed)
         elif trade_date:
             self._mark_date(trade_date.isoformat(), file_id, status, row_count, error)
@@ -557,7 +585,7 @@ def previous_weekday(value: date) -> date:
     return candidate
 
 
-def parse_bhavcopy_csv(content: bytes, trade_date: date) -> ParsedBhavcopy:
+def parse_bhavcopy_csv(content: bytes) -> ParsedBhavcopy:
     text = decode_csv(content)
     reader = csv.DictReader(StringIO(text))
     if not reader.fieldnames:
@@ -569,12 +597,12 @@ def parse_bhavcopy_csv(content: bytes, trade_date: date) -> ParsedBhavcopy:
         raise BhavcopyImportError(f"Missing required column(s): {', '.join(missing)}")
 
     rows: list[dict[str, str]] = []
+    row_dates: set[date] = set()
     for raw_row in reader:
         row = {clean_header(key): clean(value) for key, value in raw_row.items() if key is not None}
         if not any(row.values()):
             continue
-        if parse_report_date(row["DATE1"]) != trade_date:
-            raise BhavcopyImportError("CSV row DATE1 does not match filename date.")
+        row_dates.add(parse_report_date(row["DATE1"]))
         if not row["SYMBOL"] or not row["SERIES"]:
             continue
         numeric_values(row)
@@ -582,6 +610,9 @@ def parse_bhavcopy_csv(content: bytes, trade_date: date) -> ParsedBhavcopy:
 
     if not rows:
         raise BhavcopyImportError("Bhavcopy file has no data rows.")
+    if len(row_dates) != 1:
+        raise BhavcopyImportError("Bhavcopy CSV must contain exactly one DATE1 value.")
+    trade_date = next(iter(row_dates))
     return ParsedBhavcopy(trade_date=trade_date, source_columns=columns, total_rows_seen=len(rows), rows=rows)
 
 
