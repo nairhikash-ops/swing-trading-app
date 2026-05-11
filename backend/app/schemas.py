@@ -288,3 +288,59 @@ class MoveEventReportResponse(BaseModel):
     error: str
     generated_at: datetime
     items: list[MoveEventItem]
+
+
+class DrishtiSignalHitItem(BaseModel):
+    id: int
+    run_id: int
+    signal_id: str
+    index_constituent_id: int
+    instrument_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    anchor_date: str
+    trigger_date: str
+    anchor_open: float
+    anchor_high: float
+    anchor_low: float
+    anchor_close: float
+    anchor_volume: float
+    trigger_open: float
+    trigger_high: float
+    trigger_low: float
+    trigger_close: float
+    trigger_volume: float
+    volume_ratio_1d: float
+    volume_vs_sma: float
+    close_to_anchor_high_ratio: float
+    future_high: float
+    future_high_date: str
+    outcome_from_trigger_percent: float
+    outcome_from_anchor_percent: float
+    created_at: datetime
+
+
+class DrishtiSignalReportResponse(BaseModel):
+    run_id: int | None = None
+    signal_id: str
+    signal_name: str
+    description: str
+    universe_name: str
+    lookback_sessions: int
+    volume_sma_sessions: int
+    min_volume_ratio_1d: float
+    min_volume_vs_sma: float
+    from_date: str
+    to_date_exclusive: str
+    status: str
+    total_symbols: int
+    scanned_symbols: int
+    hit_count: int
+    outcome_ge_10_count: int
+    outcome_ge_20_count: int
+    error: str
+    generated_at: datetime
+    items: list[DrishtiSignalHitItem]

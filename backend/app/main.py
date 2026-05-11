@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.data_quality import DataQualityService
+from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
@@ -12,6 +13,7 @@ from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
+    DrishtiSignalReportResponse,
     HealthResponse,
     HistoricalFetchItem,
     HistoricalFetchStatusResponse,
@@ -68,6 +70,10 @@ def build_move_event_service(settings: Settings) -> MoveEventService:
     return MoveEventService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_drishti_signal_service(settings: Settings) -> DrishtiSignalService:
+    return DrishtiSignalService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -78,6 +84,7 @@ async def lifespan(app: FastAPI):
     quality_service = build_quality_service(settings)
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
+    drishti_signal_service = build_drishti_signal_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
@@ -87,6 +94,7 @@ async def lifespan(app: FastAPI):
     app.state.quality_service = quality_service
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
+    app.state.drishti_signal_service = drishti_signal_service
     scheduler.start()
     try:
         yield
@@ -131,6 +139,10 @@ def get_range_mover_service_dep() -> RangeMoverService:
 
 def get_move_event_service_dep() -> MoveEventService:
     return app.state.move_event_service
+
+
+def get_drishti_signal_service_dep() -> DrishtiSignalService:
+    return app.state.drishti_signal_service
 
 
 def get_settings_dep() -> Settings:
@@ -363,6 +375,36 @@ async def research_nifty_500_move_events_refresh(
             **move_event_service.refresh_nifty_500_events(
                 threshold_percent=threshold_percent,
                 pullback_percent=pullback_percent,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)
+async def drishti_nifty_500_local_low_reversal(
+    limit: int = Query(default=500, ge=1, le=1000),
+    drishti_signal_service: DrishtiSignalService = Depends(get_drishti_signal_service_dep),
+) -> DrishtiSignalReportResponse | None:
+    report = drishti_signal_service.latest_nifty_500_signal_01_report(limit=limit)
+    return DrishtiSignalReportResponse(**report) if report else None
+
+
+@app.post("/api/drishti/nifty500/signals/local-low-reversal/refresh", response_model=DrishtiSignalReportResponse)
+async def drishti_nifty_500_local_low_reversal_refresh(
+    lookback_sessions: int = Query(default=45, ge=20, le=90),
+    volume_sma_sessions: int = Query(default=20, ge=5, le=60),
+    min_volume_ratio_1d: float = Query(default=1.2, ge=1.0, le=10.0),
+    min_volume_vs_sma: float = Query(default=1.0, ge=0.1, le=10.0),
+    drishti_signal_service: DrishtiSignalService = Depends(get_drishti_signal_service_dep),
+) -> DrishtiSignalReportResponse:
+    try:
+        return DrishtiSignalReportResponse(
+            **drishti_signal_service.refresh_nifty_500_signal_01(
+                lookback_sessions=lookback_sessions,
+                volume_sma_sessions=volume_sma_sessions,
+                min_volume_ratio_1d=min_volume_ratio_1d,
+                min_volume_vs_sma=min_volume_vs_sma,
             )
         )
     except Exception as exc:

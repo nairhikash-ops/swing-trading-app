@@ -7,6 +7,7 @@ import {
   Clock,
   Database,
   ExternalLink,
+  Radar,
   RefreshCcw,
   Save,
   Search,
@@ -268,6 +269,55 @@ type MoveEventReport = {
   items: MoveEventItem[];
 };
 
+type DrishtiSignalHitItem = {
+  id: number;
+  run_id: number;
+  signal_id: string;
+  symbol: string;
+  company_name: string;
+  industry: string;
+  isin: string;
+  security_id: string;
+  anchor_date: string;
+  trigger_date: string;
+  anchor_low: number;
+  anchor_high: number;
+  anchor_close: number;
+  anchor_volume: number;
+  trigger_close: number;
+  trigger_volume: number;
+  volume_ratio_1d: number;
+  volume_vs_sma: number;
+  close_to_anchor_high_ratio: number;
+  future_high: number;
+  future_high_date: string;
+  outcome_from_trigger_percent: number;
+  outcome_from_anchor_percent: number;
+};
+
+type DrishtiSignalReport = {
+  run_id?: number | null;
+  signal_id: string;
+  signal_name: string;
+  description: string;
+  universe_name: string;
+  lookback_sessions: number;
+  volume_sma_sessions: number;
+  min_volume_ratio_1d: number;
+  min_volume_vs_sma: number;
+  from_date: string;
+  to_date_exclusive: string;
+  status: string;
+  total_symbols: number;
+  scanned_symbols: number;
+  hit_count: number;
+  outcome_ge_10_count: number;
+  outcome_ge_20_count: number;
+  error: string;
+  generated_at: string;
+  items: DrishtiSignalHitItem[];
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -275,7 +325,7 @@ const apiBaseUrl =
     : `${window.location.protocol}//${window.location.hostname}:8000`;
 const rangeMoverThresholdOptions = [10, 15, 20, 30, 40, 50];
 
-function dhanTradingViewUrl(item: RangeMoverItem): string {
+function dhanTradingViewUrl(item: { symbol: string; security_id?: string | null }): string {
   const symbol = item.symbol.trim().toUpperCase();
   const params = new URLSearchParams({
     symbol: `NSE:${symbol}`,
@@ -302,6 +352,7 @@ function App() {
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
+  const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<"research" | "token">("research");
   const [message, setMessage] = useState("");
@@ -510,6 +561,40 @@ function App() {
     }
   }
 
+  async function loadDrishtiSignal01() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal?limit=500`);
+      if (!response.ok) throw new Error(await readError(response));
+      setDrishtiReport(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load Drishti signal.");
+    }
+  }
+
+  async function refreshDrishtiSignal01() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const params = new URLSearchParams({
+        lookback_sessions: "45",
+        volume_sma_sessions: "20",
+        min_volume_ratio_1d: "1.2",
+        min_volume_vs_sma: "1.0",
+      });
+      const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal/refresh?${params}`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as DrishtiSignalReport;
+      setDrishtiReport(data);
+      setMessage(`Drishti Signal 01 found ${formatNumber(data.hit_count)} historical hit(s).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh Drishti signal.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshMoveEvents() {
     setBusy(true);
     setMessage("");
@@ -588,6 +673,7 @@ function App() {
     loadQualityReport();
     loadRangeMovers();
     loadMoveEvents();
+    loadDrishtiSignal01();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -735,6 +821,98 @@ function App() {
 
       ) : (
         <>
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Drishti Early Watch</p>
+            <h2>Signal 01: Local Low Reversal</h2>
+          </div>
+          <Radar size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Stored signal" value={drishtiReport?.signal_id ?? "DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL"} />
+          <StatusRow label="Hits" value={formatNumber(drishtiReport?.hit_count)} />
+          <StatusRow label="Scanned" value={formatNumber(drishtiReport?.scanned_symbols)} />
+          <StatusRow label="Lookback sessions" value={formatNumber(drishtiReport?.lookback_sessions)} />
+          <StatusRow label="Volume rule" value={`${formatMultiplier(drishtiReport?.min_volume_ratio_1d)} day / ${formatMultiplier(drishtiReport?.min_volume_vs_sma)} SMA`} />
+          <StatusRow label=">=10% outcome" value={formatNumber(drishtiReport?.outcome_ge_10_count)} />
+          <StatusRow label=">=20% outcome" value={formatNumber(drishtiReport?.outcome_ge_20_count)} />
+          <StatusRow label="Window from" value={drishtiReport?.from_date ?? "-"} />
+          <StatusRow label="Window to" value={drishtiReport?.to_date_exclusive ?? "-"} />
+          <StatusRow label="Generated" value={formatDate(drishtiReport?.generated_at)} />
+        </dl>
+
+        {drishtiReport?.error ? <p className="error-text">{drishtiReport.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={refreshDrishtiSignal01} disabled={busy}>
+            <RefreshCcw size={17} />
+            Run Signal 01
+          </button>
+          <button className="secondary" onClick={loadDrishtiSignal01} disabled={busy}>
+            <Wifi size={17} />
+            Load saved run
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Chart</th>
+                <th>Symbol</th>
+                <th>Company</th>
+                <th>Anchor</th>
+                <th>Trigger</th>
+                <th>Anchor low</th>
+                <th>Trigger close</th>
+                <th>Volume</th>
+                <th>Vol/SMA</th>
+                <th>Future high</th>
+                <th>Trigger outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!drishtiReport || drishtiReport.items.length === 0 ? (
+                <tr>
+                  <td colSpan={11}>No saved Drishti hits yet.</td>
+                </tr>
+              ) : (
+                drishtiReport.items.map((item) => (
+                  <tr key={`${item.symbol}-${item.trigger_date}-${item.id}`}>
+                    <td>
+                      <a
+                        className="table-action"
+                        href={dhanTradingViewUrl(item)}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open ${item.symbol} in Dhan TradingView`}
+                        title={`Open ${item.symbol} in Dhan TradingView`}
+                      >
+                        <ExternalLink size={16} />
+                      </a>
+                    </td>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{item.anchor_date}</td>
+                    <td>{item.trigger_date}</td>
+                    <td>{formatPrice(item.anchor_low)}</td>
+                    <td>{formatPrice(item.trigger_close)}</td>
+                    <td>{formatMultiplier(item.volume_ratio_1d)}</td>
+                    <td>{formatMultiplier(item.volume_vs_sma)}</td>
+                    <td>
+                      {formatPrice(item.future_high)} on {item.future_high_date}
+                    </td>
+                    <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -1283,6 +1461,11 @@ function formatPrice(value?: number | null) {
 function formatPercent(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}%`;
+}
+
+function formatMultiplier(value?: number | null) {
+  if (value === null || value === undefined) return "-";
+  return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}x`;
 }
 
 function formatIssues(value: string[]) {
