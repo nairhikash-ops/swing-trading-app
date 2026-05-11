@@ -2,7 +2,7 @@
 
 Private NSE swing-trading advisory project.
 
-Current implementation stage: **Dhan API foundation**.
+Current implementation stage: **Dhan API foundation plus manual NSE EOD import**.
 
 ## Branch Rules
 
@@ -24,6 +24,9 @@ Current implementation stage: **Dhan API foundation**.
 - Fetch rolling 45-calendar-day Dhan daily candles for mapped Nifty 500 stocks through a resumable, rate-limited job.
 - Run automated Nifty 500 candle quality checks and show only exceptions for review.
 - Scan the latest 45-day Nifty 500 candle window for stocks whose later high clears a selectable upward-move threshold; the default is 20%.
+- Import manually downloaded NSE Full Bhavcopy + Security Deliverable and CM-UDiFF Bhavcopy files.
+- Pair NSE reports by trading date, resolve rows to ISIN-first identity, and publish normalized raw-unadjusted EOD rows.
+- Support bulk NSE import from a configured server inbox folder plus UI upload fallback.
 
 ## Run Locally
 
@@ -53,3 +56,4 @@ Frontend: `http://localhost:5173`
 - The NSE equity instrument master is stored in SQLite and can be refreshed from Dhan on demand.
 - Historical Dhan fetches run one mapped Nifty 500 instrument at a time, retry temporary failures, and record per-symbol failures without deleting successful candles.
 - Data quality checks classify each stock as healthy, warning, or blocked before future analysis uses the candle cache.
+- NSE EOD imports are checksum-deduplicated, schema validated, and only published after both required reports for a date are valid.

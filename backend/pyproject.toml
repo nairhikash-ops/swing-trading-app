@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "httpx>=0.27.0",
   "pydantic-settings>=2.6.0",
+  "python-multipart>=0.0.20",
   "tzdata>=2026.1",
   "uvicorn[standard]>=0.30.0",
 ]
@@ -25,3 +26,6 @@ test = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

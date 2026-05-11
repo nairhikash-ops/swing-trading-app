@@ -1,16 +1,18 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { DragEvent, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
   CheckCircle2,
   Clock,
   Database,
+  FolderSearch,
   RefreshCcw,
   Save,
   Search,
   Shield,
   TrendingUp,
+  Upload,
   Wifi,
 } from "lucide-react";
 import "./styles.css";
@@ -267,6 +269,86 @@ type MoveEventReport = {
   items: MoveEventItem[];
 };
 
+type NseImportFileResult = {
+  filename: string;
+  status: string;
+  report_type?: string | null;
+  trade_date?: string | null;
+  row_count: number;
+  error: string;
+  file_id?: number | null;
+  existing_file_id?: number | null;
+};
+
+type NseImportStatus = {
+  generated_at: string;
+  target_sessions: number;
+  inbox_path: string;
+  published_session_count: number;
+  coverage_percent: number;
+  latest_published_date?: string | null;
+  waiting_for_pair_count: number;
+  schema_error_count: number;
+  rejected_file_count: number;
+  schema_file_count: number;
+  instrument_count: number;
+  eod_row_count: number;
+  recent_files: {
+    id: number;
+    original_filename: string;
+    report_type: string;
+    trade_date: string;
+    status: string;
+    row_count: number;
+    error: string;
+    uploaded_at: string;
+  }[];
+  recent_dates: {
+    trade_date: string;
+    status: string;
+    full_row_count: number;
+    udiff_row_count: number;
+    published_row_count: number;
+    unresolved_row_count: number;
+    error: string;
+    updated_at: string;
+    published_at?: string | null;
+  }[];
+};
+
+type NseEodCoverage = {
+  generated_at: string;
+  target_sessions: number;
+  published_session_count: number;
+  coverage_percent: number;
+  latest_published_date?: string | null;
+  instrument_count: number;
+  eod_row_count: number;
+  dirty_flag_counts: Record<string, number>;
+};
+
+type NseEodRow = {
+  isin: string;
+  trade_date: string;
+  symbol: string;
+  series: string;
+  company_name: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  prev_close: number;
+  avg_price: number;
+  volume: number;
+  turnover_lacs: number;
+  no_of_trades: number;
+  delivery_qty?: number | null;
+  delivery_percent?: number | null;
+  price_basis: string;
+  dirty_flag: string;
+  dirty_reason: string;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -292,6 +374,12 @@ function App() {
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
+  const [nseImportStatus, setNseImportStatus] = useState<NseImportStatus | null>(null);
+  const [nseCoverage, setNseCoverage] = useState<NseEodCoverage | null>(null);
+  const [nseUploadFiles, setNseUploadFiles] = useState<File[]>([]);
+  const [nseImportResults, setNseImportResults] = useState<NseImportFileResult[]>([]);
+  const [nseSymbol, setNseSymbol] = useState("RELIANCE");
+  const [nseRows, setNseRows] = useState<NseEodRow[]>([]);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -538,6 +626,95 @@ function App() {
     }
   }
 
+  async function loadNseImportStatus() {
+    try {
+      const [statusResponse, coverageResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/nse/import/status`),
+        fetch(`${apiBaseUrl}/api/nse/eod/coverage`),
+      ]);
+      if (!statusResponse.ok) throw new Error(await readError(statusResponse));
+      if (!coverageResponse.ok) throw new Error(await readError(coverageResponse));
+      setNseImportStatus(await statusResponse.json());
+      setNseCoverage(await coverageResponse.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load NSE import status.");
+    }
+  }
+
+  async function scanNseImportFolder() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/nse/import/scan`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = await response.json();
+      setNseImportResults(data.files ?? []);
+      setMessage(
+        `Folder scan accepted ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
+          data.duplicate_count,
+        )} duplicate(s), published ${formatNumber(data.published_dates_count)} date(s).`,
+      );
+      await loadNseImportStatus();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to scan NSE import folder.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadNseFiles(files = nseUploadFiles) {
+    if (files.length === 0) {
+      setMessage("Choose NSE CSV/ZIP files first, or use the import folder scan.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append("files", file));
+      const response = await fetch(`${apiBaseUrl}/api/nse/import/upload`, { method: "POST", body: formData });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = await response.json();
+      setNseImportResults(data.files ?? []);
+      setNseUploadFiles([]);
+      setMessage(
+        `Uploaded ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
+          data.duplicate_count,
+        )} duplicate(s), published ${formatNumber(data.published_dates_count)} date(s).`,
+      );
+      await loadNseImportStatus();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to upload NSE files.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleNseDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files);
+    setNseUploadFiles(files);
+    if (files.length > 0) {
+      uploadNseFiles(files);
+    }
+  }
+
+  async function loadNseRows(symbol = nseSymbol) {
+    const trimmed = symbol.trim();
+    setNseSymbol(symbol);
+    if (!trimmed) {
+      setNseRows([]);
+      return;
+    }
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/nse/eod/rows?symbol=${encodeURIComponent(trimmed)}&limit=20`);
+      if (!response.ok) throw new Error(await readError(response));
+      setNseRows(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load NSE EOD rows.");
+    }
+  }
+
   async function refreshMoveEvents() {
     setBusy(true);
     setMessage("");
@@ -617,6 +794,7 @@ function App() {
     loadQualityReport();
     loadRangeMovers();
     loadMoveEvents();
+    loadNseImportStatus();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -755,6 +933,174 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">NSE EOD Foundation</p>
+            <h2>Manual Bhavcopy Import</h2>
+          </div>
+          <FolderSearch size={22} />
+        </div>
+
+        <div className="progress-track" aria-label="NSE EOD coverage progress">
+          <span style={{ width: `${Math.min(nseCoverage?.coverage_percent ?? 0, 100)}%` }} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Published sessions" value={formatNumber(nseCoverage?.published_session_count)} />
+          <StatusRow label="Target sessions" value={formatNumber(nseCoverage?.target_sessions)} />
+          <StatusRow label="Coverage" value={formatPercent(nseCoverage?.coverage_percent)} />
+          <StatusRow label="Latest date" value={nseCoverage?.latest_published_date ?? "-"} />
+          <StatusRow label="Instruments" value={formatNumber(nseCoverage?.instrument_count)} />
+          <StatusRow label="EOD rows" value={formatNumber(nseCoverage?.eod_row_count)} />
+          <StatusRow label="Waiting dates" value={formatNumber(nseImportStatus?.waiting_for_pair_count)} />
+          <StatusRow label="Schema errors" value={formatNumber(nseImportStatus?.schema_error_count)} />
+        </dl>
+
+        <label className="search-label">
+          Server import folder
+          <input value={nseImportStatus?.inbox_path ?? "-"} readOnly />
+        </label>
+
+        <div className="button-row">
+          <button onClick={scanNseImportFolder} disabled={busy}>
+            <FolderSearch size={17} />
+            Scan import folder
+          </button>
+          <button className="secondary" onClick={loadNseImportStatus} disabled={busy}>
+            <RefreshCcw size={17} />
+            Refresh NSE status
+          </button>
+        </div>
+
+        <label className="drop-zone" onDrop={handleNseDrop} onDragOver={(event) => event.preventDefault()}>
+          <Upload size={20} />
+          <span>{nseUploadFiles.length > 0 ? `${nseUploadFiles.length} file(s) selected` : "Drop NSE CSV/ZIP files here"}</span>
+          <input
+            type="file"
+            multiple
+            accept=".csv,.zip"
+            onChange={(event) => setNseUploadFiles(Array.from(event.target.files ?? []))}
+          />
+        </label>
+
+        <div className="button-row">
+          <button className="secondary" onClick={() => uploadNseFiles()} disabled={busy || nseUploadFiles.length === 0}>
+            <Upload size={17} />
+            Upload selected files
+          </button>
+        </div>
+
+        <label className="search-label">
+          Inspect NSE EOD rows
+          <div className="search-row">
+            <input value={nseSymbol} onChange={(event) => loadNseRows(event.target.value)} placeholder="RELIANCE or ISIN" />
+            <button type="button" className="secondary" onClick={() => loadNseRows()} disabled={busy}>
+              <Search size={17} />
+            </button>
+          </div>
+        </label>
+
+        {nseRows.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Symbol</th>
+                  <th>ISIN</th>
+                  <th>Open</th>
+                  <th>High</th>
+                  <th>Low</th>
+                  <th>Close</th>
+                  <th>Delivery %</th>
+                  <th>Flag</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nseRows.map((row) => (
+                  <tr key={`${row.isin}-${row.trade_date}-${row.series}`}>
+                    <td>{row.trade_date}</td>
+                    <td>{row.symbol}</td>
+                    <td>{row.isin}</td>
+                    <td>{formatPrice(row.open)}</td>
+                    <td>{formatPrice(row.high)}</td>
+                    <td>{formatPrice(row.low)}</td>
+                    <td>{formatPrice(row.close)}</td>
+                    <td>{formatPercent(row.delivery_percent)}</td>
+                    <td>{row.dirty_flag === "clean" ? "clean" : `${row.dirty_flag}: ${row.dirty_reason}`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Full rows</th>
+                <th>UDiFF rows</th>
+                <th>Published</th>
+                <th>Unresolved</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!nseImportStatus || nseImportStatus.recent_dates.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No NSE report dates imported yet.</td>
+                </tr>
+              ) : (
+                nseImportStatus.recent_dates.map((item) => (
+                  <tr key={item.trade_date}>
+                    <td>{item.trade_date}</td>
+                    <td>{item.status}</td>
+                    <td>{formatNumber(item.full_row_count)}</td>
+                    <td>{formatNumber(item.udiff_row_count)}</td>
+                    <td>{formatNumber(item.published_row_count)}</td>
+                    <td>{formatNumber(item.unresolved_row_count)}</td>
+                    <td>{item.error || "-"}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {nseImportResults.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Status</th>
+                  <th>Report</th>
+                  <th>Date</th>
+                  <th>Rows</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nseImportResults.map((item) => (
+                  <tr key={`${item.filename}-${item.file_id ?? item.existing_file_id ?? item.status}`}>
+                    <td>{item.filename}</td>
+                    <td>{item.status}</td>
+                    <td>{item.report_type ?? "-"}</td>
+                    <td>{item.trade_date ?? "-"}</td>
+                    <td>{formatNumber(item.row_count)}</td>
+                    <td>{item.error || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
 
       <section className="panel instruments-panel">

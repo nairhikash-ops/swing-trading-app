@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
@@ -9,6 +9,7 @@ from app.historical_data import HistoricalDataService, HistoricalDataStore, upwa
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.move_events import MoveEventService
+from app.nse_import import NseImportService, NseImportStore
 from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
@@ -19,6 +20,10 @@ from app.schemas import (
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
     MoveEventReportResponse,
+    NseEodCoverageResponse,
+    NseEodRowItem,
+    NseImportStatusResponse,
+    NseImportUploadResponse,
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
@@ -68,6 +73,11 @@ def build_move_event_service(settings: Settings) -> MoveEventService:
     return MoveEventService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_nse_import_service(settings: Settings) -> NseImportService:
+    token_store = TokenStore(settings.database_path)
+    return NseImportService(settings=settings, store=NseImportStore(settings, token_store))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -78,6 +88,7 @@ async def lifespan(app: FastAPI):
     quality_service = build_quality_service(settings)
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
+    nse_import_service = build_nse_import_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
@@ -87,6 +98,7 @@ async def lifespan(app: FastAPI):
     app.state.quality_service = quality_service
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
+    app.state.nse_import_service = nse_import_service
     scheduler.start()
     try:
         yield
@@ -131,6 +143,10 @@ def get_range_mover_service_dep() -> RangeMoverService:
 
 def get_move_event_service_dep() -> MoveEventService:
     return app.state.move_event_service
+
+
+def get_nse_import_service_dep() -> NseImportService:
+    return app.state.nse_import_service
 
 
 def get_settings_dep() -> Settings:
@@ -367,3 +383,50 @@ async def research_nifty_500_move_events_refresh(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/nse/import/upload", response_model=NseImportUploadResponse)
+async def nse_import_upload(
+    files: list[UploadFile] = File(...),
+    nse_service: NseImportService = Depends(get_nse_import_service_dep),
+) -> NseImportUploadResponse:
+    try:
+        payload = [(file.filename or "upload", await file.read()) for file in files]
+        return NseImportUploadResponse(**nse_service.import_files(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"NSE import failed: {exc}") from exc
+
+
+@app.post("/api/nse/import/scan", response_model=NseImportUploadResponse)
+async def nse_import_scan(
+    nse_service: NseImportService = Depends(get_nse_import_service_dep),
+) -> NseImportUploadResponse:
+    try:
+        return NseImportUploadResponse(**nse_service.import_inbox())
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"NSE inbox import failed: {exc}") from exc
+
+
+@app.get("/api/nse/import/status", response_model=NseImportStatusResponse)
+async def nse_import_status(
+    nse_service: NseImportService = Depends(get_nse_import_service_dep),
+) -> NseImportStatusResponse:
+    return NseImportStatusResponse(**nse_service.status())
+
+
+@app.get("/api/nse/eod/coverage", response_model=NseEodCoverageResponse)
+async def nse_eod_coverage(
+    nse_service: NseImportService = Depends(get_nse_import_service_dep),
+) -> NseEodCoverageResponse:
+    return NseEodCoverageResponse(**nse_service.coverage())
+
+
+@app.get("/api/nse/eod/rows", response_model=list[NseEodRowItem])
+async def nse_eod_rows(
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=80, ge=1, le=500),
+    nse_service: NseImportService = Depends(get_nse_import_service_dep),
+) -> list[NseEodRowItem]:
+    return [NseEodRowItem.model_validate(item) for item in nse_service.rows_for_symbol(symbol, limit)]

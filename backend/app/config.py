@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     dhan_renew_before_minutes: int = Field(default=180, ge=5, le=23 * 60)
     dhan_status_stale_minutes: int = Field(default=15, ge=1, le=24 * 60)
     dhan_renew_check_interval_seconds: int = Field(default=900, ge=60, le=24 * 3600)
+    nse_eod_target_sessions: int = Field(default=210, ge=1, le=1000)
+    nse_import_max_file_bytes: int = Field(default=25_000_000, ge=1_000_000, le=250_000_000)
+    nse_import_equity_series: str = "EQ,BE"
+    nse_import_inbox_path: str = ""
 
     @property
     def cors_origins(self) -> list[str]:
@@ -40,6 +44,20 @@ class Settings(BaseSettings):
     @property
     def database_path(self) -> Path:
         return self.data_dir / "dhan_auth.sqlite3"
+
+    @property
+    def nse_import_dir(self) -> Path:
+        return self.data_dir / "nse_imports"
+
+    @property
+    def nse_import_inbox_dir(self) -> Path:
+        if self.nse_import_inbox_path.strip():
+            return Path(self.nse_import_inbox_path)
+        return self.nse_import_dir / "inbox"
+
+    @property
+    def nse_equity_series_set(self) -> set[str]:
+        return {item.strip().upper() for item in self.nse_import_equity_series.split(",") if item.strip()}
 
 
 @lru_cache

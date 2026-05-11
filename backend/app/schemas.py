@@ -288,3 +288,98 @@ class MoveEventReportResponse(BaseModel):
     error: str
     generated_at: datetime
     items: list[MoveEventItem]
+
+
+class NseImportFileResult(BaseModel):
+    filename: str
+    status: str
+    report_type: str | None = None
+    trade_date: str | None = None
+    row_count: int
+    error: str = ""
+    file_id: int | None = None
+    existing_file_id: int | None = None
+
+
+class NseImportUploadResponse(BaseModel):
+    batch_id: int
+    accepted_count: int
+    duplicate_count: int
+    rejected_count: int
+    published_dates_count: int
+    files: list[NseImportFileResult]
+
+
+class NseImportRecentFile(BaseModel):
+    id: int
+    original_filename: str
+    report_type: str
+    trade_date: str
+    status: str
+    row_count: int
+    error: str
+    uploaded_at: datetime
+
+
+class NseImportDateItem(BaseModel):
+    trade_date: str
+    status: str
+    full_row_count: int
+    udiff_row_count: int
+    published_row_count: int
+    unresolved_row_count: int
+    error: str
+    updated_at: datetime
+    published_at: datetime | None = None
+
+
+class NseImportStatusResponse(BaseModel):
+    generated_at: datetime
+    target_sessions: int
+    inbox_path: str
+    published_session_count: int
+    coverage_percent: float
+    latest_published_date: str | None = None
+    waiting_for_pair_count: int
+    schema_error_count: int
+    rejected_file_count: int
+    schema_file_count: int
+    instrument_count: int
+    eod_row_count: int
+    recent_files: list[NseImportRecentFile]
+    recent_dates: list[NseImportDateItem]
+
+
+class NseEodCoverageResponse(BaseModel):
+    generated_at: datetime
+    target_sessions: int
+    published_session_count: int
+    coverage_percent: float
+    latest_published_date: str | None = None
+    instrument_count: int
+    eod_row_count: int
+    dirty_flag_counts: dict[str, int]
+
+
+class NseEodRowItem(BaseModel):
+    isin: str
+    trade_date: str
+    symbol: str
+    series: str
+    company_name: str
+    open: float
+    high: float
+    low: float
+    close: float
+    prev_close: float
+    last_price: float
+    avg_price: float
+    volume: float
+    turnover_lacs: float
+    no_of_trades: int
+    delivery_qty: float | None = None
+    delivery_percent: float | None = None
+    price_basis: str
+    dirty_flag: str
+    dirty_reason: str
+    updated_at: datetime
