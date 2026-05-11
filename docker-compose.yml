@@ -4,11 +4,8 @@ services:
       context: ./backend
     env_file:
       - .env
-    environment:
-      BHAVCOPY_IMPORT_INBOX_PATH: /app/bhavcopy_inbox
     volumes:
-      - app-data:/app/data
-      - ./bhavcopy_inbox:/app/bhavcopy_inbox
+      - dhan-auth-data:/app/data
     ports:
       - "8000:8000"
 
@@ -23,4 +20,4 @@ services:
       - backend
 
 volumes:
-  app-data:
+  dhan-auth-data:
