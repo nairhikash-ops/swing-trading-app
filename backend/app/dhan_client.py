@@ -63,7 +63,7 @@ class DhanClient:
             )
         response.raise_for_status()
         payload = response.json()
-        renewed_token = payload.get("accessToken") or payload.get("access_token")
+        renewed_token = renewed_access_token(payload)
         if not renewed_token:
             raise ValueError("Dhan RenewToken response did not include accessToken.")
         expiry = payload.get("expiryTime") or payload.get("tokenValidity")
@@ -115,3 +115,8 @@ def _parse_optional_datetime(value: Any) -> datetime | None:
     if value is None or str(value).strip() == "":
         return None
     return parse_dhan_datetime(str(value))
+
+
+def renewed_access_token(payload: dict[str, Any]) -> str:
+    token = payload.get("accessToken") or payload.get("access_token") or payload.get("token")
+    return str(token) if token else ""
