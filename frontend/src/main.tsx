@@ -204,6 +204,8 @@ type QualityReport = {
 };
 
 type RangeMoverItem = {
+  index_constituent_id?: number | null;
+  instrument_id?: number | null;
   symbol: string;
   company_name: string;
   industry: string;
@@ -235,6 +237,8 @@ const apiBaseUrl =
     ? configuredApiBaseUrl
     : `${window.location.protocol}//${window.location.hostname}:8000`;
 const rangeMoverThresholdOptions = [5, 10, 15, 20, 30, 40, 50];
+const extendedHistoryThreshold = 50;
+const extendedHistoryLookbackDays = 365;
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
@@ -245,6 +249,7 @@ function App() {
   const [universeResults, setUniverseResults] = useState<UniverseItem[]>([]);
   const [universeQuery, setUniverseQuery] = useState("");
   const [historicalStatus, setHistoricalStatus] = useState<HistoricalStatus | null>(null);
+  const [extendedHistoricalStatus, setExtendedHistoricalStatus] = useState<HistoricalStatus | null>(null);
   const [historicalItems, setHistoricalItems] = useState<HistoricalItem[]>([]);
   const [candleSymbol, setCandleSymbol] = useState("RELIANCE");
   const [candles, setCandles] = useState<DailyCandle[]>([]);
@@ -397,6 +402,45 @@ function App() {
     }
   }
 
+  async function loadExtendedHistoricalStatus() {
+    try {
+      const params = new URLSearchParams({ threshold_percent: String(extendedHistoryThreshold) });
+      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/upward-movers/status?${params.toString()}`);
+      if (!response.ok) throw new Error(await readError(response));
+      setExtendedHistoricalStatus(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load 365-day mover fetch status.");
+    }
+  }
+
+  async function startExtendedHistoricalFetch() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const params = new URLSearchParams({
+        threshold_percent: String(extendedHistoryThreshold),
+        lookback_calendar_days: String(extendedHistoryLookbackDays),
+      });
+      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/upward-movers/refresh?${params.toString()}`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as HistoricalStatus;
+      setExtendedHistoricalStatus(data);
+      setMessage(
+        data.status === "up_to_date"
+          ? "365-day candles for >=50% movers are already cached."
+          : data.status === "no_matches"
+            ? "No stocks currently match the >=50% upward move filter."
+            : `365-day mover fetch run ${data.id} started or resumed.`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to start 365-day mover fetch.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function loadHistoricalItems(runId = historicalStatus?.id, itemStatus = "failed") {
     if (!runId) return;
     try {
@@ -501,6 +545,7 @@ function App() {
     loadUniverseStatus();
     loadUniverse();
     loadHistoricalStatus();
+    loadExtendedHistoricalStatus();
     loadQualityReport();
     loadRangeMovers();
     const timer = window.setInterval(() => loadStatus(), 60_000);
@@ -513,11 +558,27 @@ function App() {
     return () => window.clearInterval(timer);
   }, [historicalStatus?.id, historicalStatus?.status]);
 
+  useEffect(() => {
+    if (!extendedHistoricalStatus || !["queued", "running"].includes(extendedHistoricalStatus.status)) return;
+    const timer = window.setInterval(() => loadExtendedHistoricalStatus(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [extendedHistoricalStatus?.id, extendedHistoricalStatus?.status]);
+
   const historicalProgress =
     historicalStatus && historicalStatus.total_symbols > 0
       ? Math.round(
           ((historicalStatus.done_count + historicalStatus.failed_count + historicalStatus.skipped_count) /
             historicalStatus.total_symbols) *
+            100,
+        )
+      : 0;
+  const extendedHistoricalProgress =
+    extendedHistoricalStatus && extendedHistoricalStatus.total_symbols > 0
+      ? Math.round(
+          ((extendedHistoricalStatus.done_count +
+            extendedHistoricalStatus.failed_count +
+            extendedHistoricalStatus.skipped_count) /
+            extendedHistoricalStatus.total_symbols) *
             100,
         )
       : 0;
@@ -697,6 +758,45 @@ function App() {
               )}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Extended History</p>
+            <h2>365 Days For 50% Movers</h2>
+          </div>
+          <Database size={22} />
+        </div>
+
+        <div className="progress-track" aria-label="365-day mover fetch progress">
+          <span style={{ width: `${extendedHistoricalProgress}%` }} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Run status" value={extendedHistoricalStatus?.status ?? "-"} />
+          <StatusRow label="Progress" value={`${extendedHistoricalProgress}%`} />
+          <StatusRow label="Symbols" value={formatNumber(extendedHistoricalStatus?.total_symbols)} />
+          <StatusRow label="Done" value={formatNumber(extendedHistoricalStatus?.done_count)} />
+          <StatusRow label="Failed" value={formatNumber(extendedHistoricalStatus?.failed_count)} />
+          <StatusRow label="Candles received" value={formatNumber(extendedHistoricalStatus?.candles_received)} />
+          <StatusRow label="Stored candles" value={formatNumber(extendedHistoricalStatus?.stored_candle_count)} />
+          <StatusRow label="Window from" value={extendedHistoricalStatus?.from_date ?? "-"} />
+          <StatusRow label="Window to" value={extendedHistoricalStatus?.to_date_exclusive ?? "-"} />
+        </dl>
+
+        {extendedHistoricalStatus?.error ? <p className="error-text">{extendedHistoricalStatus.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={startExtendedHistoricalFetch} disabled={busy}>
+            <RefreshCcw size={17} />
+            Start / resume 365-day fetch
+          </button>
+          <button className="secondary" onClick={loadExtendedHistoricalStatus} disabled={busy}>
+            <Wifi size={17} />
+            Check status
+          </button>
         </div>
       </section>
 

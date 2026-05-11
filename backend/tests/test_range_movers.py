@@ -103,6 +103,8 @@ def test_range_movers_returns_stocks_above_threshold(tmp_path):
     assert report["to_date_exclusive"] == window.to_date_exclusive.isoformat()
     assert report["historical_run_id"] == run_id
     assert report["items"][0]["symbol"] == "MOVE"
+    assert report["items"][0]["index_constituent_id"] > 0
+    assert report["items"][0]["instrument_id"] > 0
     assert report["items"][0]["lowest_low"] == 100.0
     assert report["items"][0]["highest_high"] == 106.0
     assert report["items"][0]["move_percent"] == 6.0

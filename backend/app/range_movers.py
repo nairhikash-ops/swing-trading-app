@@ -35,6 +35,7 @@ class RangeMoverService:
             rows = conn.execute(
                 """
                 SELECT
+                    ic.id AS index_constituent_id,
                     ic.company_name,
                     ic.industry,
                     ic.symbol,
@@ -65,6 +66,8 @@ class RangeMoverService:
             current = grouped.setdefault(
                 instrument_id,
                 {
+                    "index_constituent_id": row["index_constituent_id"],
+                    "instrument_id": instrument_id,
                     "symbol": row["symbol"],
                     "company_name": row["company_name"],
                     "industry": row["industry"],

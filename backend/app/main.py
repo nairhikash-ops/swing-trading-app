@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.data_quality import DataQualityService
-from app.historical_data import HistoricalDataService, HistoricalDataStore
+from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.range_movers import RangeMoverService
@@ -121,6 +121,10 @@ def get_range_mover_service_dep() -> RangeMoverService:
     return app.state.range_mover_service
 
 
+def get_settings_dep() -> Settings:
+    return app.state.settings
+
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok", app="swing-trading-app")
@@ -226,7 +230,7 @@ async def nifty_500_constituents(
 async def historical_nifty_500_status(
     historical_service: HistoricalDataService = Depends(get_historical_service_dep),
 ) -> HistoricalFetchStatusResponse | None:
-    status = historical_service.latest_status()
+    status = historical_service.latest_status("NIFTY_500")
     return HistoricalFetchStatusResponse(**status) if status else None
 
 
@@ -236,6 +240,45 @@ async def historical_nifty_500_refresh(
 ) -> HistoricalFetchStatusResponse:
     try:
         status = await historical_service.start_or_resume_nifty_500_fetch()
+        return HistoricalFetchStatusResponse(**status)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/historical/nifty500/upward-movers/status", response_model=HistoricalFetchStatusResponse | None)
+async def historical_nifty_500_upward_movers_status(
+    threshold_percent: float | None = Query(default=None, ge=0.1, le=100.0),
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> HistoricalFetchStatusResponse | None:
+    threshold = threshold_percent or settings.extended_history_upward_move_threshold_percent
+    status = historical_service.latest_status(upward_movers_universe_name(threshold))
+    return HistoricalFetchStatusResponse(**status) if status else None
+
+
+@app.post("/api/historical/nifty500/upward-movers/refresh", response_model=HistoricalFetchStatusResponse)
+async def historical_nifty_500_upward_movers_refresh(
+    threshold_percent: float | None = Query(default=None, ge=0.1, le=100.0),
+    lookback_calendar_days: int | None = Query(default=None, ge=1, le=365),
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+    range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> HistoricalFetchStatusResponse:
+    try:
+        threshold = threshold_percent or settings.extended_history_upward_move_threshold_percent
+        lookback_days = lookback_calendar_days or settings.extended_history_lookback_calendar_days
+        report = range_mover_service.nifty_500_range_movers(threshold_percent=threshold, limit=500)
+        constituent_ids = [
+            int(item["index_constituent_id"])
+            for item in report["items"]
+            if item.get("index_constituent_id") is not None
+        ]
+        status = await historical_service.start_or_resume_constituent_fetch(
+            universe_name=upward_movers_universe_name(threshold),
+            constituent_ids=constituent_ids,
+            lookback_calendar_days=lookback_days,
+            source_universe_name="NIFTY_500",
+        )
         return HistoricalFetchStatusResponse(**status)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

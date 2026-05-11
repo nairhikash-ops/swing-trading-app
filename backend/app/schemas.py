@@ -220,6 +220,8 @@ class QualityReportResponse(BaseModel):
 
 
 class RangeMoverItem(BaseModel):
+    index_constituent_id: int | None = None
+    instrument_id: int | None = None
     symbol: str
     company_name: str
     industry: str

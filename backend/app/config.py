@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     dhan_instrument_segment: str = "E"
     nifty_500_constituents_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
     historical_lookback_calendar_days: int = Field(default=45, ge=1, le=365)
+    extended_history_lookback_calendar_days: int = Field(default=365, ge=1, le=365)
+    extended_history_upward_move_threshold_percent: float = Field(default=50.0, ge=0.1, le=100.0)
     dhan_historical_exchange_segment: str = "NSE_EQ"
     dhan_historical_instrument: str = "EQUITY"
     dhan_historical_rps: float = Field(default=2.0, ge=0.2, le=10.0)

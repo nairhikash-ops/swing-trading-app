@@ -24,6 +24,11 @@ class FatalHistoricalError(Exception):
     pass
 
 
+def upward_movers_universe_name(threshold_percent: float) -> str:
+    threshold = f"{threshold_percent:g}".replace(".", "_")
+    return f"{NIFTY_500_INDEX_NAME}_UPWARD_MOVERS_GE_{threshold}"
+
+
 class HistoricalDataStore:
     def __init__(self, token_store: TokenStore) -> None:
         self.token_store = token_store
@@ -213,6 +218,120 @@ class HistoricalDataStore:
             "completed_at": timestamp,
         }
 
+    def coverage_status_for_constituent_ids(
+        self,
+        universe_name: str,
+        lookback_days: int,
+        window: HistoricalWindow,
+        constituent_ids: list[int],
+        source_universe_name: str = NIFTY_500_INDEX_NAME,
+    ) -> dict[str, Any]:
+        timestamp = now_utc().isoformat()
+        ids = normalized_ids(constituent_ids)
+        if not ids:
+            return empty_historical_status(
+                universe_name=universe_name,
+                lookback_days=lookback_days,
+                window=window,
+                status="no_matches",
+                error="No stocks matched the upward movement threshold.",
+                timestamp=timestamp,
+            )
+
+        placeholders = ",".join("?" for _ in ids)
+        start_grace_date = (window.from_date + timedelta(days=10)).isoformat()
+        end_grace_date = (window.to_date_exclusive - timedelta(days=10)).isoformat()
+        with self._connect() as conn:
+            total = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total_symbols,
+                    SUM(CASE WHEN i.id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_symbols,
+                    SUM(CASE WHEN i.id IS NULL THEN 1 ELSE 0 END) AS skipped_symbols
+                FROM index_constituents ic
+                LEFT JOIN instruments i ON i.active = 1
+                  AND i.exchange_id = 'NSE'
+                  AND i.segment = 'E'
+                  AND i.instrument = 'EQUITY'
+                  AND i.isin = ic.isin
+                WHERE ic.index_name = ? AND ic.active = 1 AND ic.id IN ({placeholders})
+                """,
+                (source_universe_name, *ids),
+            ).fetchone()
+            mapped_symbols = int(total["mapped_symbols"] or 0)
+            complete_symbols = conn.execute(
+                f"""
+                SELECT COUNT(*) AS complete_symbols
+                FROM (
+                    SELECT i.id AS instrument_id,
+                           MIN(dc.trading_date) AS first_candle,
+                           MAX(dc.trading_date) AS latest_candle
+                    FROM index_constituents ic
+                    JOIN instruments i ON i.active = 1
+                      AND i.exchange_id = 'NSE'
+                      AND i.segment = 'E'
+                      AND i.instrument = 'EQUITY'
+                      AND i.isin = ic.isin
+                    JOIN daily_candles dc ON dc.instrument_id = i.id
+                      AND dc.trading_date >= ?
+                      AND dc.trading_date < ?
+                    WHERE ic.index_name = ? AND ic.active = 1 AND ic.id IN ({placeholders})
+                    GROUP BY i.id
+                    HAVING first_candle <= ? AND latest_candle >= ?
+                ) covered
+                """,
+                (
+                    window.from_date.isoformat(),
+                    window.to_date_exclusive.isoformat(),
+                    source_universe_name,
+                    *ids,
+                    start_grace_date,
+                    end_grace_date,
+                ),
+            ).fetchone()
+            stored_candles = conn.execute(
+                f"""
+                SELECT COUNT(*) AS stored_candle_count
+                FROM daily_candles dc
+                WHERE dc.trading_date >= ? AND dc.trading_date < ?
+                  AND dc.instrument_id IN (
+                    SELECT i.id
+                    FROM index_constituents ic
+                    JOIN instruments i ON i.active = 1
+                      AND i.exchange_id = 'NSE'
+                      AND i.segment = 'E'
+                      AND i.instrument = 'EQUITY'
+                      AND i.isin = ic.isin
+                    WHERE ic.index_name = ? AND ic.active = 1 AND ic.id IN ({placeholders})
+                  )
+                """,
+                (window.from_date.isoformat(), window.to_date_exclusive.isoformat(), source_universe_name, *ids),
+            ).fetchone()
+
+        complete = mapped_symbols > 0 and int(complete_symbols["complete_symbols"] or 0) == mapped_symbols
+        return {
+            "id": 0,
+            "universe_name": universe_name,
+            "lookback_calendar_days": lookback_days,
+            "from_date": window.from_date.isoformat(),
+            "to_date_exclusive": window.to_date_exclusive.isoformat(),
+            "status": "up_to_date" if complete else "missing_data",
+            "total_symbols": int(total["total_symbols"] or 0),
+            "mapped_symbols": mapped_symbols,
+            "skipped_symbols": int(total["skipped_symbols"] or 0),
+            "queued_count": 0,
+            "fetching_count": 0,
+            "done_count": mapped_symbols if complete else int(complete_symbols["complete_symbols"] or 0),
+            "failed_count": 0,
+            "skipped_count": int(total["skipped_symbols"] or 0),
+            "candles_received": 0,
+            "stored_candle_count": int(stored_candles["stored_candle_count"] or 0),
+            "error": "" if complete else "Some selected instruments do not have full cached coverage for this window.",
+            "started_at": timestamp,
+            "updated_at": timestamp,
+            "completed_at": timestamp,
+        }
+
     def create_run(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> int:
         timestamp = now_utc().isoformat()
         with self._connect() as conn:
@@ -243,6 +362,111 @@ class HistoricalDataStore:
                 """,
                 (universe_name,),
             ).fetchall()
+
+            mapped_symbols = 0
+            skipped_symbols = 0
+            for constituent in constituents:
+                instrument = conn.execute(
+                    """
+                    SELECT id, security_id
+                    FROM instruments
+                    WHERE active = 1
+                      AND exchange_id = 'NSE'
+                      AND segment = 'E'
+                      AND instrument = 'EQUITY'
+                      AND isin = ?
+                    ORDER BY CASE WHEN series = 'EQ' THEN 0 ELSE 1 END, id
+                    LIMIT 1
+                    """,
+                    (constituent["isin"],),
+                ).fetchone()
+                if instrument:
+                    mapped_symbols += 1
+                    status = "queued"
+                    instrument_id = instrument["id"]
+                    security_id = instrument["security_id"]
+                    error = ""
+                else:
+                    skipped_symbols += 1
+                    status = "skipped_unmapped"
+                    instrument_id = None
+                    security_id = ""
+                    error = "No active Dhan NSE equity instrument matched this Nifty 500 ISIN."
+                conn.execute(
+                    """
+                    INSERT INTO historical_fetch_items (
+                        run_id, index_constituent_id, instrument_id, company_name, industry,
+                        symbol, isin, security_id, status, error, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        constituent["id"],
+                        instrument_id,
+                        constituent["company_name"],
+                        constituent["industry"],
+                        constituent["symbol"],
+                        constituent["isin"],
+                        security_id,
+                        status,
+                        error,
+                        timestamp,
+                    ),
+                )
+
+            conn.execute(
+                """
+                UPDATE historical_fetch_runs
+                SET total_symbols = ?, mapped_symbols = ?, skipped_symbols = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (len(constituents), mapped_symbols, skipped_symbols, timestamp, run_id),
+            )
+            return run_id
+
+    def create_run_for_constituent_ids(
+        self,
+        universe_name: str,
+        lookback_days: int,
+        window: HistoricalWindow,
+        constituent_ids: list[int],
+        source_universe_name: str = NIFTY_500_INDEX_NAME,
+    ) -> int:
+        timestamp = now_utc().isoformat()
+        ids = normalized_ids(constituent_ids)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO historical_fetch_runs (
+                    universe_name, lookback_calendar_days, from_date, to_date_exclusive,
+                    status, started_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'queued', ?, ?)
+                """,
+                (
+                    universe_name,
+                    lookback_days,
+                    window.from_date.isoformat(),
+                    window.to_date_exclusive.isoformat(),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                constituents = conn.execute(
+                    f"""
+                    SELECT id, company_name, industry, symbol, isin
+                    FROM index_constituents
+                    WHERE index_name = ? AND active = 1 AND id IN ({placeholders})
+                    ORDER BY company_name
+                    """,
+                    (source_universe_name, *ids),
+                ).fetchall()
+            else:
+                constituents = []
 
             mapped_symbols = 0
             skipped_symbols = 0
@@ -605,6 +829,8 @@ class HistoricalDataService:
         async with self._lock:
             active_run = self.store.active_run(NIFTY_500_INDEX_NAME)
             if active_run is None:
+                if self._task is not None and not self._task.done():
+                    raise ValueError("Another historical fetch is already running.")
                 self._access_token()
                 window = historical_window(self.settings)
                 coverage = self.store.coverage_status(
@@ -626,7 +852,47 @@ class HistoricalDataService:
             status = self.store.status(run_id)
             return status or {}
 
-    def latest_status(self) -> dict[str, Any] | None:
+    async def start_or_resume_constituent_fetch(
+        self,
+        universe_name: str,
+        constituent_ids: list[int],
+        lookback_calendar_days: int,
+        source_universe_name: str = NIFTY_500_INDEX_NAME,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            active_run = self.store.active_run(universe_name)
+            if active_run is None:
+                if self._task is not None and not self._task.done():
+                    raise ValueError("Another historical fetch is already running.")
+                self._access_token()
+                window = historical_window(self.settings, lookback_calendar_days)
+                coverage = self.store.coverage_status_for_constituent_ids(
+                    universe_name,
+                    lookback_calendar_days,
+                    window,
+                    constituent_ids,
+                    source_universe_name,
+                )
+                if coverage["status"] in ("up_to_date", "no_matches"):
+                    return coverage
+                run_id = self.store.create_run_for_constituent_ids(
+                    universe_name,
+                    lookback_calendar_days,
+                    window,
+                    constituent_ids,
+                    source_universe_name,
+                )
+            else:
+                run_id = int(active_run["id"])
+            if self._task is None or self._task.done():
+                self._task = asyncio.create_task(asyncio.to_thread(self._run_fetch_sync, run_id))
+            status = self.store.status(run_id)
+            return status or {}
+
+    def latest_status(self, universe_name: str | None = None) -> dict[str, Any] | None:
+        if universe_name:
+            run = self.store.latest_run(universe_name)
+            return self.store.status(int(run["id"])) if run else None
         return self.store.status()
 
     def items(self, run_id: int, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -709,13 +975,50 @@ class HistoricalDataService:
         return TokenCrypto(self.settings.app_secret_key).decrypt(token.encrypted_access_token)
 
 
-def historical_window(settings: Settings) -> HistoricalWindow:
+def historical_window(settings: Settings, lookback_calendar_days: int | None = None) -> HistoricalWindow:
     now_ist = datetime.now(tz=IST)
     end_date = now_ist.date()
     if now_ist.hour < settings.historical_finalized_after_hour_ist:
         end_date -= timedelta(days=1)
-    from_date = end_date - timedelta(days=settings.historical_lookback_calendar_days - 1)
+    lookback_days = lookback_calendar_days or settings.historical_lookback_calendar_days
+    from_date = end_date - timedelta(days=lookback_days - 1)
     return HistoricalWindow(from_date=from_date, to_date_exclusive=end_date + timedelta(days=1))
+
+
+def normalized_ids(values: list[int]) -> list[int]:
+    return sorted({int(value) for value in values if int(value) > 0})
+
+
+def empty_historical_status(
+    universe_name: str,
+    lookback_days: int,
+    window: HistoricalWindow,
+    status: str,
+    error: str,
+    timestamp: str,
+) -> dict[str, Any]:
+    return {
+        "id": 0,
+        "universe_name": universe_name,
+        "lookback_calendar_days": lookback_days,
+        "from_date": window.from_date.isoformat(),
+        "to_date_exclusive": window.to_date_exclusive.isoformat(),
+        "status": status,
+        "total_symbols": 0,
+        "mapped_symbols": 0,
+        "skipped_symbols": 0,
+        "queued_count": 0,
+        "fetching_count": 0,
+        "done_count": 0,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "candles_received": 0,
+        "stored_candle_count": 0,
+        "error": error,
+        "started_at": timestamp,
+        "updated_at": timestamp,
+        "completed_at": timestamp,
+    }
 
 
 def parse_historical_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
