@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -383,6 +383,17 @@ class BhavcopyStore:
 
     def status(self) -> dict[str, Any]:
         with self.store.connect() as conn:
+            published_dates = [
+                row["trade_date"]
+                for row in conn.execute(
+                    """
+                    SELECT trade_date
+                    FROM import_dates
+                    WHERE status = 'published'
+                    ORDER BY trade_date DESC
+                    """
+                ).fetchall()
+            ]
             counts = conn.execute(
                 """
                 SELECT
@@ -428,6 +439,7 @@ class BhavcopyStore:
             ]
 
         published_count = int(counts["published_count"] or 0)
+        next_missing_date = suggested_next_missing_date(published_dates)
         return {
             "generated_at": utc_now(),
             "target_sessions": self.settings.bhavcopy_target_sessions,
@@ -435,6 +447,8 @@ class BhavcopyStore:
             "published_session_count": published_count,
             "coverage_percent": round((published_count / self.settings.bhavcopy_target_sessions) * 100, 2),
             "latest_published_date": counts["latest_published_date"],
+            "next_missing_date": next_missing_date.isoformat() if next_missing_date else None,
+            "next_missing_filename": filename_for_trade_date(next_missing_date) if next_missing_date else None,
             "rejected_file_count": int(file_counts["rejected_count"] or 0),
             "schema_error_count": int(file_counts["schema_error_count"] or 0),
             "row_count": int(row_count or 0),
@@ -519,6 +533,28 @@ def trade_date_from_filename(filename: str) -> date:
     if not match:
         raise BhavcopyImportError("Filename must match sec_bhavdata_full_DDMMYYYY.csv.")
     return datetime.strptime(match.group(1), "%d%m%Y").date()
+
+
+def filename_for_trade_date(value: date) -> str:
+    return f"sec_bhavdata_full_{value.strftime('%d%m%Y')}.csv"
+
+
+def suggested_next_missing_date(published_dates: list[str]) -> date | None:
+    if not published_dates:
+        return None
+    available = {datetime.strptime(value, "%Y-%m-%d").date() for value in published_dates}
+    latest = max(available)
+    candidate = previous_weekday(latest)
+    while candidate in available:
+        candidate = previous_weekday(candidate)
+    return candidate
+
+
+def previous_weekday(value: date) -> date:
+    candidate = value - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def parse_bhavcopy_csv(content: bytes, trade_date: date) -> ParsedBhavcopy:

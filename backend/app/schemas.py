@@ -54,6 +54,8 @@ class ImportStatusResponse(BaseModel):
     published_session_count: int
     coverage_percent: float
     latest_published_date: str | None = None
+    next_missing_date: str | None = None
+    next_missing_filename: str | None = None
     rejected_file_count: int
     schema_error_count: int
     row_count: int

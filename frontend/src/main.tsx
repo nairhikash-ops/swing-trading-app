@@ -21,6 +21,8 @@ type ImportStatus = {
   published_session_count: number;
   coverage_percent: number;
   latest_published_date?: string | null;
+  next_missing_date?: string | null;
+  next_missing_filename?: string | null;
   rejected_file_count: number;
   schema_error_count: number;
   row_count: number;
@@ -235,6 +237,16 @@ function App() {
           Server import folder
           <input value={status?.inbox_path ?? "-"} readOnly />
         </label>
+
+        <div className="request-box">
+          <p className="eyebrow">Next Requested File</p>
+          <strong>{status?.next_missing_filename ?? "Upload any Full Bhavcopy file to begin"}</strong>
+          <span>
+            {status?.next_missing_date
+              ? `Requested date: ${status.next_missing_date}. If you upload a different valid Full Bhavcopy, it will still be saved under its actual file date.`
+              : "The app will start asking for one missing date after the first valid file is stored."}
+          </span>
+        </div>
 
         <div className="button-row">
           <button onClick={scanFolder} disabled={busy}>

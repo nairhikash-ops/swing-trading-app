@@ -39,6 +39,8 @@ def test_import_bhavcopy_publishes_rows(tmp_path):
     eq_row = next(row for row in rows if row["series"] == "EQ")
     assert eq_row["symbol"] == "ALPHA"
     assert eq_row["delivery_percent"] == 60
+    assert service.status()["next_missing_date"] == "2026-05-07"
+    assert service.status()["next_missing_filename"] == "sec_bhavdata_full_07052026.csv"
 
 
 def test_duplicate_upload_is_skipped_by_checksum(tmp_path):
@@ -95,3 +97,18 @@ def test_inbox_scan_imports_matching_files(tmp_path):
 
     assert result["accepted_count"] == 1
     assert service.coverage()["published_session_count"] == 1
+
+
+def test_wrong_requested_date_is_still_saved_under_actual_file_date(tmp_path):
+    service = make_service(tmp_path)
+
+    service.import_files([(filename("08052026"), bhavcopy_csv("08-May-2026"))])
+    assert service.status()["next_missing_date"] == "2026-05-07"
+
+    result = service.import_files([(filename("06052026"), bhavcopy_csv("06-May-2026"))])
+    rows = service.rows_for_symbol("ALPHA", 10)
+    dates = {row["trade_date"] for row in rows}
+
+    assert result["accepted_count"] == 1
+    assert "2026-05-06" in dates
+    assert service.status()["next_missing_date"] == "2026-05-07"
