@@ -295,6 +295,12 @@ class BhavcopyStore:
                 )
                 file_id = int(cursor.lastrowid)
 
+            if trade_date:
+                conn.execute(
+                    "DELETE FROM import_dates WHERE file_id = ? AND trade_date <> ?",
+                    (file_id, trade_date.isoformat()),
+                )
+
         if status == "valid" and trade_date:
             parsed = parse_bhavcopy_csv(content)
             self._publish(file_id, parsed)

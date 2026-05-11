@@ -1,3 +1,5 @@
+import hashlib
+
 from app.bhavcopy import BhavcopyService, BhavcopyStore
 from app.config import Settings
 from app.store import AppStore
@@ -88,6 +90,60 @@ def test_filename_date_mismatch_is_saved_under_csv_date(tmp_path):
     assert result["files"][0]["trade_date"] == "2026-05-07"
     assert "2026-05-07" in dates
     assert service.coverage()["published_session_count"] == 1
+
+
+def test_reprocessing_old_date_mismatch_clears_stale_date_error(tmp_path):
+    service = make_service(tmp_path)
+    content = bhavcopy_csv("07-May-2026")
+    checksum = hashlib.sha256(content).hexdigest()
+
+    with service.store.store.connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO import_files (
+                batch_id, original_filename, stored_path, checksum, trade_date, status,
+                file_size_bytes, row_count, source_columns_json, error, uploaded_at, parsed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                None,
+                filename("08052026"),
+                "",
+                checksum,
+                "2026-05-08",
+                "schema_error",
+                len(content),
+                0,
+                "[]",
+                "CSV row DATE1 does not match filename date.",
+                "2026-05-11T00:00:00Z",
+                None,
+            ),
+        )
+        file_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO import_dates (trade_date, file_id, status, row_count, error, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-05-08",
+                file_id,
+                "schema_error",
+                0,
+                "CSV row DATE1 does not match filename date.",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+
+    result = service.import_files([(filename("08052026"), content)])
+    recent_dates = {item["trade_date"]: item for item in service.status()["recent_dates"]}
+
+    assert result["accepted_count"] == 1
+    assert result["files"][0]["trade_date"] == "2026-05-07"
+    assert "2026-05-08" not in recent_dates
+    assert recent_dates["2026-05-07"]["status"] == "published"
 
 
 def test_inbox_scan_imports_matching_files(tmp_path):
