@@ -27,6 +27,7 @@ Current implementation stage: **Dhan API foundation plus manual NSE EOD import**
 - Import manually downloaded NSE Full Bhavcopy + Security Deliverable and CM-UDiFF Bhavcopy files.
 - Pair NSE reports by trading date, resolve rows to ISIN-first identity, and publish normalized raw-unadjusted EOD rows.
 - Support bulk NSE import from a configured server inbox folder plus UI upload fallback.
+- Docker exposes the default server import inbox as `./nse_import_inbox` beside `docker-compose.yml`.
 
 ## Run Locally
 

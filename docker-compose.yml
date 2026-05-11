@@ -4,8 +4,11 @@ services:
       context: ./backend
     env_file:
       - .env
+    environment:
+      NSE_IMPORT_INBOX_PATH: /app/nse_import_inbox
     volumes:
       - dhan-auth-data:/app/data
+      - ./nse_import_inbox:/app/nse_import_inbox
     ports:
       - "8000:8000"
 
