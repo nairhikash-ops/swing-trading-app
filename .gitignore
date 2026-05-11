@@ -19,6 +19,8 @@ coverage/
 .env.*
 !.env.example
 data/
+bhavcopy_inbox/
+nse_import_inbox/
 *.sqlite3
 *.db
 *.log

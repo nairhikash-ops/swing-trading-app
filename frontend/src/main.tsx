@@ -1,278 +1,12 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
-import type { DragEvent, FormEvent } from "react";
+import type { DragEvent } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
-  Database,
-  FolderSearch,
-  RefreshCcw,
-  Save,
-  Search,
-  Shield,
-  TrendingUp,
-  Upload,
-  Wifi,
-} from "lucide-react";
+import { Database, FolderSearch, RefreshCcw, Search, Upload } from "lucide-react";
 import "./styles.css";
 
-type TokenState =
-  | "missing"
-  | "active"
-  | "expiring_soon"
-  | "expired"
-  | "renew_failed"
-  | "config_error"
-  | "unknown";
-
-type TokenStatus = {
-  state: TokenState;
-  has_token: boolean;
-  dhan_client_id?: string | null;
-  masked_token?: string | null;
-  expiry_time?: string | null;
-  minutes_to_expiry?: number | null;
-  active_segment?: string | null;
-  ddpi?: string | null;
-  mtf?: string | null;
-  data_plan?: string | null;
-  data_validity?: string | null;
-  last_status_check_at?: string | null;
-  last_renew_attempt_at?: string | null;
-  last_renew_success_at?: string | null;
-  last_error: string;
-  token_source?: string | null;
-};
-
-type RenewResponse = {
-  renewed: boolean;
-  status: TokenStatus;
-  message: string;
-};
-
-type InstrumentStatus = {
-  total_count: number;
-  active_count: number;
-  nse_count: number;
-  active_nse_count: number;
-  last_import?: {
-    id: number;
-    source_url: string;
-    source_columns_json: string;
-    total_rows_seen: number;
-    imported_rows: number;
-    inserted_rows: number;
-    updated_rows: number;
-    unchanged_rows: number;
-    deactivated_rows: number;
-    completed_at?: string | null;
-    error: string;
-  } | null;
-};
-
-type InstrumentItem = {
-  id: number;
-  exchange_id: string;
-  segment: string;
-  security_id: string;
-  isin: string;
-  instrument: string;
-  symbol_name: string;
-  display_name: string;
-  instrument_type: string;
-  series: string;
-  lot_size?: number | null;
-  expiry_date: string;
-  strike_price?: number | null;
-  option_type: string;
-  tick_size?: number | null;
-  buy_sell_indicator: string;
-  asm_gsm_flag: string;
-  mtf_leverage: string;
-};
-
-type UniverseStatus = {
-  index_name: string;
-  total_count: number;
-  active_count: number;
-  industry_count: number;
-  last_import?: {
-    id: number;
-    source_url: string;
-    source_columns_json: string;
-    total_rows_seen: number;
-    imported_rows: number;
-    inserted_rows: number;
-    updated_rows: number;
-    unchanged_rows: number;
-    deactivated_rows: number;
-    completed_at?: string | null;
-    error: string;
-  } | null;
-};
-
-type UniverseItem = {
-  id: number;
-  index_name: string;
-  company_name: string;
-  industry: string;
-  symbol: string;
-  series: string;
-  isin: string;
-  raw: Record<string, string>;
-};
-
-type HistoricalStatus = {
-  id: number;
-  universe_name: string;
-  lookback_calendar_days: number;
-  from_date: string;
-  to_date_exclusive: string;
-  status: string;
-  total_symbols: number;
-  mapped_symbols: number;
-  skipped_symbols: number;
-  queued_count: number;
-  fetching_count: number;
-  done_count: number;
-  failed_count: number;
-  skipped_count: number;
-  candles_received: number;
-  stored_candle_count: number;
-  error: string;
-  started_at: string;
-  updated_at: string;
-  completed_at?: string | null;
-};
-
-type HistoricalItem = {
-  id: number;
-  run_id: number;
-  company_name: string;
-  industry: string;
-  symbol: string;
-  isin: string;
-  security_id: string;
-  status: string;
-  attempts: number;
-  candles_received: number;
-  error: string;
-};
-
-type DailyCandle = {
-  trading_date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
-
-type QualityItem = {
-  symbol: string;
-  company_name: string;
-  industry: string;
-  isin: string;
-  security_id: string;
-  quality_status: "healthy" | "warning" | "blocked";
-  issues: string[];
-  latest_candle_date?: string | null;
-  expected_sessions: number;
-  candle_count: number;
-  missing_sessions: number;
-  invalid_ohlc_count: number;
-  zero_volume_count: number;
-  negative_volume_count: number;
-  extreme_move_count: number;
-  fetch_status: string;
-  fetch_error: string;
-};
-
-type QualityReport = {
-  generated_at: string;
-  historical_run_id?: number | null;
-  historical_run_status: string;
-  from_date: string;
-  to_date_exclusive: string;
-  latest_expected_session?: string | null;
-  expected_session_count: number;
-  total_symbols: number;
-  healthy_count: number;
-  warning_count: number;
-  blocked_count: number;
-  issue_counts: Record<string, number>;
-  items: QualityItem[];
-};
-
-type RangeMoverItem = {
-  index_constituent_id?: number | null;
-  instrument_id?: number | null;
-  symbol: string;
-  company_name: string;
-  industry: string;
-  isin: string;
-  security_id: string;
-  lowest_low: number;
-  lowest_low_date: string;
-  highest_high: number;
-  highest_high_date: string;
-  move_percent: number;
-  range_amount: number;
-  candle_count: number;
-};
-
-type RangeMoverReport = {
-  generated_at: string;
-  historical_run_id?: number | null;
-  from_date: string;
-  to_date_exclusive: string;
-  threshold_percent: number;
-  total_scanned: number;
-  match_count: number;
-  items: RangeMoverItem[];
-};
-
-type MoveEventItem = {
-  id: number;
-  run_id: number;
-  symbol: string;
-  company_name: string;
-  industry: string;
-  event_number: number;
-  bucket: string;
-  low_date: string;
-  low_price: number;
-  high_date: string;
-  high_price: number;
-  move_percent: number;
-  duration_calendar_days: number;
-  duration_trading_sessions: number;
-  split_pullback_date?: string | null;
-  split_pullback_close?: number | null;
-};
-
-type MoveEventReport = {
-  run_id?: number | null;
-  universe_name: string;
-  threshold_percent: number;
-  pullback_percent: number;
-  from_date: string;
-  to_date_exclusive: string;
-  status: string;
-  total_symbols: number;
-  scanned_symbols: number;
-  candidate_symbols: number;
-  event_count: number;
-  error: string;
-  generated_at: string;
-  items: MoveEventItem[];
-};
-
-type NseImportFileResult = {
+type ImportFileResult = {
   filename: string;
   status: string;
-  report_type?: string | null;
   trade_date?: string | null;
   row_count: number;
   error: string;
@@ -280,23 +14,20 @@ type NseImportFileResult = {
   existing_file_id?: number | null;
 };
 
-type NseImportStatus = {
+type ImportStatus = {
   generated_at: string;
   target_sessions: number;
   inbox_path: string;
   published_session_count: number;
   coverage_percent: number;
   latest_published_date?: string | null;
-  waiting_for_pair_count: number;
-  schema_error_count: number;
   rejected_file_count: number;
-  schema_file_count: number;
-  instrument_count: number;
-  eod_row_count: number;
+  schema_error_count: number;
+  row_count: number;
+  symbol_count: number;
   recent_files: {
     id: number;
     original_filename: string;
-    report_type: string;
     trade_date: string;
     status: string;
     row_count: number;
@@ -306,47 +37,40 @@ type NseImportStatus = {
   recent_dates: {
     trade_date: string;
     status: string;
-    full_row_count: number;
-    udiff_row_count: number;
-    published_row_count: number;
-    unresolved_row_count: number;
+    row_count: number;
     error: string;
     updated_at: string;
     published_at?: string | null;
   }[];
 };
 
-type NseEodCoverage = {
+type Coverage = {
   generated_at: string;
   target_sessions: number;
   published_session_count: number;
   coverage_percent: number;
   latest_published_date?: string | null;
-  instrument_count: number;
-  eod_row_count: number;
-  dirty_flag_counts: Record<string, number>;
+  row_count: number;
+  symbol_count: number;
+  series_counts: Record<string, number>;
 };
 
-type NseEodRow = {
-  isin: string;
+type BhavcopyRow = {
   trade_date: string;
   symbol: string;
   series: string;
-  company_name: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
   prev_close: number;
+  open_price: number;
+  high_price: number;
+  low_price: number;
+  last_price: number;
+  close_price: number;
   avg_price: number;
-  volume: number;
+  traded_quantity: number;
   turnover_lacs: number;
   no_of_trades: number;
   delivery_qty?: number | null;
   delivery_percent?: number | null;
-  price_basis: string;
-  dirty_flag: string;
-  dirty_reason: string;
 };
 
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -354,317 +78,58 @@ const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
     ? configuredApiBaseUrl
     : `${window.location.protocol}//${window.location.hostname}:8000`;
-const rangeMoverThresholdOptions = [5, 10, 15, 20, 30, 40, 50];
-const extendedHistoryThreshold = 50;
-const extendedHistoryLookbackDays = 365;
 
 function App() {
-  const [status, setStatus] = useState<TokenStatus | null>(null);
-  const [instrumentStatus, setInstrumentStatus] = useState<InstrumentStatus | null>(null);
-  const [instrumentResults, setInstrumentResults] = useState<InstrumentItem[]>([]);
-  const [instrumentQuery, setInstrumentQuery] = useState("");
-  const [universeStatus, setUniverseStatus] = useState<UniverseStatus | null>(null);
-  const [universeResults, setUniverseResults] = useState<UniverseItem[]>([]);
-  const [universeQuery, setUniverseQuery] = useState("");
-  const [historicalStatus, setHistoricalStatus] = useState<HistoricalStatus | null>(null);
-  const [extendedHistoricalStatus, setExtendedHistoricalStatus] = useState<HistoricalStatus | null>(null);
-  const [historicalItems, setHistoricalItems] = useState<HistoricalItem[]>([]);
-  const [candleSymbol, setCandleSymbol] = useState("RELIANCE");
-  const [candles, setCandles] = useState<DailyCandle[]>([]);
-  const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
-  const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
-  const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
-  const [nseImportStatus, setNseImportStatus] = useState<NseImportStatus | null>(null);
-  const [nseCoverage, setNseCoverage] = useState<NseEodCoverage | null>(null);
-  const [nseUploadFiles, setNseUploadFiles] = useState<File[]>([]);
-  const [nseImportResults, setNseImportResults] = useState<NseImportFileResult[]>([]);
-  const [nseSymbol, setNseSymbol] = useState("RELIANCE");
-  const [nseRows, setNseRows] = useState<NseEodRow[]>([]);
-  const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
-  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<ImportStatus | null>(null);
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [importResults, setImportResults] = useState<ImportFileResult[]>([]);
+  const [symbol, setSymbol] = useState("RELIANCE");
+  const [rows, setRows] = useState<BhavcopyRow[]>([]);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({
-    dhanClientId: "",
-    accessToken: "",
-    expiryTime: "",
-    validateWithDhan: true,
-  });
+  const [message, setMessage] = useState("");
 
-  const stateMeta = useMemo(() => getStateMeta(status?.state ?? "unknown"), [status?.state]);
+  const coverageWidth = useMemo(() => Math.min(coverage?.coverage_percent ?? 0, 100), [coverage?.coverage_percent]);
 
-  async function loadStatus(refresh = false) {
-    setBusy(true);
-    setMessage("");
-    try {
-      const endpoint = refresh ? "/api/dhan/status/refresh" : "/api/dhan/status";
-      const response = await fetch(`${apiBaseUrl}${endpoint}`, { method: refresh ? "POST" : "GET" });
-      if (!response.ok) throw new Error(await readError(response));
-      setStatus(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load Dhan status.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadInstrumentStatus() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/instruments/status`);
-      if (!response.ok) throw new Error(await readError(response));
-      setInstrumentStatus(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load instrument master status.");
-    }
-  }
-
-  async function refreshInstruments() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/instruments/refresh`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = await response.json();
-      setMessage(`Imported ${formatNumber(data.imported_rows)} NSE instruments from Dhan.`);
-      await loadInstrumentStatus();
-      if (instrumentQuery.trim()) {
-        await searchInstruments(instrumentQuery);
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh instrument master.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadUniverseStatus() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/status`);
-      if (!response.ok) throw new Error(await readError(response));
-      setUniverseStatus(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load Nifty 500 status.");
-    }
-  }
-
-  async function refreshUniverse() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/refresh`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = await response.json();
-      setMessage(`Imported ${formatNumber(data.imported_rows)} Nifty 500 constituents from NSE.`);
-      await loadUniverseStatus();
-      await loadUniverse(universeQuery);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh Nifty 500 universe.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadUniverse(query = universeQuery) {
-    const trimmed = query.trim();
-    setUniverseQuery(query);
-    try {
-      const params = new URLSearchParams({ limit: "600" });
-      if (trimmed) params.set("query", trimmed);
-      const response = await fetch(`${apiBaseUrl}/api/universe/nifty500/constituents?${params.toString()}`);
-      if (!response.ok) throw new Error(await readError(response));
-      setUniverseResults(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load Nifty 500 constituents.");
-    }
-  }
-
-  async function searchInstruments(query = instrumentQuery) {
-    const trimmed = query.trim();
-    setInstrumentQuery(query);
-    if (!trimmed) {
-      setInstrumentResults([]);
-      return;
-    }
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/instruments/search?query=${encodeURIComponent(trimmed)}&limit=10`);
-      if (!response.ok) throw new Error(await readError(response));
-      setInstrumentResults(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to search instruments.");
-    }
-  }
-
-  async function loadHistoricalStatus() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/status`);
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as HistoricalStatus | null;
-      setHistoricalStatus(data);
-      if (data?.id && data.failed_count > 0) {
-        await loadHistoricalItems(data.id, "failed");
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load historical fetch status.");
-    }
-  }
-
-  async function startHistoricalFetch() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/refresh`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as HistoricalStatus;
-      setHistoricalStatus(data);
-      setMessage(
-        data.status === "up_to_date"
-          ? "Historical candles are already up to date. No Dhan fetch was started."
-          : `Historical fetch run ${data.id} started or resumed.`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to start historical fetch.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadExtendedHistoricalStatus() {
-    try {
-      const params = new URLSearchParams({ threshold_percent: String(extendedHistoryThreshold) });
-      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/upward-movers/status?${params.toString()}`);
-      if (!response.ok) throw new Error(await readError(response));
-      setExtendedHistoricalStatus(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load 365-day mover fetch status.");
-    }
-  }
-
-  async function startExtendedHistoricalFetch() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const params = new URLSearchParams({
-        threshold_percent: String(extendedHistoryThreshold),
-        lookback_calendar_days: String(extendedHistoryLookbackDays),
-      });
-      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/upward-movers/refresh?${params.toString()}`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as HistoricalStatus;
-      setExtendedHistoricalStatus(data);
-      setMessage(
-        data.status === "up_to_date"
-          ? "365-day candles for >=50% movers are already cached."
-          : data.status === "no_matches"
-            ? "No stocks currently match the >=50% upward move filter."
-            : `365-day mover fetch run ${data.id} started or resumed.`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to start 365-day mover fetch.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadHistoricalItems(runId = historicalStatus?.id, itemStatus = "failed") {
-    if (!runId) return;
-    try {
-      const params = new URLSearchParams({ run_id: String(runId), status: itemStatus, limit: "50" });
-      const response = await fetch(`${apiBaseUrl}/api/historical/nifty500/items?${params.toString()}`);
-      if (!response.ok) throw new Error(await readError(response));
-      setHistoricalItems(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load historical fetch items.");
-    }
-  }
-
-  async function loadCandles(symbol = candleSymbol) {
-    const trimmed = symbol.trim();
-    setCandleSymbol(symbol);
-    if (!trimmed) {
-      setCandles([]);
-      return;
-    }
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/historical/candles?symbol=${encodeURIComponent(trimmed)}&limit=10`);
-      if (!response.ok) throw new Error(await readError(response));
-      setCandles(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load stored candles.");
-    }
-  }
-
-  async function loadQualityReport() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/quality/nifty500/report?status=exceptions&limit=100`);
-      if (!response.ok) throw new Error(await readError(response));
-      setQualityReport(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load data quality report.");
-    }
-  }
-
-  async function loadRangeMovers(threshold = rangeMoverThreshold) {
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/analytics/nifty500/upward-movers?threshold_percent=${threshold}&limit=500`,
-      );
-      if (!response.ok) throw new Error(await readError(response));
-      setRangeMoverReport(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load range movers.");
-    }
-  }
-
-  async function loadMoveEvents() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/research/nifty500/move-events?limit=500`);
-      if (!response.ok) throw new Error(await readError(response));
-      setMoveEventReport(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load move events.");
-    }
-  }
-
-  async function loadNseImportStatus() {
+  async function loadStatus() {
     try {
       const [statusResponse, coverageResponse] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/nse/import/status`),
-        fetch(`${apiBaseUrl}/api/nse/eod/coverage`),
+        fetch(`${apiBaseUrl}/api/bhavcopy/import/status`),
+        fetch(`${apiBaseUrl}/api/bhavcopy/coverage`),
       ]);
       if (!statusResponse.ok) throw new Error(await readError(statusResponse));
       if (!coverageResponse.ok) throw new Error(await readError(coverageResponse));
-      setNseImportStatus(await statusResponse.json());
-      setNseCoverage(await coverageResponse.json());
+      setStatus(await statusResponse.json());
+      setCoverage(await coverageResponse.json());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load NSE import status.");
+      setMessage(error instanceof Error ? error.message : "Unable to load bhavcopy status.");
     }
   }
 
-  async function scanNseImportFolder() {
+  async function scanFolder() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/nse/import/scan`, { method: "POST" });
+      const response = await fetch(`${apiBaseUrl}/api/bhavcopy/import/scan`, { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
       const data = await response.json();
-      setNseImportResults(data.files ?? []);
+      setImportResults(data.files ?? []);
       setMessage(
-        `Folder scan accepted ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
+        `Scan accepted ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
           data.duplicate_count,
         )} duplicate(s), published ${formatNumber(data.published_dates_count)} date(s).`,
       );
-      await loadNseImportStatus();
+      await loadStatus();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to scan NSE import folder.");
+      setMessage(error instanceof Error ? error.message : "Unable to scan folder.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function uploadNseFiles(files = nseUploadFiles) {
+  async function uploadSelected(files = uploadFiles) {
     if (files.length === 0) {
-      setMessage("Choose NSE CSV/ZIP files first, or use the import folder scan.");
+      setMessage("Choose bhavcopy CSV files first.");
       return;
     }
     setBusy(true);
@@ -672,426 +137,151 @@ function App() {
     try {
       const formData = new FormData();
       files.forEach((file) => formData.append("files", file));
-      const response = await fetch(`${apiBaseUrl}/api/nse/import/upload`, { method: "POST", body: formData });
+      const response = await fetch(`${apiBaseUrl}/api/bhavcopy/import/upload`, { method: "POST", body: formData });
       if (!response.ok) throw new Error(await readError(response));
       const data = await response.json();
-      setNseImportResults(data.files ?? []);
-      setNseUploadFiles([]);
+      setImportResults(data.files ?? []);
+      setUploadFiles([]);
       setMessage(
-        `Uploaded ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
+        `Upload accepted ${formatNumber(data.accepted_count)} file(s), skipped ${formatNumber(
           data.duplicate_count,
         )} duplicate(s), published ${formatNumber(data.published_dates_count)} date(s).`,
       );
-      await loadNseImportStatus();
+      await loadStatus();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to upload NSE files.");
+      setMessage(error instanceof Error ? error.message : "Unable to upload files.");
     } finally {
       setBusy(false);
     }
   }
 
-  function handleNseDrop(event: DragEvent<HTMLLabelElement>) {
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
-    const files = Array.from(event.dataTransfer.files);
-    setNseUploadFiles(files);
+    const files = Array.from(event.dataTransfer.files).filter((file) => file.name.toLowerCase().endsWith(".csv"));
+    setUploadFiles(files);
     if (files.length > 0) {
-      uploadNseFiles(files);
+      uploadSelected(files);
     }
   }
 
-  async function loadNseRows(symbol = nseSymbol) {
-    const trimmed = symbol.trim();
-    setNseSymbol(symbol);
+  async function loadRows(nextSymbol = symbol) {
+    const trimmed = nextSymbol.trim();
+    setSymbol(nextSymbol);
     if (!trimmed) {
-      setNseRows([]);
+      setRows([]);
       return;
     }
     try {
-      const response = await fetch(`${apiBaseUrl}/api/nse/eod/rows?symbol=${encodeURIComponent(trimmed)}&limit=20`);
+      const response = await fetch(`${apiBaseUrl}/api/bhavcopy/rows?symbol=${encodeURIComponent(trimmed)}&limit=30`);
       if (!response.ok) throw new Error(await readError(response));
-      setNseRows(await response.json());
+      setRows(await response.json());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load NSE EOD rows.");
-    }
-  }
-
-  async function refreshMoveEvents() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const params = new URLSearchParams({ threshold_percent: "10", pullback_percent: "5" });
-      const response = await fetch(`${apiBaseUrl}/api/research/nifty500/move-events/refresh?${params.toString()}`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as MoveEventReport;
-      setMoveEventReport(data);
-      setMessage(
-        `Detected ${formatNumber(data.event_count)} >=10% event(s) across ${formatNumber(data.candidate_symbols)} stock(s).`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh move events.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function changeRangeMoverThreshold(value: string) {
-    const nextThreshold = Number(value);
-    setRangeMoverThreshold(nextThreshold);
-    loadRangeMovers(nextThreshold);
-  }
-
-  async function renewToken() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/dhan/renew`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as RenewResponse;
-      setStatus(data.status);
-      setMessage(data.message);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to renew Dhan token.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveToken(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/dhan/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dhan_client_id: form.dhanClientId.trim(),
-          access_token: form.accessToken.trim(),
-          expiry_time: form.expiryTime ? new Date(form.expiryTime).toISOString() : null,
-          validate_with_dhan: form.validateWithDhan,
-        }),
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      setStatus(await response.json());
-      setForm({ dhanClientId: "", accessToken: "", expiryTime: "", validateWithDhan: true });
-      setMessage("Token saved. Automatic renewal will take over before expiry.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save Dhan token.");
-    } finally {
-      setBusy(false);
+      setMessage(error instanceof Error ? error.message : "Unable to load rows.");
     }
   }
 
   useEffect(() => {
     loadStatus();
-    loadInstrumentStatus();
-    loadUniverseStatus();
-    loadUniverse();
-    loadHistoricalStatus();
-    loadExtendedHistoricalStatus();
-    loadQualityReport();
-    loadRangeMovers();
-    loadMoveEvents();
-    loadNseImportStatus();
-    const timer = window.setInterval(() => loadStatus(), 60_000);
-    return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (!historicalStatus || !["queued", "running"].includes(historicalStatus.status)) return;
-    const timer = window.setInterval(() => loadHistoricalStatus(), 3_000);
-    return () => window.clearInterval(timer);
-  }, [historicalStatus?.id, historicalStatus?.status]);
-
-  useEffect(() => {
-    if (!extendedHistoricalStatus || !["queued", "running"].includes(extendedHistoricalStatus.status)) return;
-    const timer = window.setInterval(() => loadExtendedHistoricalStatus(), 3_000);
-    return () => window.clearInterval(timer);
-  }, [extendedHistoricalStatus?.id, extendedHistoricalStatus?.status]);
-
-  const historicalProgress =
-    historicalStatus && historicalStatus.total_symbols > 0
-      ? Math.round(
-          ((historicalStatus.done_count + historicalStatus.failed_count + historicalStatus.skipped_count) /
-            historicalStatus.total_symbols) *
-            100,
-        )
-      : 0;
-  const extendedHistoricalProgress =
-    extendedHistoricalStatus && extendedHistoricalStatus.total_symbols > 0
-      ? Math.round(
-          ((extendedHistoricalStatus.done_count +
-            extendedHistoricalStatus.failed_count +
-            extendedHistoricalStatus.skipped_count) /
-            extendedHistoricalStatus.total_symbols) *
-            100,
-        )
-      : 0;
 
   return (
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Stage 1</p>
-          <h1>Dhan Token Control</h1>
+          <p className="eyebrow">Full Bhavcopy Only</p>
+          <h1>Bhavcopy Import</h1>
         </div>
-        <div className={`status-pill ${stateMeta.className}`}>
-          {stateMeta.icon}
-          <span>{stateMeta.label}</span>
-        </div>
+        <button className="secondary" onClick={loadStatus} disabled={busy}>
+          <RefreshCcw size={17} />
+          Refresh
+        </button>
       </section>
 
-      <section className="grid">
-        <div className="panel status-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Connection</p>
-              <h2>Dhan API Status</h2>
-            </div>
-            <button className="icon-button" onClick={() => loadStatus(true)} disabled={busy} title="Refresh status">
-              <RefreshCcw size={18} />
-            </button>
-          </div>
-
-          <dl className="status-list">
-            <StatusRow label="Client ID" value={status?.dhan_client_id ?? "-"} />
-            <StatusRow label="Stored token" value={status?.masked_token ?? "-"} />
-            <StatusRow label="Token source" value={status?.token_source ?? "-"} />
-            <StatusRow label="Expiry" value={formatDate(status?.expiry_time)} />
-            <StatusRow label="Minutes left" value={formatNumber(status?.minutes_to_expiry)} />
-            <StatusRow label="Data plan" value={status?.data_plan ?? "-"} />
-            <StatusRow label="Active segment" value={status?.active_segment ?? "-"} />
-            <StatusRow label="Last renew" value={formatDate(status?.last_renew_success_at)} />
-          </dl>
-
-          {status?.last_error ? <p className="error-text">{status.last_error}</p> : null}
-
-          <div className="button-row">
-            <button onClick={renewToken} disabled={busy || !status?.has_token}>
-              <RefreshCcw size={17} />
-              Renew now
-            </button>
-            <button className="secondary" onClick={() => loadStatus(false)} disabled={busy}>
-              <Wifi size={17} />
-              Check local
-            </button>
-          </div>
-        </div>
-
-        <form className="panel" onSubmit={saveToken}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Fallback</p>
-              <h2>Manual Token Update</h2>
-            </div>
-            <Shield size={22} />
-          </div>
-
-          <label>
-            Dhan Client ID
-            <input
-              value={form.dhanClientId}
-              onChange={(event) => setForm({ ...form, dhanClientId: event.target.value })}
-              autoComplete="off"
-              required
-            />
-          </label>
-
-          <label>
-            Access Token
-            <textarea
-              value={form.accessToken}
-              onChange={(event) => setForm({ ...form, accessToken: event.target.value })}
-              autoComplete="off"
-              rows={5}
-              required
-            />
-          </label>
-
-          <label>
-            Expiry time
-            <input
-              type="datetime-local"
-              value={form.expiryTime}
-              onChange={(event) => setForm({ ...form, expiryTime: event.target.value })}
-            />
-          </label>
-
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={form.validateWithDhan}
-              onChange={(event) => setForm({ ...form, validateWithDhan: event.target.checked })}
-            />
-            Validate with Dhan profile before saving
-          </label>
-
-          <button type="submit" disabled={busy}>
-            <Save size={17} />
-            Save token
-          </button>
-        </form>
-      </section>
-
-      <section className="panel instruments-panel">
+      <section className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">NSE EOD Foundation</p>
-            <h2>Manual Bhavcopy Import</h2>
+            <p className="eyebrow">Coverage</p>
+            <h2>Stored Trading Sessions</h2>
+          </div>
+          <Database size={22} />
+        </div>
+
+        <div className="progress-track" aria-label="Coverage progress">
+          <span style={{ width: `${coverageWidth}%` }} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Published sessions" value={formatNumber(coverage?.published_session_count)} />
+          <StatusRow label="Target sessions" value={formatNumber(coverage?.target_sessions)} />
+          <StatusRow label="Coverage" value={formatPercent(coverage?.coverage_percent)} />
+          <StatusRow label="Latest date" value={coverage?.latest_published_date ?? "-"} />
+          <StatusRow label="Rows" value={formatNumber(coverage?.row_count)} />
+          <StatusRow label="Symbols" value={formatNumber(coverage?.symbol_count)} />
+          <StatusRow label="Rejected files" value={formatNumber(status?.rejected_file_count)} />
+          <StatusRow label="Schema errors" value={formatNumber(status?.schema_error_count)} />
+        </dl>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Import</p>
+            <h2>Bhavcopy Files</h2>
           </div>
           <FolderSearch size={22} />
         </div>
 
-        <div className="progress-track" aria-label="NSE EOD coverage progress">
-          <span style={{ width: `${Math.min(nseCoverage?.coverage_percent ?? 0, 100)}%` }} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Published sessions" value={formatNumber(nseCoverage?.published_session_count)} />
-          <StatusRow label="Target sessions" value={formatNumber(nseCoverage?.target_sessions)} />
-          <StatusRow label="Coverage" value={formatPercent(nseCoverage?.coverage_percent)} />
-          <StatusRow label="Latest date" value={nseCoverage?.latest_published_date ?? "-"} />
-          <StatusRow label="Instruments" value={formatNumber(nseCoverage?.instrument_count)} />
-          <StatusRow label="EOD rows" value={formatNumber(nseCoverage?.eod_row_count)} />
-          <StatusRow label="Waiting dates" value={formatNumber(nseImportStatus?.waiting_for_pair_count)} />
-          <StatusRow label="Schema errors" value={formatNumber(nseImportStatus?.schema_error_count)} />
-        </dl>
-
-        <label className="search-label">
+        <label>
           Server import folder
-          <input value={nseImportStatus?.inbox_path ?? "-"} readOnly />
+          <input value={status?.inbox_path ?? "-"} readOnly />
         </label>
 
         <div className="button-row">
-          <button onClick={scanNseImportFolder} disabled={busy}>
+          <button onClick={scanFolder} disabled={busy}>
             <FolderSearch size={17} />
-            Scan import folder
+            Scan folder
           </button>
-          <button className="secondary" onClick={loadNseImportStatus} disabled={busy}>
+          <button className="secondary" onClick={loadStatus} disabled={busy}>
             <RefreshCcw size={17} />
-            Refresh NSE status
+            Check status
           </button>
         </div>
 
-        <label className="drop-zone" onDrop={handleNseDrop} onDragOver={(event) => event.preventDefault()}>
+        <label className="drop-zone" onDrop={handleDrop} onDragOver={(event) => event.preventDefault()}>
           <Upload size={20} />
-          <span>{nseUploadFiles.length > 0 ? `${nseUploadFiles.length} file(s) selected` : "Drop NSE CSV/ZIP files here"}</span>
+          <span>{uploadFiles.length > 0 ? `${uploadFiles.length} file(s) selected` : "Drop bhavcopy CSV files here"}</span>
           <input
             type="file"
             multiple
-            accept=".csv,.zip"
-            onChange={(event) => setNseUploadFiles(Array.from(event.target.files ?? []))}
+            accept=".csv"
+            onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
           />
         </label>
 
         <div className="button-row">
-          <button className="secondary" onClick={() => uploadNseFiles()} disabled={busy || nseUploadFiles.length === 0}>
+          <button className="secondary" onClick={() => uploadSelected()} disabled={busy || uploadFiles.length === 0}>
             <Upload size={17} />
             Upload selected files
           </button>
         </div>
 
-        <label className="search-label">
-          Inspect NSE EOD rows
-          <div className="search-row">
-            <input value={nseSymbol} onChange={(event) => loadNseRows(event.target.value)} placeholder="RELIANCE or ISIN" />
-            <button type="button" className="secondary" onClick={() => loadNseRows()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        {nseRows.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Symbol</th>
-                  <th>ISIN</th>
-                  <th>Open</th>
-                  <th>High</th>
-                  <th>Low</th>
-                  <th>Close</th>
-                  <th>Delivery %</th>
-                  <th>Flag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {nseRows.map((row) => (
-                  <tr key={`${row.isin}-${row.trade_date}-${row.series}`}>
-                    <td>{row.trade_date}</td>
-                    <td>{row.symbol}</td>
-                    <td>{row.isin}</td>
-                    <td>{formatPrice(row.open)}</td>
-                    <td>{formatPrice(row.high)}</td>
-                    <td>{formatPrice(row.low)}</td>
-                    <td>{formatPrice(row.close)}</td>
-                    <td>{formatPercent(row.delivery_percent)}</td>
-                    <td>{row.dirty_flag === "clean" ? "clean" : `${row.dirty_flag}: ${row.dirty_reason}`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Status</th>
-                <th>Full rows</th>
-                <th>UDiFF rows</th>
-                <th>Published</th>
-                <th>Unresolved</th>
-                <th>Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!nseImportStatus || nseImportStatus.recent_dates.length === 0 ? (
-                <tr>
-                  <td colSpan={7}>No NSE report dates imported yet.</td>
-                </tr>
-              ) : (
-                nseImportStatus.recent_dates.map((item) => (
-                  <tr key={item.trade_date}>
-                    <td>{item.trade_date}</td>
-                    <td>{item.status}</td>
-                    <td>{formatNumber(item.full_row_count)}</td>
-                    <td>{formatNumber(item.udiff_row_count)}</td>
-                    <td>{formatNumber(item.published_row_count)}</td>
-                    <td>{formatNumber(item.unresolved_row_count)}</td>
-                    <td>{item.error || "-"}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {nseImportResults.length > 0 ? (
+        {importResults.length > 0 ? (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>File</th>
                   <th>Status</th>
-                  <th>Report</th>
                   <th>Date</th>
                   <th>Rows</th>
                   <th>Error</th>
                 </tr>
               </thead>
               <tbody>
-                {nseImportResults.map((item) => (
+                {importResults.map((item) => (
                   <tr key={`${item.filename}-${item.file_id ?? item.existing_file_id ?? item.status}`}>
                     <td>{item.filename}</td>
                     <td>{item.status}</td>
-                    <td>{item.report_type ?? "-"}</td>
                     <td>{item.trade_date ?? "-"}</td>
                     <td>{formatNumber(item.row_count)}</td>
                     <td>{item.error || "-"}</td>
@@ -1103,77 +293,57 @@ function App() {
         ) : null}
       </section>
 
-      <section className="panel instruments-panel">
+      <section className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Research Events</p>
-            <h2>45-Day Candidate Events</h2>
+            <p className="eyebrow">Inspect</p>
+            <h2>Stored Rows</h2>
           </div>
           <Search size={22} />
         </div>
 
-        <dl className="status-list compact">
-          <StatusRow label="Events" value={formatNumber(moveEventReport?.event_count)} />
-          <StatusRow label="Candidate stocks" value={formatNumber(moveEventReport?.candidate_symbols)} />
-          <StatusRow label="Scanned" value={formatNumber(moveEventReport?.scanned_symbols)} />
-          <StatusRow label="Threshold" value={formatPercent(moveEventReport?.threshold_percent)} />
-          <StatusRow label="Pullback split" value={formatPercent(moveEventReport?.pullback_percent)} />
-          <StatusRow label="Window from" value={moveEventReport?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={moveEventReport?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(moveEventReport?.generated_at)} />
-        </dl>
-
-        {moveEventReport?.error ? <p className="error-text">{moveEventReport.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshMoveEvents} disabled={busy}>
-            <RefreshCcw size={17} />
-            Detect candidate events
-          </button>
-          <button className="secondary" onClick={loadMoveEvents} disabled={busy}>
-            <Wifi size={17} />
-            Reload events
-          </button>
-        </div>
+        <label>
+          Symbol
+          <div className="search-row">
+            <input value={symbol} onChange={(event) => loadRows(event.target.value)} placeholder="RELIANCE" />
+            <button type="button" className="secondary" onClick={() => loadRows()} disabled={busy}>
+              <Search size={17} />
+            </button>
+          </div>
+        </label>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                <th>Date</th>
                 <th>Symbol</th>
-                <th>Company</th>
-                <th>Industry</th>
-                <th>Bucket</th>
-                <th>Event</th>
-                <th>Low</th>
-                <th>Low date</th>
+                <th>Series</th>
+                <th>Open</th>
                 <th>High</th>
-                <th>High date</th>
-                <th>Move</th>
-                <th>Sessions</th>
-                <th>Days</th>
+                <th>Low</th>
+                <th>Close</th>
+                <th>Volume</th>
+                <th>Delivery %</th>
               </tr>
             </thead>
             <tbody>
-              {!moveEventReport || moveEventReport.items.length === 0 ? (
+              {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={12}>No stored candidate events. Run detection after the 45-day data is current.</td>
+                  <td colSpan={9}>No rows loaded.</td>
                 </tr>
               ) : (
-                moveEventReport.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.industry}</td>
-                    <td>{item.bucket}</td>
-                    <td>{formatNumber(item.event_number)}</td>
-                    <td>{formatPrice(item.low_price)}</td>
-                    <td>{item.low_date}</td>
-                    <td>{formatPrice(item.high_price)}</td>
-                    <td>{item.high_date}</td>
-                    <td>{formatPercent(item.move_percent)}</td>
-                    <td>{formatNumber(item.duration_trading_sessions)}</td>
-                    <td>{formatNumber(item.duration_calendar_days)}</td>
+                rows.map((row) => (
+                  <tr key={`${row.trade_date}-${row.symbol}-${row.series}`}>
+                    <td>{row.trade_date}</td>
+                    <td>{row.symbol}</td>
+                    <td>{row.series}</td>
+                    <td>{formatPrice(row.open_price)}</td>
+                    <td>{formatPrice(row.high_price)}</td>
+                    <td>{formatPrice(row.low_price)}</td>
+                    <td>{formatPrice(row.close_price)}</td>
+                    <td>{formatNumber(row.traded_quantity)}</td>
+                    <td>{formatPercent(row.delivery_percent)}</td>
                   </tr>
                 ))
               )}
@@ -1182,439 +352,38 @@ function App() {
         </div>
       </section>
 
-      <section className="panel instruments-panel">
+      <section className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Momentum Scan</p>
-            <h2>45-Day Upward Move Above {rangeMoverThreshold}%</h2>
+            <p className="eyebrow">Recent</p>
+            <h2>Imported Dates</h2>
           </div>
-          <TrendingUp size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Matches" value={formatNumber(rangeMoverReport?.match_count)} />
-          <StatusRow label="Scanned" value={formatNumber(rangeMoverReport?.total_scanned)} />
-          <StatusRow label="Threshold" value={formatPercent(rangeMoverReport?.threshold_percent)} />
-          <StatusRow label="Window from" value={rangeMoverReport?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={rangeMoverReport?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(rangeMoverReport?.generated_at)} />
-        </dl>
-
-        <div className="button-row">
-          <label className="inline-control">
-            Minimum upward move
-            <select value={rangeMoverThreshold} onChange={(event) => changeRangeMoverThreshold(event.target.value)}>
-              {rangeMoverThresholdOptions.map((value) => (
-                <option key={value} value={value}>
-                  {value}%
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="secondary" onClick={() => loadRangeMovers()} disabled={busy}>
-            <RefreshCcw size={17} />
-            Recheck movers
-          </button>
         </div>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Industry</th>
-                <th>Low</th>
-                <th>Low date</th>
-                <th>High</th>
-                <th>High date</th>
-                <th>Move</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!rangeMoverReport || rangeMoverReport.items.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No stocks crossed the threshold.</td>
-                </tr>
-              ) : (
-                rangeMoverReport.items.map((item) => (
-                  <tr key={item.symbol}>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.industry}</td>
-                    <td>{formatPrice(item.lowest_low)}</td>
-                    <td>{item.lowest_low_date}</td>
-                    <td>{formatPrice(item.highest_high)}</td>
-                    <td>{item.highest_high_date}</td>
-                    <td>{formatPercent(item.move_percent)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Extended History</p>
-            <h2>365 Days For 50% Movers</h2>
-          </div>
-          <Database size={22} />
-        </div>
-
-        <div className="progress-track" aria-label="365-day mover fetch progress">
-          <span style={{ width: `${extendedHistoricalProgress}%` }} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Run status" value={extendedHistoricalStatus?.status ?? "-"} />
-          <StatusRow label="Progress" value={`${extendedHistoricalProgress}%`} />
-          <StatusRow label="Symbols" value={formatNumber(extendedHistoricalStatus?.total_symbols)} />
-          <StatusRow label="Done" value={formatNumber(extendedHistoricalStatus?.done_count)} />
-          <StatusRow label="Failed" value={formatNumber(extendedHistoricalStatus?.failed_count)} />
-          <StatusRow label="Candles received" value={formatNumber(extendedHistoricalStatus?.candles_received)} />
-          <StatusRow label="Stored candles" value={formatNumber(extendedHistoricalStatus?.stored_candle_count)} />
-          <StatusRow label="Window from" value={extendedHistoricalStatus?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={extendedHistoricalStatus?.to_date_exclusive ?? "-"} />
-        </dl>
-
-        {extendedHistoricalStatus?.error ? <p className="error-text">{extendedHistoricalStatus.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={startExtendedHistoricalFetch} disabled={busy}>
-            <RefreshCcw size={17} />
-            Start / resume 365-day fetch
-          </button>
-          <button className="secondary" onClick={loadExtendedHistoricalStatus} disabled={busy}>
-            <Wifi size={17} />
-            Check status
-          </button>
-        </div>
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Quality</p>
-            <h2>Nifty 500 Data Checks</h2>
-          </div>
-          <CheckCircle2 size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Healthy" value={formatNumber(qualityReport?.healthy_count)} />
-          <StatusRow label="Warnings" value={formatNumber(qualityReport?.warning_count)} />
-          <StatusRow label="Blocked" value={formatNumber(qualityReport?.blocked_count)} />
-          <StatusRow label="Expected sessions" value={formatNumber(qualityReport?.expected_session_count)} />
-          <StatusRow label="Latest session" value={qualityReport?.latest_expected_session ?? "-"} />
-          <StatusRow label="Historical run" value={qualityReport?.historical_run_status ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(qualityReport?.generated_at)} />
-          <StatusRow label="Exceptions shown" value={formatNumber(qualityReport?.items.length)} />
-        </dl>
-
-        <div className="button-row">
-          <button className="secondary" onClick={loadQualityReport} disabled={busy}>
-            <RefreshCcw size={17} />
-            Recheck quality
-          </button>
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
+                <th>Date</th>
                 <th>Status</th>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Latest</th>
-                <th>Candles</th>
-                <th>Missing</th>
-                <th>Issues</th>
+                <th>Rows</th>
+                <th>Published</th>
+                <th>Error</th>
               </tr>
             </thead>
             <tbody>
-              {!qualityReport || qualityReport.items.length === 0 ? (
+              {!status || status.recent_dates.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No quality exceptions.</td>
+                  <td colSpan={5}>No dates imported yet.</td>
                 </tr>
               ) : (
-                qualityReport.items.map((item) => (
-                  <tr key={item.symbol}>
-                    <td>{item.quality_status}</td>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.latest_candle_date ?? "-"}</td>
-                    <td>{formatNumber(item.candle_count)}</td>
-                    <td>{formatNumber(item.missing_sessions)}</td>
-                    <td>{formatIssues(item.issues)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Historical Data</p>
-            <h2>Nifty 500 Rolling 45 Days</h2>
-          </div>
-          <Clock size={22} />
-        </div>
-
-        <div className="progress-track" aria-label="Historical fetch progress">
-          <span style={{ width: `${historicalProgress}%` }} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Run status" value={historicalStatus?.status ?? "-"} />
-          <StatusRow label="Progress" value={`${historicalProgress}%`} />
-          <StatusRow label="Window from" value={historicalStatus?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={historicalStatus?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Mapped" value={formatNumber(historicalStatus?.mapped_symbols)} />
-          <StatusRow label="Done" value={formatNumber(historicalStatus?.done_count)} />
-          <StatusRow label="Failed" value={formatNumber(historicalStatus?.failed_count)} />
-          <StatusRow label="Skipped" value={formatNumber(historicalStatus?.skipped_count)} />
-          <StatusRow label="Candles received" value={formatNumber(historicalStatus?.candles_received)} />
-          <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
-          <StatusRow label="Updated" value={formatDate(historicalStatus?.updated_at)} />
-          <StatusRow label="Completed" value={formatDate(historicalStatus?.completed_at)} />
-        </dl>
-
-        {historicalStatus?.error ? <p className="error-text">{historicalStatus.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={startHistoricalFetch} disabled={busy}>
-            <RefreshCcw size={17} />
-            Check / fetch missing
-          </button>
-          <button className="secondary" onClick={() => loadHistoricalStatus()} disabled={busy}>
-            <Wifi size={17} />
-            Check status
-          </button>
-        </div>
-
-        {historicalItems.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Failed symbol</th>
-                  <th>Company</th>
-                  <th>Attempts</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historicalItems.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{formatNumber(item.attempts)}</td>
+                status.recent_dates.map((item) => (
+                  <tr key={item.trade_date}>
+                    <td>{item.trade_date}</td>
+                    <td>{item.status}</td>
+                    <td>{formatNumber(item.row_count)}</td>
+                    <td>{formatDate(item.published_at)}</td>
                     <td>{item.error || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-
-        <label className="search-label">
-          Inspect stored candles
-          <div className="search-row">
-            <input
-              value={candleSymbol}
-              onChange={(event) => loadCandles(event.target.value)}
-              placeholder="RELIANCE"
-            />
-            <button type="button" className="secondary" onClick={() => loadCandles()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        {candles.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Open</th>
-                  <th>High</th>
-                  <th>Low</th>
-                  <th>Close</th>
-                  <th>Volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {candles.map((candle) => (
-                  <tr key={candle.trading_date}>
-                    <td>{candle.trading_date}</td>
-                    <td>{formatPrice(candle.open)}</td>
-                    <td>{formatPrice(candle.high)}</td>
-                    <td>{formatPrice(candle.low)}</td>
-                    <td>{formatPrice(candle.close)}</td>
-                    <td>{formatNumber(candle.volume)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Universe</p>
-            <h2>Nifty 500 Constituents</h2>
-          </div>
-          <Database size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Active stocks" value={formatNumber(universeStatus?.active_count)} />
-          <StatusRow label="Stored rows" value={formatNumber(universeStatus?.total_count)} />
-          <StatusRow label="Industries" value={formatNumber(universeStatus?.industry_count)} />
-          <StatusRow label="Last import" value={formatDate(universeStatus?.last_import?.completed_at)} />
-          <StatusRow label="Source rows seen" value={formatNumber(universeStatus?.last_import?.total_rows_seen)} />
-          <StatusRow label="Inserted" value={formatNumber(universeStatus?.last_import?.inserted_rows)} />
-          <StatusRow label="Updated" value={formatNumber(universeStatus?.last_import?.updated_rows)} />
-          <StatusRow label="Deactivated" value={formatNumber(universeStatus?.last_import?.deactivated_rows)} />
-        </dl>
-
-        {universeStatus?.last_import?.error ? <p className="error-text">{universeStatus.last_import.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshUniverse} disabled={busy}>
-            <RefreshCcw size={17} />
-            Refresh Nifty 500
-          </button>
-        </div>
-
-        <label className="search-label">
-          Search Nifty 500 universe
-          <div className="search-row">
-            <input
-              value={universeQuery}
-              onChange={(event) => loadUniverse(event.target.value)}
-              placeholder="RELIANCE, bank, Financial Services"
-            />
-            <button type="button" className="secondary" onClick={() => loadUniverse()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Company</th>
-                <th>Industry</th>
-                <th>Symbol</th>
-                <th>Series</th>
-                <th>ISIN</th>
-              </tr>
-            </thead>
-            <tbody>
-              {universeResults.length === 0 ? (
-                <tr>
-                  <td colSpan={5}>No constituents loaded.</td>
-                </tr>
-              ) : (
-                universeResults.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.company_name || "-"}</td>
-                    <td>{item.industry || "-"}</td>
-                    <td>{item.symbol || "-"}</td>
-                    <td>{item.series || "-"}</td>
-                    <td>{item.isin || "-"}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Master Data</p>
-            <h2>NSE Instrument Master</h2>
-          </div>
-          <Database size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Active NSE equities" value={formatNumber(instrumentStatus?.active_nse_count)} />
-          <StatusRow label="Stored NSE equities" value={formatNumber(instrumentStatus?.nse_count)} />
-          <StatusRow label="Last import" value={formatDate(instrumentStatus?.last_import?.completed_at)} />
-          <StatusRow label="Source rows seen" value={formatNumber(instrumentStatus?.last_import?.total_rows_seen)} />
-          <StatusRow label="Inserted" value={formatNumber(instrumentStatus?.last_import?.inserted_rows)} />
-          <StatusRow label="Updated" value={formatNumber(instrumentStatus?.last_import?.updated_rows)} />
-          <StatusRow label="Unchanged" value={formatNumber(instrumentStatus?.last_import?.unchanged_rows)} />
-          <StatusRow label="Deactivated" value={formatNumber(instrumentStatus?.last_import?.deactivated_rows)} />
-        </dl>
-
-        {instrumentStatus?.last_import?.error ? <p className="error-text">{instrumentStatus.last_import.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshInstruments} disabled={busy}>
-            <RefreshCcw size={17} />
-            Refresh from Dhan
-          </button>
-        </div>
-
-        <label className="search-label">
-          Search stored NSE equities
-          <div className="search-row">
-            <input
-              value={instrumentQuery}
-              onChange={(event) => searchInstruments(event.target.value)}
-              placeholder="RELIANCE, HDFCBANK, NIFTY"
-            />
-            <button type="button" className="secondary" onClick={() => searchInstruments()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Display</th>
-                <th>Security ID</th>
-                <th>ISIN</th>
-                <th>Segment</th>
-                <th>Type</th>
-                <th>Series</th>
-                <th>Lot</th>
-              </tr>
-            </thead>
-            <tbody>
-              {instrumentResults.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No search results.</td>
-                </tr>
-              ) : (
-                instrumentResults.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.symbol_name || "-"}</td>
-                    <td>{item.display_name || "-"}</td>
-                    <td>{item.security_id || "-"}</td>
-                    <td>{item.isin || "-"}</td>
-                    <td>{item.segment || "-"}</td>
-                    <td>{item.instrument_type || item.instrument || "-"}</td>
-                    <td>{item.series || "-"}</td>
-                    <td>{formatNumber(item.lot_size)}</td>
                   </tr>
                 ))
               )}
@@ -1635,22 +404,6 @@ function StatusRow({ label, value }: { label: string; value: string }) {
       <dd>{value}</dd>
     </>
   );
-}
-
-function getStateMeta(state: TokenState) {
-  if (state === "active") {
-    return { label: "Active", className: "ok", icon: <CheckCircle2 size={18} /> };
-  }
-  if (state === "expiring_soon") {
-    return { label: "Expiring soon", className: "warn", icon: <Clock size={18} /> };
-  }
-  if (state === "missing") {
-    return { label: "No token", className: "neutral", icon: <Shield size={18} /> };
-  }
-  if (state === "expired" || state === "renew_failed" || state === "config_error") {
-    return { label: state.replace("_", " "), className: "bad", icon: <AlertTriangle size={18} /> };
-  }
-  return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
 }
 
 function formatDate(value?: string | null) {
@@ -1675,11 +428,6 @@ function formatPrice(value?: number | null) {
 function formatPercent(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}%`;
-}
-
-function formatIssues(value: string[]) {
-  if (value.length === 0) return "-";
-  return value.map((item) => item.replaceAll("_", " ")).join(", ");
 }
 
 async function readError(response: Response) {

@@ -5,10 +5,10 @@ services:
     env_file:
       - .env
     environment:
-      NSE_IMPORT_INBOX_PATH: /app/nse_import_inbox
+      BHAVCOPY_IMPORT_INBOX_PATH: /app/bhavcopy_inbox
     volumes:
-      - dhan-auth-data:/app/data
-      - ./nse_import_inbox:/app/nse_import_inbox
+      - app-data:/app/data
+      - ./bhavcopy_inbox:/app/bhavcopy_inbox
     ports:
       - "8000:8000"
 
@@ -23,4 +23,4 @@ services:
       - backend
 
 volumes:
-  dhan-auth-data:
+  app-data:

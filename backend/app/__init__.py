@@ -1,1 +1,1 @@
-"""Backend for Dhan token health and renewal."""
+"""Bhavcopy-only backend."""
