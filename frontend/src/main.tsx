@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   Database,
+  ExternalLink,
   RefreshCcw,
   Save,
   Search,
@@ -273,6 +274,18 @@ const apiBaseUrl =
     ? configuredApiBaseUrl
     : `${window.location.protocol}//${window.location.hostname}:8000`;
 const rangeMoverThresholdOptions = [10, 15, 20, 30, 40, 50];
+
+function dhanTradingViewUrl(item: RangeMoverItem): string {
+  const symbol = item.symbol.trim().toUpperCase();
+  const params = new URLSearchParams({
+    symbol: `NSE:${symbol}`,
+    dhan_symbol: symbol,
+    exchange: "NSE",
+    segment: "E",
+  });
+  if (item.security_id) params.set("security_id", item.security_id);
+  return `https://tv.dhan.co/?${params.toString()}`;
+}
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
@@ -735,6 +748,7 @@ function App() {
           <table>
             <thead>
               <tr>
+                <th>Chart</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Industry</th>
@@ -829,11 +843,23 @@ function App() {
             <tbody>
               {!rangeMoverReport || rangeMoverReport.items.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>No stocks crossed the threshold.</td>
+                  <td colSpan={9}>No stocks crossed the threshold.</td>
                 </tr>
               ) : (
                 rangeMoverReport.items.map((item) => (
                   <tr key={item.symbol}>
+                    <td>
+                      <a
+                        className="table-action"
+                        href={dhanTradingViewUrl(item)}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open ${item.symbol} in Dhan TradingView`}
+                        title={`Open ${item.symbol} in Dhan TradingView`}
+                      >
+                        <ExternalLink size={16} />
+                      </a>
+                    </td>
                     <td>{item.symbol}</td>
                     <td>{item.company_name}</td>
                     <td>{item.industry}</td>

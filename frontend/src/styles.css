@@ -43,6 +43,22 @@ button:disabled {
   opacity: 0.55;
 }
 
+.table-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  color: #176b53;
+  background: #d8e1dc;
+  text-decoration: none;
+}
+
+.table-action:hover {
+  background: #c6d5ce;
+}
+
 .secondary,
 .icon-button {
   color: #24332d;
