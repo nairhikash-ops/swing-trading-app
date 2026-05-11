@@ -110,3 +110,21 @@ async def test_expired_token_requires_manual_fallback(tmp_path):
     assert status.state == "expired"
     assert "manual fallback" in message
     assert fake.renew_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_force_renew_still_calls_dhan_when_local_expiry_is_stale(tmp_path):
+    service, fake = make_service(tmp_path)
+    await service.save_manual_token(
+        dhan_client_id="123456",
+        access_token="manual-token-value-1234567890",
+        expiry_time=now_utc() - timedelta(minutes=1),
+        validate_with_dhan=False,
+    )
+
+    renewed, status, message = await service.renew_if_needed(force=True)
+
+    assert renewed is True
+    assert status.token_source == "renewed"
+    assert message == "Token renewed successfully."
+    assert fake.renew_calls == 1

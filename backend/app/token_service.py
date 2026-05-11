@@ -78,7 +78,7 @@ class TokenService:
 
         access_token = self._crypto().decrypt(token.encrypted_access_token)
         status = self._status_from_token(token, access_token)
-        if status.state == "expired":
+        if status.state == "expired" and not force:
             return False, status, "Token is expired. Use the manual fallback update flow."
         if status.state == "config_error":
             return False, status, status.last_error
