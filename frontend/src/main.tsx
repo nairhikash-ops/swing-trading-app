@@ -272,7 +272,7 @@ const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
     ? configuredApiBaseUrl
     : `${window.location.protocol}//${window.location.hostname}:8000`;
-const rangeMoverThresholdOptions = [5, 10, 15, 20, 30, 40, 50];
+const rangeMoverThresholdOptions = [10, 15, 20, 30, 40, 50];
 const extendedHistoryThreshold = 50;
 const extendedHistoryLookbackDays = 365;
 

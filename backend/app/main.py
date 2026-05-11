@@ -259,7 +259,7 @@ async def historical_nifty_500_refresh(
 
 @app.get("/api/historical/nifty500/upward-movers/status", response_model=HistoricalFetchStatusResponse | None)
 async def historical_nifty_500_upward_movers_status(
-    threshold_percent: float | None = Query(default=None, ge=0.1, le=100.0),
+    threshold_percent: float | None = Query(default=None, ge=10.0, le=100.0),
     historical_service: HistoricalDataService = Depends(get_historical_service_dep),
     settings: Settings = Depends(get_settings_dep),
 ) -> HistoricalFetchStatusResponse | None:
@@ -270,7 +270,7 @@ async def historical_nifty_500_upward_movers_status(
 
 @app.post("/api/historical/nifty500/upward-movers/refresh", response_model=HistoricalFetchStatusResponse)
 async def historical_nifty_500_upward_movers_refresh(
-    threshold_percent: float | None = Query(default=None, ge=0.1, le=100.0),
+    threshold_percent: float | None = Query(default=None, ge=10.0, le=100.0),
     lookback_calendar_days: int | None = Query(default=None, ge=1, le=365),
     historical_service: HistoricalDataService = Depends(get_historical_service_dep),
     range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
@@ -333,7 +333,7 @@ async def quality_nifty_500_report(
 @app.get("/api/analytics/nifty500/upward-movers", response_model=RangeMoverReportResponse)
 @app.get("/api/analytics/nifty500/range-movers", response_model=RangeMoverReportResponse)
 async def analytics_nifty_500_upward_movers(
-    threshold_percent: float = Query(default=20.0, ge=0.1, le=100.0),
+    threshold_percent: float = Query(default=20.0, ge=10.0, le=100.0),
     limit: int = Query(default=500, ge=1, le=500),
     range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
 ) -> RangeMoverReportResponse:
