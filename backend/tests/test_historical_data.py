@@ -207,6 +207,16 @@ def test_coverage_status_reports_up_to_date_without_creating_run(tmp_path):
                 "close": 105.0,
                 "volume": 1000.0,
                 "open_interest": None,
+            },
+            {
+                "timestamp": 1716422400,
+                "trading_date": "2024-05-23",
+                "open": 108.0,
+                "high": 112.0,
+                "low": 104.0,
+                "close": 110.0,
+                "volume": 1200.0,
+                "open_interest": None,
             }
         ],
         "NSE_EQ",
@@ -222,7 +232,101 @@ def test_coverage_status_reports_up_to_date_without_creating_run(tmp_path):
     assert status["status"] == "up_to_date"
     assert status["id"] == 0
     assert status["done_count"] == 1
-    assert status["stored_candle_count"] == 1
+    assert status["stored_candle_count"] == 2
+
+
+def test_coverage_status_requires_full_lookback_span(tmp_path):
+    _, _, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    universe_run_id = universe_store.start_import("NIFTY_500", "source.csv", ["Company Name"])
+    universe_store.upsert_constituents(
+        universe_run_id,
+        "NIFTY_500",
+        [
+            {
+                "COMPANY NAME": "HDFC Bank Ltd.",
+                "INDUSTRY": "Financial Services",
+                "SYMBOL": "HDFCBANK",
+                "SERIES": "EQ",
+                "ISIN CODE": "INE040A01034",
+            }
+        ],
+    )
+    instrument_run_id = instrument_store.start_import("dhan.csv", "NSE", "E", ["EXCH_ID"])
+    instrument_store.upsert_rows(
+        instrument_run_id,
+        [
+            {
+                "EXCH_ID": "NSE",
+                "SEGMENT": "E",
+                "SECURITY_ID": "1333",
+                "ISIN": "INE040A01034",
+                "INSTRUMENT": "EQUITY",
+                "UNDERLYING_SYMBOL": "HDFCBANK",
+                "SYMBOL_NAME": "HDFC BANK LTD",
+                "DISPLAY_NAME": "HDFC Bank",
+                "SERIES": "EQ",
+            }
+        ],
+        "NSE",
+        "E",
+    )
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        120,
+        HistoricalWindow(from_date=date(2024, 1, 1), to_date_exclusive=date(2024, 5, 1)),
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+    historical_store.upsert_candles(
+        item,
+        [
+            {
+                "timestamp": 1713571200,
+                "trading_date": "2024-04-25",
+                "open": 100.0,
+                "high": 110.0,
+                "low": 99.0,
+                "close": 105.0,
+                "volume": 1000.0,
+                "open_interest": None,
+            }
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+    partial = historical_store.coverage_status(
+        "NIFTY_500",
+        120,
+        HistoricalWindow(from_date=date(2024, 1, 1), to_date_exclusive=date(2024, 5, 1)),
+    )
+
+    assert partial["status"] == "missing_data"
+
+    historical_store.upsert_candles(
+        item,
+        [
+            {
+                "timestamp": 1704326400,
+                "trading_date": "2024-01-04",
+                "open": 90.0,
+                "high": 95.0,
+                "low": 88.0,
+                "close": 93.0,
+                "volume": 1000.0,
+                "open_interest": None,
+            }
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+    complete = historical_store.coverage_status(
+        "NIFTY_500",
+        120,
+        HistoricalWindow(from_date=date(2024, 1, 1), to_date_exclusive=date(2024, 5, 1)),
+    )
+
+    assert complete["status"] == "up_to_date"
 
 
 def test_create_run_for_constituent_ids_only_queues_selected_symbols(tmp_path):

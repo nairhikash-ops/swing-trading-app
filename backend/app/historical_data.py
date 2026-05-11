@@ -136,6 +136,8 @@ class HistoricalDataStore:
 
     def coverage_status(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> dict[str, Any]:
         timestamp = now_utc().isoformat()
+        start_grace_date = (window.from_date + timedelta(days=10)).isoformat()
+        end_grace_date = (window.to_date_exclusive - timedelta(days=10)).isoformat()
         with self._connect() as conn:
             total = conn.execute(
                 """
@@ -158,7 +160,9 @@ class HistoricalDataStore:
                 """
                 SELECT COUNT(*) AS complete_symbols
                 FROM (
-                    SELECT i.id AS instrument_id
+                    SELECT i.id AS instrument_id,
+                           MIN(dc.trading_date) AS first_candle,
+                           MAX(dc.trading_date) AS latest_candle
                     FROM index_constituents ic
                     JOIN instruments i ON i.active = 1
                       AND i.exchange_id = 'NSE'
@@ -170,10 +174,16 @@ class HistoricalDataStore:
                       AND dc.trading_date < ?
                     WHERE ic.index_name = ? AND ic.active = 1
                     GROUP BY i.id
-                    HAVING COUNT(dc.trading_date) > 0
+                    HAVING first_candle <= ? AND latest_candle >= ?
                 ) covered
                 """,
-                (window.from_date.isoformat(), window.to_date_exclusive.isoformat(), universe_name),
+                (
+                    window.from_date.isoformat(),
+                    window.to_date_exclusive.isoformat(),
+                    universe_name,
+                    start_grace_date,
+                    end_grace_date,
+                ),
             ).fetchone()
             stored_candles = conn.execute(
                 """
