@@ -303,6 +303,7 @@ function App() {
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
+  const [activePage, setActivePage] = useState<"research" | "token">("research");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -605,21 +606,42 @@ function App() {
             100,
         )
       : 0;
+  const pageEyebrow = activePage === "token" ? "Stage 1" : "Research";
+  const pageTitle = activePage === "token" ? "Dhan Token Control" : "Swing Research Dashboard";
 
   return (
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Stage 1</p>
-          <h1>Dhan Token Control</h1>
+          <p className="eyebrow">{pageEyebrow}</p>
+          <h1>{pageTitle}</h1>
         </div>
-        <div className={`status-pill ${stateMeta.className}`}>
-          {stateMeta.icon}
-          <span>{stateMeta.label}</span>
+        <div className="topbar-actions">
+          <div className={`status-pill ${stateMeta.className}`}>
+            {stateMeta.icon}
+            <span>{stateMeta.label}</span>
+          </div>
+          <nav className="page-tabs" aria-label="Dashboard views">
+            <button
+              type="button"
+              className={`page-tab ${activePage === "research" ? "active" : ""}`}
+              onClick={() => setActivePage("research")}
+            >
+              Research
+            </button>
+            <button
+              type="button"
+              className={`page-tab ${activePage === "token" ? "active" : ""}`}
+              onClick={() => setActivePage("token")}
+            >
+              Dhan Token
+            </button>
+          </nav>
         </div>
       </section>
 
-      <section className="grid">
+      {activePage === "token" ? (
+        <section className="grid">
         <div className="panel status-panel">
           <div className="panel-heading">
             <div>
@@ -711,6 +733,8 @@ function App() {
         </form>
       </section>
 
+      ) : (
+        <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -748,7 +772,6 @@ function App() {
           <table>
             <thead>
               <tr>
-                <th>Chart</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Industry</th>
@@ -830,6 +853,7 @@ function App() {
           <table>
             <thead>
               <tr>
+                <th>Chart</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Industry</th>
@@ -1204,6 +1228,8 @@ function App() {
           </table>
         </div>
       </section>
+        </>
+      )}
 
       {message ? <p className="message">{message}</p> : null}
     </main>

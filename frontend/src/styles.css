@@ -84,6 +84,35 @@ button:disabled {
   margin-bottom: 24px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.page-tabs {
+  display: inline-flex;
+  gap: 4px;
+  min-height: 40px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #d8e1dc;
+}
+
+.page-tab {
+  min-height: 32px;
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #24332d;
+  background: transparent;
+}
+
+.page-tab.active {
+  color: #ffffff;
+  background: #176b53;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: #5d6a63;
@@ -313,6 +342,10 @@ th {
 @media (max-width: 840px) {
   .topbar {
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
   }
 
   .grid {
