@@ -245,3 +245,46 @@ class RangeMoverReportResponse(BaseModel):
     total_scanned: int
     match_count: int
     items: list[RangeMoverItem]
+
+
+class MoveEventItem(BaseModel):
+    id: int
+    run_id: int
+    index_constituent_id: int
+    instrument_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    event_number: int
+    bucket: str
+    low_date: str
+    low_price: float
+    high_date: str
+    high_price: float
+    move_percent: float
+    duration_calendar_days: int
+    duration_trading_sessions: int
+    threshold_percent: float
+    pullback_percent: float
+    split_pullback_date: str | None = None
+    split_pullback_close: float | None = None
+    created_at: datetime
+
+
+class MoveEventReportResponse(BaseModel):
+    run_id: int | None = None
+    universe_name: str
+    threshold_percent: float
+    pullback_percent: float
+    from_date: str
+    to_date_exclusive: str
+    status: str
+    total_symbols: int
+    scanned_symbols: int
+    candidate_symbols: int
+    event_count: int
+    error: str
+    generated_at: datetime
+    items: list[MoveEventItem]

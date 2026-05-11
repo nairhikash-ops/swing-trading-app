@@ -8,6 +8,7 @@ from app.data_quality import DataQualityService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
+from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
@@ -17,6 +18,7 @@ from app.schemas import (
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
+    MoveEventReportResponse,
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
@@ -62,6 +64,10 @@ def build_range_mover_service(settings: Settings) -> RangeMoverService:
     return RangeMoverService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_move_event_service(settings: Settings) -> MoveEventService:
+    return MoveEventService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -71,6 +77,7 @@ async def lifespan(app: FastAPI):
     historical_service = build_historical_service(settings)
     quality_service = build_quality_service(settings)
     range_mover_service = build_range_mover_service(settings)
+    move_event_service = build_move_event_service(settings)
     scheduler = RenewalScheduler(settings, token_service)
     app.state.settings = settings
     app.state.token_service = token_service
@@ -79,6 +86,7 @@ async def lifespan(app: FastAPI):
     app.state.historical_service = historical_service
     app.state.quality_service = quality_service
     app.state.range_mover_service = range_mover_service
+    app.state.move_event_service = move_event_service
     scheduler.start()
     try:
         yield
@@ -119,6 +127,10 @@ def get_quality_service_dep() -> DataQualityService:
 
 def get_range_mover_service_dep() -> RangeMoverService:
     return app.state.range_mover_service
+
+
+def get_move_event_service_dep() -> MoveEventService:
+    return app.state.move_event_service
 
 
 def get_settings_dep() -> Settings:
@@ -328,3 +340,30 @@ async def analytics_nifty_500_upward_movers(
     return RangeMoverReportResponse(
         **range_mover_service.nifty_500_range_movers(threshold_percent=threshold_percent, limit=limit)
     )
+
+
+@app.get("/api/research/nifty500/move-events", response_model=MoveEventReportResponse | None)
+async def research_nifty_500_move_events(
+    bucket: str = Query(default="", max_length=16),
+    limit: int = Query(default=500, ge=1, le=1000),
+    move_event_service: MoveEventService = Depends(get_move_event_service_dep),
+) -> MoveEventReportResponse | None:
+    report = move_event_service.latest_nifty_500_report(bucket=bucket, limit=limit)
+    return MoveEventReportResponse(**report) if report else None
+
+
+@app.post("/api/research/nifty500/move-events/refresh", response_model=MoveEventReportResponse)
+async def research_nifty_500_move_events_refresh(
+    threshold_percent: float = Query(default=10.0, ge=0.1, le=100.0),
+    pullback_percent: float = Query(default=5.0, ge=0.1, le=50.0),
+    move_event_service: MoveEventService = Depends(get_move_event_service_dep),
+) -> MoveEventReportResponse:
+    try:
+        return MoveEventReportResponse(
+            **move_event_service.refresh_nifty_500_events(
+                threshold_percent=threshold_percent,
+                pullback_percent=pullback_percent,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

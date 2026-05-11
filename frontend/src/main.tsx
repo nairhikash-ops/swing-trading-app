@@ -231,6 +231,42 @@ type RangeMoverReport = {
   items: RangeMoverItem[];
 };
 
+type MoveEventItem = {
+  id: number;
+  run_id: number;
+  symbol: string;
+  company_name: string;
+  industry: string;
+  event_number: number;
+  bucket: string;
+  low_date: string;
+  low_price: number;
+  high_date: string;
+  high_price: number;
+  move_percent: number;
+  duration_calendar_days: number;
+  duration_trading_sessions: number;
+  split_pullback_date?: string | null;
+  split_pullback_close?: number | null;
+};
+
+type MoveEventReport = {
+  run_id?: number | null;
+  universe_name: string;
+  threshold_percent: number;
+  pullback_percent: number;
+  from_date: string;
+  to_date_exclusive: string;
+  status: string;
+  total_symbols: number;
+  scanned_symbols: number;
+  candidate_symbols: number;
+  event_count: number;
+  error: string;
+  generated_at: string;
+  items: MoveEventItem[];
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -255,6 +291,7 @@ function App() {
   const [candles, setCandles] = useState<DailyCandle[]>([]);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
+  const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -491,6 +528,37 @@ function App() {
     }
   }
 
+  async function loadMoveEvents() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/research/nifty500/move-events?limit=500`);
+      if (!response.ok) throw new Error(await readError(response));
+      setMoveEventReport(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load move events.");
+    }
+  }
+
+  async function refreshMoveEvents() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const params = new URLSearchParams({ threshold_percent: "10", pullback_percent: "5" });
+      const response = await fetch(`${apiBaseUrl}/api/research/nifty500/move-events/refresh?${params.toString()}`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as MoveEventReport;
+      setMoveEventReport(data);
+      setMessage(
+        `Detected ${formatNumber(data.event_count)} >=10% event(s) across ${formatNumber(data.candidate_symbols)} stock(s).`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh move events.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function changeRangeMoverThreshold(value: string) {
     const nextThreshold = Number(value);
     setRangeMoverThreshold(nextThreshold);
@@ -548,6 +616,7 @@ function App() {
     loadExtendedHistoricalStatus();
     loadQualityReport();
     loadRangeMovers();
+    loadMoveEvents();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -686,6 +755,85 @@ function App() {
             Save token
           </button>
         </form>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Research Events</p>
+            <h2>45-Day Candidate Events</h2>
+          </div>
+          <Search size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Events" value={formatNumber(moveEventReport?.event_count)} />
+          <StatusRow label="Candidate stocks" value={formatNumber(moveEventReport?.candidate_symbols)} />
+          <StatusRow label="Scanned" value={formatNumber(moveEventReport?.scanned_symbols)} />
+          <StatusRow label="Threshold" value={formatPercent(moveEventReport?.threshold_percent)} />
+          <StatusRow label="Pullback split" value={formatPercent(moveEventReport?.pullback_percent)} />
+          <StatusRow label="Window from" value={moveEventReport?.from_date ?? "-"} />
+          <StatusRow label="Window to" value={moveEventReport?.to_date_exclusive ?? "-"} />
+          <StatusRow label="Generated" value={formatDate(moveEventReport?.generated_at)} />
+        </dl>
+
+        {moveEventReport?.error ? <p className="error-text">{moveEventReport.error}</p> : null}
+
+        <div className="button-row">
+          <button onClick={refreshMoveEvents} disabled={busy}>
+            <RefreshCcw size={17} />
+            Detect candidate events
+          </button>
+          <button className="secondary" onClick={loadMoveEvents} disabled={busy}>
+            <Wifi size={17} />
+            Reload events
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Company</th>
+                <th>Industry</th>
+                <th>Bucket</th>
+                <th>Event</th>
+                <th>Low</th>
+                <th>Low date</th>
+                <th>High</th>
+                <th>High date</th>
+                <th>Move</th>
+                <th>Sessions</th>
+                <th>Days</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!moveEventReport || moveEventReport.items.length === 0 ? (
+                <tr>
+                  <td colSpan={12}>No stored candidate events. Run detection after the 45-day data is current.</td>
+                </tr>
+              ) : (
+                moveEventReport.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{item.industry}</td>
+                    <td>{item.bucket}</td>
+                    <td>{formatNumber(item.event_number)}</td>
+                    <td>{formatPrice(item.low_price)}</td>
+                    <td>{item.low_date}</td>
+                    <td>{formatPrice(item.high_price)}</td>
+                    <td>{item.high_date}</td>
+                    <td>{formatPercent(item.move_percent)}</td>
+                    <td>{formatNumber(item.duration_trading_sessions)}</td>
+                    <td>{formatNumber(item.duration_calendar_days)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel instruments-panel">
