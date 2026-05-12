@@ -174,3 +174,105 @@ Also inspect mature failures:
 3. `SJVN` on `2026-04-22`
 4. `GMDCLTD` on `2026-04-16`
 5. `COLPAL` on `2026-04-17`
+
+## Human Failure Review Update
+
+Manual chart review found the same structural failure across all five mature failures:
+
+- `PREMIERENE`
+- `BALRAMCHIN`
+- `SJVN`
+- `GMDCLTD`
+- `COLPAL`
+
+Working failure label:
+
+> Vertical Exhaustion Into Supply
+
+Human interpretation:
+
+- The signal fired after a steep V-shaped recovery, not after a calm horizontal base.
+- The 5-session "compact range" was often just the upper portion of a rising flagpole.
+- The trigger candle occurred near a prior supply/resistance zone or moving-average wall.
+- The next 3-5 candles failed to hold the breakout.
+
+This visually validates the failure family, but the exact rejection math is not clean yet.
+
+## Rejection Filter Math Check
+
+Tested rejection features:
+
+- Exhaustion: trigger close vs close 10 sessions ago.
+- Distance from 50MA: trigger close vs 50-session average close.
+- Supply proximity: trigger close just below prior 60-session high, excluding the immediate 5-session base.
+
+The simple rule "reject if any filter fires" is too blunt.
+
+With thresholds similar to the proposed expert numbers:
+
+- Exhaustion > `12%`
+- Distance above 50MA > `15%`
+- Within `2%` of prior 60-session supply
+
+The filter correctly rejects:
+
+- `BALRAMCHIN`
+- `COLPAL`
+- `GMDCLTD`
+- `PREMIERENE`
+- `SJVN`
+
+But it also incorrectly rejects:
+
+- `HFCL`
+- `WELCORP`
+
+That is unacceptable because `HFCL` is the core case study and `WELCORP` is another major blind-spot winner.
+
+## Case Feature Snapshot
+
+| Symbol | Role | Trigger | 10-session gain to trigger | Distance from 50MA | Supply gap | Outcome |
+|---|---|---:|---:|---:|---:|---:|
+| HFCL | winner | 2026-04-09 | 19.73% | 13.94% | -3.03% | 85.49% |
+| WELCORP | winner | 2026-04-08 | 16.57% | 16.70% | -7.18% | 40.33% |
+| ADANIGREEN | winner | 2026-04-06 | 3.34% | 2.47% | 10.73% | 49.60% |
+| BHEL | winner | 2026-04-09 | 9.63% | 7.10% | -0.07% | 47.51% |
+| VIJAYA | winner | 2026-04-07 | 0.66% | -3.21% | 11.64% | 39.95% |
+| PREMIERENE | failure | 2026-04-17 | 10.33% | 26.12% | -5.86% | 1.91% |
+| BALRAMCHIN | failure | 2026-04-22 | 12.03% | 13.29% | -2.69% | 2.06% |
+| SJVN | failure | 2026-04-22 | 19.72% | 12.23% | 0.80% | 2.66% |
+| GMDCLTD | failure | 2026-04-16 | 31.90% | 30.25% | -14.16% | 3.37% |
+| COLPAL | failure | 2026-04-17 | 15.73% | 2.65% | 9.29% | 4.74% |
+
+Supply gap meaning:
+
+- Positive = trigger close is still below prior supply high.
+- Negative = trigger close has already cleared that prior high.
+
+Key finding:
+
+- Exhaustion alone rejects good winners.
+- Distance from 50MA alone rejects good winners.
+- Current prior-price supply logic does not capture all visually obvious moving-average supply cases.
+
+## Current Decision After Human Review
+
+Do not lock the rejection thresholds yet.
+
+The failure pattern is real, but the current OHLCV math is not expressive enough to separate:
+
+- valid high-energy breakouts like `HFCL` and `WELCORP`
+- from exhausted V-bounces like `PREMIERENE`, `BALRAMCHIN`, `SJVN`, `GMDCLTD`, and `COLPAL`
+
+Next required improvement:
+
+- Add better supply context, especially moving-average resistance and possibly 200MA context.
+- Use more history before trusting 50MA/200MA logic.
+- Test combined rules, not simple "any filter" rejection.
+
+Possible next feature candidates:
+
+- 50MA slope and price interaction.
+- Trigger near falling 50MA or 200MA.
+- Prior breakdown zone from 30-90 sessions.
+- Whether trigger is breaking into clear air or into a falling average wall.
