@@ -42,6 +42,10 @@ Run snapshot:
 - `BANKINDIA` appeared twice as a wrong early detection. Duplicate signals for the same stock may need a cooldown rule.
 - Near-misses like `INFY`, `IIFL`, and `IOB` should be treated differently from weak misses like `CANHLIFE` and the first `BANKINDIA` signal.
 
+## Human Chart Review Notes
+
+- `CANHLIFE`: chart review shows a gap-up opening on the trigger day and a green trigger candle. Keep this as a possible "gap-up extension" observation, not yet a rule.
+
 ## Improvement Questions
 
 - Should Signal 01 count success from trigger close only, or should it also track anchor-low opportunity separately?
