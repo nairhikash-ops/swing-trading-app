@@ -24,6 +24,10 @@ class FatalHistoricalError(Exception):
     pass
 
 
+START_COVERAGE_GRACE_DAYS = 10
+END_FRESHNESS_GRACE_DAYS = 3
+
+
 def upward_movers_universe_name(threshold_percent: float) -> str:
     threshold = f"{threshold_percent:g}".replace(".", "_")
     return f"{NIFTY_500_INDEX_NAME}_UPWARD_MOVERS_GE_{threshold}"
@@ -136,8 +140,8 @@ class HistoricalDataStore:
 
     def coverage_status(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> dict[str, Any]:
         timestamp = now_utc().isoformat()
-        start_grace_date = (window.from_date + timedelta(days=10)).isoformat()
-        end_grace_date = (window.to_date_exclusive - timedelta(days=10)).isoformat()
+        start_grace_date = (window.from_date + timedelta(days=START_COVERAGE_GRACE_DAYS)).isoformat()
+        end_grace_date = (window.to_date_exclusive - timedelta(days=END_FRESHNESS_GRACE_DAYS)).isoformat()
         with self._connect() as conn:
             total = conn.execute(
                 """
@@ -249,8 +253,8 @@ class HistoricalDataStore:
             )
 
         placeholders = ",".join("?" for _ in ids)
-        start_grace_date = (window.from_date + timedelta(days=10)).isoformat()
-        end_grace_date = (window.to_date_exclusive - timedelta(days=10)).isoformat()
+        start_grace_date = (window.from_date + timedelta(days=START_COVERAGE_GRACE_DAYS)).isoformat()
+        end_grace_date = (window.to_date_exclusive - timedelta(days=END_FRESHNESS_GRACE_DAYS)).isoformat()
         with self._connect() as conn:
             total = conn.execute(
                 f"""

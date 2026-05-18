@@ -223,6 +223,32 @@ def test_coverage_status_reports_up_to_date_without_creating_run(tmp_path):
         "EQUITY",
     )
 
+    stale = historical_store.coverage_status(
+        "NIFTY_500",
+        45,
+        HistoricalWindow(from_date=date(2024, 5, 1), to_date_exclusive=date(2024, 5, 31)),
+    )
+
+    assert stale["status"] == "missing_data"
+
+    historical_store.upsert_candles(
+        item,
+        [
+            {
+                "timestamp": 1716854400,
+                "trading_date": "2024-05-28",
+                "open": 109.0,
+                "high": 113.0,
+                "low": 105.0,
+                "close": 111.0,
+                "volume": 1300.0,
+                "open_interest": None,
+            }
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
     status = historical_store.coverage_status(
         "NIFTY_500",
         45,
@@ -232,7 +258,7 @@ def test_coverage_status_reports_up_to_date_without_creating_run(tmp_path):
     assert status["status"] == "up_to_date"
     assert status["id"] == 0
     assert status["done_count"] == 1
-    assert status["stored_candle_count"] == 2
+    assert status["stored_candle_count"] == 3
 
 
 def test_coverage_status_requires_full_lookback_span(tmp_path):
@@ -280,8 +306,8 @@ def test_coverage_status_requires_full_lookback_span(tmp_path):
         item,
         [
             {
-                "timestamp": 1713571200,
-                "trading_date": "2024-04-25",
+                "timestamp": 1714348800,
+                "trading_date": "2024-04-29",
                 "open": 100.0,
                 "high": 110.0,
                 "low": 99.0,
@@ -446,8 +472,8 @@ def test_constituent_coverage_requires_full_lookback_span(tmp_path):
         item,
         [
             {
-                "timestamp": 1714526100,
-                "trading_date": "2024-12-27",
+                "timestamp": 1735516800,
+                "trading_date": "2024-12-30",
                 "open": 100.0,
                 "high": 110.0,
                 "low": 99.0,
