@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
+from app.demo_trading import DemoTradingService
 from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
@@ -14,6 +15,12 @@ from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
+    DemoAccountSummary,
+    DemoOrderCreateResponse,
+    DemoOrderFromSignalRequest,
+    DemoOrderItem,
+    DemoPositionItem,
+    DemoRefreshResponse,
     DrishtiSignalReportResponse,
     HealthResponse,
     HistoricalFetchItem,
@@ -75,6 +82,10 @@ def build_drishti_signal_service(settings: Settings) -> DrishtiSignalService:
     return DrishtiSignalService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_demo_trading_service(settings: Settings) -> DemoTradingService:
+    return DemoTradingService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -86,6 +97,7 @@ async def lifespan(app: FastAPI):
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
     drishti_signal_service = build_drishti_signal_service(settings)
+    demo_trading_service = build_demo_trading_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(settings, token_service, historical_service)
     app.state.settings = settings
@@ -97,6 +109,7 @@ async def lifespan(app: FastAPI):
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
     app.state.drishti_signal_service = drishti_signal_service
+    app.state.demo_trading_service = demo_trading_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -147,6 +160,10 @@ def get_move_event_service_dep() -> MoveEventService:
 
 def get_drishti_signal_service_dep() -> DrishtiSignalService:
     return app.state.drishti_signal_service
+
+
+def get_demo_trading_service_dep() -> DemoTradingService:
+    return app.state.demo_trading_service
 
 
 def get_settings_dep() -> Settings:
@@ -412,4 +429,54 @@ async def drishti_nifty_500_local_low_reversal_refresh(
             )
         )
     except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/demo/summary", response_model=DemoAccountSummary)
+async def demo_summary(
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> DemoAccountSummary:
+    return DemoAccountSummary(**demo_trading_service.summary())
+
+
+@app.get("/api/demo/orders", response_model=list[DemoOrderItem])
+async def demo_orders(
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> list[DemoOrderItem]:
+    return [DemoOrderItem.model_validate(item) for item in demo_trading_service.orders(status=status, limit=limit)]
+
+
+@app.get("/api/demo/positions", response_model=list[DemoPositionItem])
+async def demo_positions(
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> list[DemoPositionItem]:
+    return [DemoPositionItem.model_validate(item) for item in demo_trading_service.positions(status=status, limit=limit)]
+
+
+@app.post("/api/demo/refresh", response_model=DemoRefreshResponse)
+async def demo_refresh(
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> DemoRefreshResponse:
+    return DemoRefreshResponse(**demo_trading_service.refresh())
+
+
+@app.post("/api/demo/orders/from-drishti-hit/{hit_id}", response_model=DemoOrderCreateResponse)
+async def demo_order_from_drishti_hit(
+    hit_id: int,
+    request: DemoOrderFromSignalRequest | None = None,
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> DemoOrderCreateResponse:
+    try:
+        return DemoOrderCreateResponse(
+            **demo_trading_service.place_order_from_drishti_hit(
+                hit_id=hit_id,
+                quantity=request.quantity if request else None,
+                risk_reward=request.risk_reward if request else None,
+            )
+        )
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

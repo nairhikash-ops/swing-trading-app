@@ -318,6 +318,91 @@ type DrishtiSignalReport = {
   items: DrishtiSignalHitItem[];
 };
 
+type DemoSummary = {
+  currency: string;
+  cash_balance: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  open_market_value: number;
+  equity_value: number;
+  pending_orders: number;
+  filled_orders: number;
+  rejected_orders: number;
+  open_positions: number;
+  closed_positions: number;
+  updated_at: string;
+};
+
+type DemoOrder = {
+  id: number;
+  source_signal_hit_id?: number | null;
+  source_signal_id: string;
+  source_run_id?: number | null;
+  symbol: string;
+  company_name: string;
+  industry: string;
+  security_id: string;
+  side: string;
+  quantity: number;
+  order_type: string;
+  status: string;
+  trigger_date: string;
+  requested_price: number;
+  fill_after_date: string;
+  filled_date?: string | null;
+  filled_price?: number | null;
+  stop_loss: number;
+  target_price?: number | null;
+  risk_reward: number;
+  rejection_reason: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type DemoPosition = {
+  id: number;
+  order_id: number;
+  source_signal_hit_id?: number | null;
+  symbol: string;
+  company_name: string;
+  industry: string;
+  security_id: string;
+  side: string;
+  quantity: number;
+  entry_date: string;
+  entry_price: number;
+  stop_loss: number;
+  target_price: number;
+  risk_amount: number;
+  risk_reward: number;
+  status: string;
+  latest_candle_date?: string | null;
+  latest_close?: number | null;
+  holding_sessions: number;
+  unrealized_pnl: number;
+  unrealized_pnl_percent: number;
+  exit_date?: string | null;
+  exit_price?: number | null;
+  exit_reason: string;
+  realized_pnl: number;
+  realized_pnl_percent: number;
+  updated_at: string;
+};
+
+type DemoOrderCreateResponse = {
+  order: DemoOrder;
+  position?: DemoPosition | null;
+  summary: DemoSummary;
+};
+
+type DemoRefreshResponse = {
+  filled_orders: DemoOrder[];
+  rejected_orders: DemoOrder[];
+  updated_positions: DemoPosition[];
+  closed_positions: DemoPosition[];
+  summary: DemoSummary;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -353,6 +438,10 @@ function App() {
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
+  const [demoSummary, setDemoSummary] = useState<DemoSummary | null>(null);
+  const [demoOrders, setDemoOrders] = useState<DemoOrder[]>([]);
+  const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
+  const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<"research" | "token">("research");
   const [message, setMessage] = useState("");
@@ -595,6 +684,63 @@ function App() {
     }
   }
 
+  async function loadDemoTrading() {
+    try {
+      const [summaryResponse, ordersResponse, openPositionsResponse, closedPositionsResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/demo/summary`),
+        fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
+        fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
+        fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
+      ]);
+      if (!summaryResponse.ok) throw new Error(await readError(summaryResponse));
+      if (!ordersResponse.ok) throw new Error(await readError(ordersResponse));
+      if (!openPositionsResponse.ok) throw new Error(await readError(openPositionsResponse));
+      if (!closedPositionsResponse.ok) throw new Error(await readError(closedPositionsResponse));
+      setDemoSummary(await summaryResponse.json());
+      setDemoOrders(await ordersResponse.json());
+      setDemoOpenPositions(await openPositionsResponse.json());
+      setDemoClosedPositions(await closedPositionsResponse.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load demo trading ledger.");
+    }
+  }
+
+  async function createDemoOrderFromHit(hit: DrishtiSignalHitItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/orders/from-drishti-hit/${hit.id}`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as DemoOrderCreateResponse;
+      setDemoSummary(data.summary);
+      setMessage(`Demo order ${data.order.id} for ${data.order.symbol} is ${formatStatus(data.order.status)}.`);
+      await loadDemoTrading();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create demo order.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshDemoTrading() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/refresh`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as DemoRefreshResponse;
+      setDemoSummary(data.summary);
+      setMessage(
+        `Demo refreshed: ${formatNumber(data.filled_orders.length)} filled, ${formatNumber(data.closed_positions.length)} closed, ${formatNumber(data.rejected_orders.length)} rejected.`,
+      );
+      await loadDemoTrading();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh demo trades.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshMoveEvents() {
     setBusy(true);
     setMessage("");
@@ -674,6 +820,7 @@ function App() {
     loadRangeMovers();
     loadMoveEvents();
     loadDrishtiSignal01();
+    loadDemoTrading();
     const timer = window.setInterval(() => loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -861,6 +1008,7 @@ function App() {
             <thead>
               <tr>
                 <th>Chart</th>
+                <th>Demo</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Anchor</th>
@@ -876,7 +1024,7 @@ function App() {
             <tbody>
               {!drishtiReport || drishtiReport.items.length === 0 ? (
                 <tr>
-                  <td colSpan={11}>No saved Drishti hits yet.</td>
+                  <td colSpan={12}>No saved Drishti hits yet.</td>
                 </tr>
               ) : (
                 drishtiReport.items.map((item) => (
@@ -893,6 +1041,17 @@ function App() {
                         <ExternalLink size={16} />
                       </a>
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="mini-action"
+                        onClick={() => createDemoOrderFromHit(item)}
+                        disabled={busy}
+                        title={`Create demo order for ${item.symbol}`}
+                      >
+                        Paper
+                      </button>
+                    </td>
                     <td>{item.symbol}</td>
                     <td>{item.company_name}</td>
                     <td>{item.anchor_date}</td>
@@ -905,6 +1064,162 @@ function App() {
                       {formatPrice(item.future_high)} on {item.future_high_date}
                     </td>
                     <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Demo Trading</p>
+            <h2>Paper Orders And Positions</h2>
+          </div>
+          <TrendingUp size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Cash" value={formatCurrency(demoSummary?.cash_balance)} />
+          <StatusRow label="Equity" value={formatCurrency(demoSummary?.equity_value)} />
+          <StatusRow label="Open value" value={formatCurrency(demoSummary?.open_market_value)} />
+          <StatusRow label="Realized P&L" value={formatCurrency(demoSummary?.realized_pnl)} />
+          <StatusRow label="Unrealized P&L" value={formatCurrency(demoSummary?.unrealized_pnl)} />
+          <StatusRow label="Pending orders" value={formatNumber(demoSummary?.pending_orders)} />
+          <StatusRow label="Open positions" value={formatNumber(demoSummary?.open_positions)} />
+          <StatusRow label="Closed positions" value={formatNumber(demoSummary?.closed_positions)} />
+          <StatusRow label="Rejected orders" value={formatNumber(demoSummary?.rejected_orders)} />
+          <StatusRow label="Updated" value={formatDate(demoSummary?.updated_at)} />
+        </dl>
+
+        <div className="button-row">
+          <button onClick={refreshDemoTrading} disabled={busy}>
+            <RefreshCcw size={17} />
+            Refresh demo lifecycle
+          </button>
+          <button className="secondary" onClick={loadDemoTrading} disabled={busy}>
+            <Wifi size={17} />
+            Reload ledger
+          </button>
+        </div>
+
+        <h3 className="table-heading">Open positions</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Entry</th>
+                <th>Entry date</th>
+                <th>Stop</th>
+                <th>Target</th>
+                <th>Latest</th>
+                <th>Sessions</th>
+                <th>Unrealized</th>
+              </tr>
+            </thead>
+            <tbody>
+              {demoOpenPositions.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>No open demo positions.</td>
+                </tr>
+              ) : (
+                demoOpenPositions.map((position) => (
+                  <tr key={position.id}>
+                    <td>{position.symbol}</td>
+                    <td>{formatPrice(position.entry_price)}</td>
+                    <td>{position.entry_date}</td>
+                    <td>{formatPrice(position.stop_loss)}</td>
+                    <td>{formatPrice(position.target_price)}</td>
+                    <td>
+                      {formatPrice(position.latest_close)} on {position.latest_candle_date ?? "-"}
+                    </td>
+                    <td>{formatNumber(position.holding_sessions)}</td>
+                    <td>
+                      {formatCurrency(position.unrealized_pnl)} ({formatPercent(position.unrealized_pnl_percent)})
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 className="table-heading">Recent orders</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Symbol</th>
+                <th>Trigger</th>
+                <th>Requested</th>
+                <th>Filled</th>
+                <th>Stop</th>
+                <th>Target</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {demoOrders.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>No demo orders yet. Use Paper from a Drishti row.</td>
+                </tr>
+              ) : (
+                demoOrders.map((order) => (
+                  <tr key={order.id}>
+                    <td>{formatStatus(order.status)}</td>
+                    <td>{order.symbol}</td>
+                    <td>{order.trigger_date}</td>
+                    <td>{formatPrice(order.requested_price)}</td>
+                    <td>
+                      {formatPrice(order.filled_price)} {order.filled_date ? `on ${order.filled_date}` : ""}
+                    </td>
+                    <td>{formatPrice(order.stop_loss)}</td>
+                    <td>{formatPrice(order.target_price)}</td>
+                    <td>{order.rejection_reason || "-"}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 className="table-heading">Closed positions</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>Reason</th>
+                <th>Sessions</th>
+                <th>P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {demoClosedPositions.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>No closed demo positions.</td>
+                </tr>
+              ) : (
+                demoClosedPositions.map((position) => (
+                  <tr key={position.id}>
+                    <td>{position.symbol}</td>
+                    <td>
+                      {formatPrice(position.entry_price)} on {position.entry_date}
+                    </td>
+                    <td>
+                      {formatPrice(position.exit_price)} on {position.exit_date ?? "-"}
+                    </td>
+                    <td>{position.exit_reason || "-"}</td>
+                    <td>{formatNumber(position.holding_sessions)}</td>
+                    <td>
+                      {formatCurrency(position.realized_pnl)} ({formatPercent(position.realized_pnl_percent)})
+                    </td>
                   </tr>
                 ))
               )}
@@ -1458,6 +1773,15 @@ function formatPrice(value?: number | null) {
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
 }
 
+function formatCurrency(value?: number | null) {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function formatPercent(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}%`;
@@ -1471,6 +1795,11 @@ function formatMultiplier(value?: number | null) {
 function formatIssues(value: string[]) {
   if (value.length === 0) return "-";
   return value.map((item) => item.replaceAll("_", " ")).join(", ");
+}
+
+function formatStatus(value?: string | null) {
+  if (!value) return "-";
+  return value.replaceAll("_", " ");
 }
 
 async function readError(response: Response) {

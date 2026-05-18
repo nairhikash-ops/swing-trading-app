@@ -59,6 +59,20 @@ button:disabled {
   background: #c6d5ce;
 }
 
+.mini-action {
+  min-height: 32px;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #176b53;
+  background: #d8e1dc;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.mini-action:hover {
+  background: #c6d5ce;
+}
+
 .secondary,
 .icon-button {
   color: #24332d;
@@ -300,6 +314,11 @@ textarea {
   width: 100%;
   margin-top: 16px;
   overflow-x: auto;
+}
+
+.table-heading {
+  margin: 22px 0 0;
+  font-size: 0.95rem;
 }
 
 table {

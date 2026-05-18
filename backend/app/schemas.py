@@ -344,3 +344,98 @@ class DrishtiSignalReportResponse(BaseModel):
     error: str
     generated_at: datetime
     items: list[DrishtiSignalHitItem]
+
+
+class DemoOrderFromSignalRequest(BaseModel):
+    quantity: float | None = Field(default=None, gt=0)
+    risk_reward: float | None = Field(default=None, ge=1.0, le=10.0)
+
+
+class DemoAccountSummary(BaseModel):
+    currency: str
+    cash_balance: float
+    realized_pnl: float
+    unrealized_pnl: float
+    open_market_value: float
+    equity_value: float
+    pending_orders: int
+    filled_orders: int
+    rejected_orders: int
+    open_positions: int
+    closed_positions: int
+    updated_at: datetime
+
+
+class DemoOrderItem(BaseModel):
+    id: int
+    source_signal_hit_id: int | None = None
+    source_signal_id: str
+    source_run_id: int | None = None
+    instrument_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    side: str
+    quantity: float
+    order_type: str
+    status: str
+    trigger_date: str
+    requested_price: float
+    fill_after_date: str
+    filled_date: str | None = None
+    filled_price: float | None = None
+    stop_loss: float
+    target_price: float | None = None
+    risk_reward: float
+    rejection_reason: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DemoPositionItem(BaseModel):
+    id: int
+    order_id: int
+    source_signal_hit_id: int | None = None
+    instrument_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    side: str
+    quantity: float
+    entry_date: str
+    entry_price: float
+    stop_loss: float
+    target_price: float
+    risk_amount: float
+    risk_reward: float
+    status: str
+    latest_candle_date: str | None = None
+    latest_close: float | None = None
+    holding_sessions: int
+    unrealized_pnl: float
+    unrealized_pnl_percent: float
+    exit_date: str | None = None
+    exit_price: float | None = None
+    exit_reason: str
+    realized_pnl: float
+    realized_pnl_percent: float
+    created_at: datetime
+    updated_at: datetime
+
+
+class DemoOrderCreateResponse(BaseModel):
+    order: DemoOrderItem
+    position: DemoPositionItem | None = None
+    summary: DemoAccountSummary
+
+
+class DemoRefreshResponse(BaseModel):
+    filled_orders: list[DemoOrderItem]
+    rejected_orders: list[DemoOrderItem]
+    updated_positions: list[DemoPositionItem]
+    closed_positions: list[DemoPositionItem]
+    summary: DemoAccountSummary
