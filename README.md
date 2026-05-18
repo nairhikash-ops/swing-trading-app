@@ -2,7 +2,7 @@
 
 Private NSE swing-trading advisory project.
 
-Current implementation stage: **Dhan API foundation**.
+Current implementation stage: **Dhan data foundation + Drishti research**.
 
 ## Branch Rules
 
@@ -17,13 +17,36 @@ Current implementation stage: **Dhan API foundation**.
 - Renew active web-generated tokens using Dhan `GET /v2/RenewToken`.
 - Run an automatic renewal loop before expiry.
 - Provide a manual fallback update flow if the server was offline or renewal failed.
-- No stock data fetching, no AI, no order placement.
+- No AI decisioning and no order placement.
 - Fetch and store the Dhan detailed instrument master for NSE equity segment only.
 - Preserve all Dhan CSV fields as raw metadata plus normalized lookup columns.
 - Fetch and store the official Nifty 500 constituent CSV from NSE, preserving every source column as raw metadata.
 - Fetch rolling 45-calendar-day Dhan daily candles for mapped Nifty 500 stocks through a resumable, rate-limited job.
 - Run automated Nifty 500 candle quality checks and show only exceptions for review.
 - Scan the latest 45-day Nifty 500 candle window for stocks whose later high clears a selectable upward-move threshold; the default is 20%.
+- Maintain Drishti as an early-watch radar, separate from data ingestion and research tools.
+
+## Project Layers
+
+The repo separates three concepts:
+
+- **Data layer**: token handling, instruments, universe data, candles, and quality checks.
+- **Research / discovery tools**: momentum scans, move events, blind spots, and signal experiments.
+- **Drishti layer**: approved early-watch signals only.
+
+Read the layer map before promoting research into official Drishti behavior:
+
+- `docs/layers.md`
+- `docs/decisions.md`
+- `notes/research/README.md`
+
+Current official Drishti signal:
+
+- `DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL`
+
+Current research-only candidate:
+
+- Compact Volume Breakout / possible Signal 02
 
 ## Run Locally
 
