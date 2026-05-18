@@ -26,6 +26,8 @@ type TokenState =
   | "config_error"
   | "unknown";
 
+type AppPage = "dashboard" | "drishti" | "demo" | "data" | "settings";
+
 type TokenStatus = {
   state: TokenState;
   has_token: boolean;
@@ -455,7 +457,7 @@ function App() {
   const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
   const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
-  const [activePage, setActivePage] = useState<"research" | "token" | "ai">("research");
+  const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -912,17 +914,27 @@ function App() {
             100,
         )
       : 0;
-  const activeStatusMeta = activePage === "ai" ? geminiStateMeta : stateMeta;
-  const pageEyebrow = activePage === "token" ? "Stage 1" : activePage === "ai" ? "AI Settings" : "Research";
-  const pageTitle =
-    activePage === "token" ? "Dhan Token Control" : activePage === "ai" ? "Gemini Analyst Control" : "Swing Research Dashboard";
+  const systemStateMeta = getSystemStateMeta(
+    status?.state ?? "unknown",
+    geminiStatus?.state ?? "unknown",
+    historicalStatus?.status,
+    qualityReport?.blocked_count ?? 0,
+  );
+  const activeStatusMeta = activePage === "settings" ? getSettingsStateMeta(stateMeta, geminiStateMeta) : systemStateMeta;
+  const pageMeta = getPageMeta(activePage);
+  const latestDrishtiItems = drishtiReport?.items.slice(0, 8) ?? [];
+  const actionCount =
+    (status?.state && !["active", "expiring_soon"].includes(status.state) ? 1 : 0) +
+    (geminiStatus?.state === "missing" || geminiStatus?.state === "validation_failed" ? 1 : 0) +
+    (historicalStatus?.failed_count ?? 0) +
+    (qualityReport?.blocked_count ?? 0);
 
   return (
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">{pageEyebrow}</p>
-          <h1>{pageTitle}</h1>
+          <p className="eyebrow">{pageMeta.eyebrow}</p>
+          <h1>{pageMeta.title}</h1>
         </div>
         <div className="topbar-actions">
           <div className={`status-pill ${activeStatusMeta.className}`}>
@@ -932,30 +944,45 @@ function App() {
           <nav className="page-tabs" aria-label="Dashboard views">
             <button
               type="button"
-              className={`page-tab ${activePage === "research" ? "active" : ""}`}
-              onClick={() => setActivePage("research")}
+              className={`page-tab ${activePage === "dashboard" ? "active" : ""}`}
+              onClick={() => setActivePage("dashboard")}
             >
-              Research
+              Dashboard
             </button>
             <button
               type="button"
-              className={`page-tab ${activePage === "token" ? "active" : ""}`}
-              onClick={() => setActivePage("token")}
+              className={`page-tab ${activePage === "drishti" ? "active" : ""}`}
+              onClick={() => setActivePage("drishti")}
             >
-              Dhan Token
+              Drishti
             </button>
             <button
               type="button"
-              className={`page-tab ${activePage === "ai" ? "active" : ""}`}
-              onClick={() => setActivePage("ai")}
+              className={`page-tab ${activePage === "demo" ? "active" : ""}`}
+              onClick={() => setActivePage("demo")}
             >
-              AI Settings
+              Demo Trading
+            </button>
+            <button
+              type="button"
+              className={`page-tab ${activePage === "data" ? "active" : ""}`}
+              onClick={() => setActivePage("data")}
+            >
+              Data Health
+            </button>
+            <button
+              type="button"
+              className={`page-tab ${activePage === "settings" ? "active" : ""}`}
+              onClick={() => setActivePage("settings")}
+            >
+              Settings
             </button>
           </nav>
         </div>
       </section>
 
-      {activePage === "ai" ? (
+      {activePage === "settings" ? (
+        <>
         <section className="grid">
           <div className="panel status-panel">
             <div className="panel-heading">
@@ -1027,8 +1054,7 @@ function App() {
           </form>
         </section>
 
-      ) : activePage === "token" ? (
-        <section className="grid">
+        <section className="grid instruments-panel">
         <div className="panel status-panel">
           <div className="panel-heading">
             <div>
@@ -1119,8 +1145,114 @@ function App() {
           </button>
         </form>
       </section>
+        </>
 
       ) : (
+        <>
+      {activePage === "dashboard" ? (
+        <>
+          <section className="dashboard-grid">
+            <article className="hero-panel">
+              <div>
+                <p className="eyebrow">Today</p>
+                <h2>Command Center</h2>
+              </div>
+              <dl className="hero-metrics">
+                <StatusRow label="Drishti alerts" value={formatNumber(drishtiReport?.hit_count)} />
+                <StatusRow label="Open demo positions" value={formatNumber(demoSummary?.open_positions)} />
+                <StatusRow label="Pending demo orders" value={formatNumber(demoSummary?.pending_orders)} />
+                <StatusRow label="Action items" value={formatNumber(actionCount)} />
+              </dl>
+              <div className="button-row">
+                <button onClick={() => setActivePage("drishti")}>
+                  <Radar size={17} />
+                  Review Drishti
+                </button>
+                <button className="secondary" onClick={refreshDemoTrading} disabled={busy}>
+                  <RefreshCcw size={17} />
+                  Refresh demo
+                </button>
+              </div>
+            </article>
+
+            <article className="dashboard-card">
+              <div className="card-icon ok"><Wifi size={19} /></div>
+              <p className="eyebrow">Connections</p>
+              <h2>Dhan & Gemini</h2>
+              <dl className="mini-list">
+                <StatusRow label="Dhan" value={formatStatus(status?.state)} />
+                <StatusRow label="Gemini" value={formatStatus(geminiStatus?.state)} />
+                <StatusRow label="Token expiry" value={formatDate(status?.expiry_time)} />
+              </dl>
+              <button className="secondary" onClick={() => setActivePage("settings")}>
+                Open settings
+              </button>
+            </article>
+
+            <article className="dashboard-card">
+              <div className="card-icon warn"><Database size={19} /></div>
+              <p className="eyebrow">Data Layer</p>
+              <h2>Nifty 500 Feed</h2>
+              <dl className="mini-list">
+                <StatusRow label="Historical" value={historicalStatus?.status ?? "-"} />
+                <StatusRow label="Progress" value={`${historicalProgress}%`} />
+                <StatusRow label="Quality blocked" value={formatNumber(qualityReport?.blocked_count)} />
+              </dl>
+              <button className="secondary" onClick={() => setActivePage("data")}>
+                Inspect data
+              </button>
+            </article>
+          </section>
+
+          <section className="panel instruments-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Latest Watchlist</p>
+                <h2>Recent Drishti Signal 01 Alerts</h2>
+              </div>
+              <Radar size={22} />
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Trigger</th>
+                    <th>Trigger close</th>
+                    <th>Volume</th>
+                    <th>Outcome</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {latestDrishtiItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6}>No Drishti alerts loaded yet.</td>
+                    </tr>
+                  ) : (
+                    latestDrishtiItems.map((item) => (
+                      <tr key={`dashboard-${item.id}`}>
+                        <td>{item.symbol}</td>
+                        <td>{item.trigger_date}</td>
+                        <td>{formatPrice(item.trigger_close)}</td>
+                        <td>{formatMultiplier(item.volume_ratio_1d)}</td>
+                        <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
+                        <td>
+                          <button className="mini-action" onClick={() => createDemoOrderFromHit(item)} disabled={busy}>
+                            Paper
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {activePage === "drishti" ? (
         <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
@@ -1226,6 +1358,11 @@ function App() {
         </div>
       </section>
 
+        </>
+      ) : null}
+
+      {activePage === "demo" ? (
+        <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -1382,6 +1519,11 @@ function App() {
         </div>
       </section>
 
+        </>
+      ) : null}
+
+      {activePage === "drishti" ? (
+        <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -1461,6 +1603,11 @@ function App() {
         </div>
       </section>
 
+        </>
+      ) : null}
+
+      {activePage === "data" ? (
+        <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -1547,6 +1694,11 @@ function App() {
         </div>
       </section>
 
+        </>
+      ) : null}
+
+      {activePage === "data" ? (
+        <>
       <section className="panel instruments-panel">
         <div className="panel-heading">
           <div>
@@ -1876,6 +2028,8 @@ function App() {
         </div>
       </section>
         </>
+      ) : null}
+        </>
       )}
 
       {message ? <p className="message">{message}</p> : null}
@@ -1919,6 +2073,48 @@ function getGeminiStateMeta(state: GeminiKeyStatus["state"]) {
     return { label: state.replace("_", " "), className: "bad", icon: <AlertTriangle size={18} /> };
   }
   return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
+}
+
+function getSystemStateMeta(
+  dhanState: TokenState,
+  geminiState: GeminiKeyStatus["state"],
+  historicalState?: string,
+  blockedCount = 0,
+) {
+  if (dhanState === "expired" || dhanState === "renew_failed" || dhanState === "config_error") {
+    return { label: "Dhan needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
+  }
+  if (geminiState === "validation_failed" || geminiState === "config_error") {
+    return { label: "AI needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
+  }
+  if (blockedCount > 0 || historicalState === "failed") {
+    return { label: "Data needs review", className: "warn", icon: <AlertTriangle size={18} /> };
+  }
+  if (dhanState === "active" && geminiState === "active") {
+    return { label: "System ready", className: "ok", icon: <CheckCircle2 size={18} /> };
+  }
+  return { label: "Setup incomplete", className: "neutral", icon: <Clock size={18} /> };
+}
+
+function getSettingsStateMeta(
+  dhanMeta: ReturnType<typeof getStateMeta>,
+  geminiMeta: ReturnType<typeof getGeminiStateMeta>,
+) {
+  if (dhanMeta.className === "bad" || geminiMeta.className === "bad") {
+    return { label: "Settings need attention", className: "bad", icon: <AlertTriangle size={18} /> };
+  }
+  if (dhanMeta.className === "ok" && geminiMeta.className === "ok") {
+    return { label: "Settings ready", className: "ok", icon: <CheckCircle2 size={18} /> };
+  }
+  return { label: "Settings incomplete", className: "neutral", icon: <Shield size={18} /> };
+}
+
+function getPageMeta(page: AppPage) {
+  if (page === "drishti") return { eyebrow: "Early Watch", title: "Drishti Radar" };
+  if (page === "demo") return { eyebrow: "Paper Ledger", title: "Demo Trading" };
+  if (page === "data") return { eyebrow: "Operations", title: "Data Health" };
+  if (page === "settings") return { eyebrow: "Admin", title: "Settings" };
+  return { eyebrow: "Overview", title: "Command Dashboard" };
 }
 
 function formatDate(value?: string | null) {
