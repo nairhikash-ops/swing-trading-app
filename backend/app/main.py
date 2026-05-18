@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.ai_credentials import AiCredentialService, AiCredentialStore
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
@@ -22,6 +23,8 @@ from app.schemas import (
     DemoPositionItem,
     DemoRefreshResponse,
     DrishtiSignalReportResponse,
+    GeminiKeyStatusResponse,
+    GeminiKeyUpdateRequest,
     HealthResponse,
     HistoricalFetchItem,
     HistoricalFetchStatusResponse,
@@ -86,6 +89,11 @@ def build_demo_trading_service(settings: Settings) -> DemoTradingService:
     return DemoTradingService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_ai_credential_service(settings: Settings) -> AiCredentialService:
+    token_store = TokenStore(settings.database_path)
+    return AiCredentialService(settings=settings, store=AiCredentialStore(token_store))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -98,6 +106,7 @@ async def lifespan(app: FastAPI):
     move_event_service = build_move_event_service(settings)
     drishti_signal_service = build_drishti_signal_service(settings)
     demo_trading_service = build_demo_trading_service(settings)
+    ai_credential_service = build_ai_credential_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(settings, token_service, historical_service)
     app.state.settings = settings
@@ -110,6 +119,7 @@ async def lifespan(app: FastAPI):
     app.state.move_event_service = move_event_service
     app.state.drishti_signal_service = drishti_signal_service
     app.state.demo_trading_service = demo_trading_service
+    app.state.ai_credential_service = ai_credential_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -166,6 +176,10 @@ def get_demo_trading_service_dep() -> DemoTradingService:
     return app.state.demo_trading_service
 
 
+def get_ai_credential_service_dep() -> AiCredentialService:
+    return app.state.ai_credential_service
+
+
 def get_settings_dep() -> Settings:
     return app.state.settings
 
@@ -209,6 +223,37 @@ async def dhan_renew(token_service: TokenService = Depends(get_token_service_dep
     try:
         renewed, status, message = await token_service.renew_if_needed(force=True)
         return RenewResponse(renewed=renewed, status=status, message=message)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/gemini/status", response_model=GeminiKeyStatusResponse)
+async def gemini_status(
+    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
+) -> GeminiKeyStatusResponse:
+    return ai_credential_service.gemini_status()
+
+
+@app.post("/api/ai/gemini/key", response_model=GeminiKeyStatusResponse)
+async def gemini_update_key(
+    request: GeminiKeyUpdateRequest,
+    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
+) -> GeminiKeyStatusResponse:
+    try:
+        return await ai_credential_service.save_gemini_key(
+            api_key=request.api_key,
+            validate_with_gemini=request.validate_with_gemini,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Unable to save Gemini API key: {exc}") from exc
+
+
+@app.post("/api/ai/gemini/validate", response_model=GeminiKeyStatusResponse)
+async def gemini_validate_key(
+    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
+) -> GeminiKeyStatusResponse:
+    try:
+        return await ai_credential_service.validate_saved_gemini_key()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

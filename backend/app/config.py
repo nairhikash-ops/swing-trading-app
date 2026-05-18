@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     demo_default_quantity: float = Field(default=1.0, gt=0)
     demo_default_risk_reward: float = Field(default=2.0, ge=1.0, le=10.0)
     demo_max_holding_sessions: int = Field(default=15, ge=1, le=120)
+    gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
 
     @property
     def cors_origins(self) -> list[str]:

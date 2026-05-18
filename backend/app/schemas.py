@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 TokenState = Literal["missing", "active", "expiring_soon", "expired", "renew_failed", "config_error", "unknown"]
+GeminiKeyState = Literal["missing", "active", "validation_failed", "config_error", "unknown"]
 
 
 class HealthResponse(BaseModel):
@@ -36,6 +37,22 @@ class TokenStatusResponse(BaseModel):
     last_renew_success_at: datetime | None = None
     last_error: str = ""
     token_source: str | None = None
+
+
+class GeminiKeyUpdateRequest(BaseModel):
+    api_key: str = Field(min_length=20)
+    validate_with_gemini: bool = True
+
+
+class GeminiKeyStatusResponse(BaseModel):
+    provider: Literal["gemini"]
+    state: GeminiKeyState
+    has_key: bool
+    masked_key: str | None = None
+    key_source: str | None = None
+    last_validated_at: datetime | None = None
+    last_error: str = ""
+    updated_at: datetime | None = None
 
 
 class RenewResponse(BaseModel):

@@ -45,6 +45,17 @@ type TokenStatus = {
   token_source?: string | null;
 };
 
+type GeminiKeyStatus = {
+  provider: "gemini";
+  state: "missing" | "active" | "validation_failed" | "config_error" | "unknown";
+  has_key: boolean;
+  masked_key?: string | null;
+  key_source?: string | null;
+  last_validated_at?: string | null;
+  last_error: string;
+  updated_at?: string | null;
+};
+
 type RenewResponse = {
   renewed: boolean;
   status: TokenStatus;
@@ -424,6 +435,7 @@ function dhanTradingViewUrl(item: { symbol: string; security_id?: string | null 
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
+  const [geminiStatus, setGeminiStatus] = useState<GeminiKeyStatus | null>(null);
   const [instrumentStatus, setInstrumentStatus] = useState<InstrumentStatus | null>(null);
   const [instrumentResults, setInstrumentResults] = useState<InstrumentItem[]>([]);
   const [instrumentQuery, setInstrumentQuery] = useState("");
@@ -443,7 +455,7 @@ function App() {
   const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
   const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
-  const [activePage, setActivePage] = useState<"research" | "token">("research");
+  const [activePage, setActivePage] = useState<"research" | "token" | "ai">("research");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -452,8 +464,13 @@ function App() {
     expiryTime: "",
     validateWithDhan: true,
   });
+  const [geminiForm, setGeminiForm] = useState({
+    apiKey: "",
+    validateWithGemini: true,
+  });
 
   const stateMeta = useMemo(() => getStateMeta(status?.state ?? "unknown"), [status?.state]);
+  const geminiStateMeta = useMemo(() => getGeminiStateMeta(geminiStatus?.state ?? "unknown"), [geminiStatus?.state]);
 
   async function loadStatus(refresh = false) {
     setBusy(true);
@@ -465,6 +482,32 @@ function App() {
       setStatus(await response.json());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load Dhan status.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadGeminiStatus() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/status`);
+      if (!response.ok) throw new Error(await readError(response));
+      setGeminiStatus(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load Gemini key status.");
+    }
+  }
+
+  async function validateGeminiKey() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/validate`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as GeminiKeyStatus;
+      setGeminiStatus(data);
+      setMessage(data.state === "active" ? "Gemini API key validated." : data.last_error || "Gemini validation failed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to validate Gemini key.");
     } finally {
       setBusy(false);
     }
@@ -810,8 +853,38 @@ function App() {
     }
   }
 
+  async function saveGeminiKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: geminiForm.apiKey.trim(),
+          validate_with_gemini: geminiForm.validateWithGemini,
+        }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as GeminiKeyStatus;
+      setGeminiStatus(data);
+      setGeminiForm({ apiKey: "", validateWithGemini: true });
+      setMessage(
+        data.state === "active"
+          ? "Gemini API key saved on the backend."
+          : data.last_error || "Gemini API key saved, but validation is not active.",
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save Gemini key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     loadStatus();
+    loadGeminiStatus();
     loadInstrumentStatus();
     loadUniverseStatus();
     loadUniverse();
@@ -839,8 +912,10 @@ function App() {
             100,
         )
       : 0;
-  const pageEyebrow = activePage === "token" ? "Stage 1" : "Research";
-  const pageTitle = activePage === "token" ? "Dhan Token Control" : "Swing Research Dashboard";
+  const activeStatusMeta = activePage === "ai" ? geminiStateMeta : stateMeta;
+  const pageEyebrow = activePage === "token" ? "Stage 1" : activePage === "ai" ? "AI Settings" : "Research";
+  const pageTitle =
+    activePage === "token" ? "Dhan Token Control" : activePage === "ai" ? "Gemini Analyst Control" : "Swing Research Dashboard";
 
   return (
     <main className="app-shell">
@@ -850,9 +925,9 @@ function App() {
           <h1>{pageTitle}</h1>
         </div>
         <div className="topbar-actions">
-          <div className={`status-pill ${stateMeta.className}`}>
-            {stateMeta.icon}
-            <span>{stateMeta.label}</span>
+          <div className={`status-pill ${activeStatusMeta.className}`}>
+            {activeStatusMeta.icon}
+            <span>{activeStatusMeta.label}</span>
           </div>
           <nav className="page-tabs" aria-label="Dashboard views">
             <button
@@ -869,11 +944,90 @@ function App() {
             >
               Dhan Token
             </button>
+            <button
+              type="button"
+              className={`page-tab ${activePage === "ai" ? "active" : ""}`}
+              onClick={() => setActivePage("ai")}
+            >
+              AI Settings
+            </button>
           </nav>
         </div>
       </section>
 
-      {activePage === "token" ? (
+      {activePage === "ai" ? (
+        <section className="grid">
+          <div className="panel status-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Gemini</p>
+                <h2>API Key Status</h2>
+              </div>
+              <button className="icon-button" onClick={loadGeminiStatus} disabled={busy} title="Refresh Gemini status">
+                <RefreshCcw size={18} />
+              </button>
+            </div>
+
+            <dl className="status-list">
+              <StatusRow label="Provider" value={geminiStatus?.provider ?? "gemini"} />
+              <StatusRow label="State" value={formatStatus(geminiStatus?.state)} />
+              <StatusRow label="Stored key" value={geminiStatus?.masked_key ?? "-"} />
+              <StatusRow label="Key source" value={geminiStatus?.key_source ?? "-"} />
+              <StatusRow label="Last validation" value={formatDate(geminiStatus?.last_validated_at)} />
+              <StatusRow label="Updated" value={formatDate(geminiStatus?.updated_at)} />
+            </dl>
+
+            {geminiStatus?.last_error ? <p className="error-text">{geminiStatus.last_error}</p> : null}
+
+            <div className="button-row">
+              <button onClick={validateGeminiKey} disabled={busy || !geminiStatus?.has_key}>
+                <CheckCircle2 size={17} />
+                Validate key
+              </button>
+              <button className="secondary" onClick={loadGeminiStatus} disabled={busy}>
+                <Wifi size={17} />
+                Check local
+              </button>
+            </div>
+          </div>
+
+          <form className="panel" onSubmit={saveGeminiKey}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Backend Secret</p>
+                <h2>Save Gemini API Key</h2>
+              </div>
+              <Shield size={22} />
+            </div>
+
+            <label>
+              Gemini API key
+              <textarea
+                value={geminiForm.apiKey}
+                onChange={(event) => setGeminiForm({ ...geminiForm, apiKey: event.target.value })}
+                autoComplete="off"
+                rows={4}
+                required
+              />
+            </label>
+
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={geminiForm.validateWithGemini}
+                onChange={(event) => setGeminiForm({ ...geminiForm, validateWithGemini: event.target.checked })}
+              />
+              Validate with Gemini before saving
+            </label>
+
+            <button type="submit" disabled={busy}>
+              <Save size={17} />
+              Save Gemini key
+            </button>
+          </form>
+        </section>
+
+      ) : activePage === "token" ? (
         <section className="grid">
         <div className="panel status-panel">
           <div className="panel-heading">
@@ -1749,6 +1903,19 @@ function getStateMeta(state: TokenState) {
     return { label: "No token", className: "neutral", icon: <Shield size={18} /> };
   }
   if (state === "expired" || state === "renew_failed" || state === "config_error") {
+    return { label: state.replace("_", " "), className: "bad", icon: <AlertTriangle size={18} /> };
+  }
+  return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
+}
+
+function getGeminiStateMeta(state: GeminiKeyStatus["state"]) {
+  if (state === "active") {
+    return { label: "Gemini ready", className: "ok", icon: <CheckCircle2 size={18} /> };
+  }
+  if (state === "missing") {
+    return { label: "No AI key", className: "neutral", icon: <Shield size={18} /> };
+  }
+  if (state === "validation_failed" || state === "config_error") {
     return { label: state.replace("_", " "), className: "bad", icon: <AlertTriangle size={18} /> };
   }
   return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
