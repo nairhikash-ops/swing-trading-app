@@ -1,7 +1,12 @@
 from datetime import date
 
 from app.config import Settings
-from app.historical_data import HistoricalDataStore, HistoricalWindow, parse_historical_payload
+from app.historical_data import (
+    HistoricalDataStore,
+    HistoricalWindow,
+    parse_historical_payload,
+    reusable_current_window_run,
+)
 from app.index_universe import IndexUniverseStore
 from app.instrument_master import InstrumentMasterStore
 from app.store import TokenStore
@@ -34,6 +39,43 @@ def test_parse_historical_payload_returns_ist_trading_dates():
     assert candles[0]["trading_date"] == "2024-05-01"
     assert candles[0]["close"] == 105.0
     assert candles[1]["volume"] == 1200.0
+
+
+def test_reusable_current_window_run_accepts_completed_with_errors():
+    window = HistoricalWindow(from_date=date(2025, 5, 18), to_date_exclusive=date(2026, 5, 18))
+    run = {
+        "lookback_calendar_days": 365,
+        "from_date": "2025-05-18",
+        "to_date_exclusive": "2026-05-18",
+        "status": "completed_with_errors",
+    }
+
+    assert reusable_current_window_run(run, 365, window) is True
+
+
+def test_reusable_current_window_run_rejects_failed_or_different_windows():
+    window = HistoricalWindow(from_date=date(2025, 5, 18), to_date_exclusive=date(2026, 5, 18))
+
+    assert reusable_current_window_run(
+        {
+            "lookback_calendar_days": 365,
+            "from_date": "2025-05-18",
+            "to_date_exclusive": "2026-05-18",
+            "status": "failed",
+        },
+        365,
+        window,
+    ) is False
+    assert reusable_current_window_run(
+        {
+            "lookback_calendar_days": 365,
+            "from_date": "2025-05-17",
+            "to_date_exclusive": "2026-05-17",
+            "status": "completed",
+        },
+        365,
+        window,
+    ) is False
 
 
 def test_create_run_maps_nifty_500_by_isin_and_skips_unmapped(tmp_path):

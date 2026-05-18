@@ -26,6 +26,7 @@ class FatalHistoricalError(Exception):
 
 START_COVERAGE_GRACE_DAYS = 10
 END_FRESHNESS_GRACE_DAYS = 3
+REUSABLE_TERMINAL_FETCH_STATUSES = {"completed", "completed_with_errors"}
 
 
 def upward_movers_universe_name(threshold_percent: float) -> str:
@@ -858,6 +859,13 @@ class HistoricalDataService:
                     raise ValueError("Another historical fetch is already running.")
                 self._access_token()
                 window = historical_window(self.settings)
+                latest_run = self.store.latest_run(NIFTY_500_INDEX_NAME)
+                if reusable_current_window_run(
+                    latest_run,
+                    self.settings.historical_lookback_calendar_days,
+                    window,
+                ):
+                    return self.store.status(int(latest_run["id"])) or {}
                 coverage = self.store.coverage_status(
                     NIFTY_500_INDEX_NAME,
                     self.settings.historical_lookback_calendar_days,
@@ -1016,6 +1024,20 @@ def historical_window(settings: Settings, lookback_calendar_days: int | None = N
     lookback_days = lookback_calendar_days or settings.historical_lookback_calendar_days
     from_date = end_date - timedelta(days=lookback_days - 1)
     return HistoricalWindow(from_date=from_date, to_date_exclusive=end_date + timedelta(days=1))
+
+
+def reusable_current_window_run(
+    run: dict[str, Any] | None,
+    lookback_days: int,
+    window: HistoricalWindow,
+) -> bool:
+    if not run or run.get("status") not in REUSABLE_TERMINAL_FETCH_STATUSES:
+        return False
+    return (
+        int(run.get("lookback_calendar_days") or 0) == lookback_days
+        and run.get("from_date") == window.from_date.isoformat()
+        and run.get("to_date_exclusive") == window.to_date_exclusive.isoformat()
+    )
 
 
 def normalized_ids(values: list[int]) -> list[int]:
