@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
 from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
@@ -85,7 +86,8 @@ async def lifespan(app: FastAPI):
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
     drishti_signal_service = build_drishti_signal_service(settings)
-    scheduler = RenewalScheduler(settings, token_service)
+    renewal_scheduler = RenewalScheduler(settings, token_service)
+    data_maintenance_scheduler = DataMaintenanceScheduler(settings, token_service, historical_service)
     app.state.settings = settings
     app.state.token_service = token_service
     app.state.instrument_service = instrument_service
@@ -95,11 +97,13 @@ async def lifespan(app: FastAPI):
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
     app.state.drishti_signal_service = drishti_signal_service
-    scheduler.start()
+    renewal_scheduler.start()
+    data_maintenance_scheduler.start()
     try:
         yield
     finally:
-        await scheduler.stop()
+        await data_maintenance_scheduler.stop()
+        await renewal_scheduler.stop()
 
 
 app = FastAPI(title="Swing Trading App", version="0.1.0", lifespan=lifespan)

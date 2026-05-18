@@ -4,6 +4,11 @@ services:
       context: ./backend
     env_file:
       - .env
+    environment:
+      HISTORICAL_LOOKBACK_CALENDAR_DAYS: "365"
+      DATA_MAINTENANCE_ENABLED: "true"
+      DATA_MAINTENANCE_CHECK_INTERVAL_SECONDS: "3600"
+      DATA_RETENTION_CALENDAR_DAYS: "365"
     volumes:
       - dhan-auth-data:/app/data
     ports:

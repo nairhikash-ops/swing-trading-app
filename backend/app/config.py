@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     dhan_instrument_exchange: str = "NSE"
     dhan_instrument_segment: str = "E"
     nifty_500_constituents_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
-    historical_lookback_calendar_days: int = Field(default=45, ge=1, le=365)
+    historical_lookback_calendar_days: int = Field(default=365, ge=1, le=365)
     extended_history_lookback_calendar_days: int = Field(default=365, ge=1, le=365)
     extended_history_upward_move_threshold_percent: float = Field(default=50.0, ge=0.1, le=100.0)
     dhan_historical_exchange_segment: str = "NSE_EQ"
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     dhan_renew_before_minutes: int = Field(default=180, ge=5, le=23 * 60)
     dhan_status_stale_minutes: int = Field(default=15, ge=1, le=24 * 60)
     dhan_renew_check_interval_seconds: int = Field(default=900, ge=60, le=24 * 3600)
+    data_maintenance_enabled: bool = True
+    data_maintenance_check_interval_seconds: int = Field(default=3600, ge=300, le=24 * 3600)
+    data_retention_calendar_days: int = Field(default=365, ge=1, le=3650)
 
     @property
     def cors_origins(self) -> list[str]:

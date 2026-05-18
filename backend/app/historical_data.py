@@ -813,6 +813,17 @@ class HistoricalDataStore:
             ).fetchall()
         return [candle_row_to_dict(row) for row in rows]
 
+    def prune_candles_before(self, cutoff_date: date) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM daily_candles
+                WHERE trading_date < ?
+                """,
+                (cutoff_date.isoformat(),),
+            )
+            return int(cursor.rowcount if cursor.rowcount is not None else 0)
+
     def _touch_run(self, conn, item_id: int, timestamp: str) -> None:
         conn.execute(
             """
@@ -914,6 +925,14 @@ class HistoricalDataService:
 
     def candles_for_symbol(self, symbol: str, limit: int = 80) -> list[dict[str, Any]]:
         return self.store.candles_for_symbol(symbol, limit)
+
+    def prune_retention_window(self) -> dict[str, Any]:
+        window = historical_window(self.settings, self.settings.data_retention_calendar_days)
+        deleted_count = self.store.prune_candles_before(window.from_date)
+        return {
+            "cutoff_date": window.from_date.isoformat(),
+            "deleted_candle_count": deleted_count,
+        }
 
     def _run_fetch_sync(self, run_id: int) -> None:
         asyncio.run(self._run_fetch(run_id))
