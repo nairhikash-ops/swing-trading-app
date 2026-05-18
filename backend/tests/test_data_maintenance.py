@@ -83,7 +83,7 @@ async def test_data_maintenance_fetches_and_prunes_when_current_window_is_fresh(
 
 
 @pytest.mark.asyncio
-async def test_data_maintenance_does_not_prune_while_fetch_is_running(tmp_path):
+async def test_data_maintenance_prunes_even_when_fetch_is_running(tmp_path):
     historical = FakeHistoricalService({"status": "running", "id": 10})
     scheduler = DataMaintenanceScheduler(
         Settings(app_secret_key="a" * 44, data_dir=tmp_path),
@@ -95,5 +95,6 @@ async def test_data_maintenance_does_not_prune_while_fetch_is_running(tmp_path):
 
     assert result["status"] == "ok"
     assert result["historical_status"] == "running"
+    assert result["deleted_candle_count"] == 12
     assert historical.fetch_calls == 1
-    assert historical.prune_calls == 0
+    assert historical.prune_calls == 1

@@ -50,16 +50,15 @@ class DataMaintenanceScheduler:
                 "renewed": renewed,
             }
 
+        retention_result = self.historical_service.prune_retention_window()
         historical_status = await self.historical_service.start_or_resume_nifty_500_fetch()
         result: dict[str, object] = {
             "status": "ok",
             "renewed": renewed,
             "historical_status": historical_status.get("status"),
             "historical_run_id": historical_status.get("id"),
+            **retention_result,
         }
-
-        if historical_status.get("status") == "up_to_date":
-            result.update(self.historical_service.prune_retention_window())
 
         logger.info(
             "Data maintenance result: status=%s run_id=%s",
