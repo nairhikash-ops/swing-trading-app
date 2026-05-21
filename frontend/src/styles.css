@@ -253,6 +253,18 @@ h2 {
   background: #7a271a;
 }
 
+.review-decision.quota {
+  color: #4f3f00;
+  background: #f2d46b;
+}
+
+.review-mode {
+  margin-top: 10px !important;
+  color: #5d6a63;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -35,6 +35,10 @@ class GeminiReviewResult:
     raw_response: dict[str, Any]
 
 
+def failure_status_for_error(error: str) -> str:
+    return "quota_limited" if "HTTP 429" in error else "failed"
+
+
 class AiReviewStore:
     def __init__(self, token_store: TokenStore) -> None:
         self.token_store = token_store
@@ -52,6 +56,7 @@ class AiReviewStore:
                     source_signal_hit_id INTEGER NOT NULL,
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
+                    grounding_enabled INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     decision TEXT NOT NULL,
                     confidence REAL NOT NULL DEFAULT 0,
@@ -129,18 +134,19 @@ class AiReviewStore:
             cursor = conn.execute(
                 """
                 INSERT INTO ai_signal_reviews (
-                    source_signal_hit_id, provider, model, status, decision, confidence,
+                    source_signal_hit_id, provider, model, grounding_enabled, status, decision, confidence,
                     summary, support_price, resistance_price, entry_low, entry_high,
                     stop_loss, target_1, target_2, trailing_stop_loss, risk_reward,
                     wait_until, invalidation, sources_json, context_json, raw_response_json,
                     error, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hit_id,
                     provider,
                     model,
+                    1 if context.get("ai_mode", {}).get("grounding_enabled") else 0,
                     result.status,
                     result.decision,
                     result.confidence,
@@ -235,16 +241,27 @@ class AiSignalReviewService:
         api_key = TokenCrypto(self.settings.app_secret_key).decrypt(credential.encrypted_api_key)
 
         context = build_review_context(hit, candles)
+        context["ai_mode"] = {
+            "provider": GEMINI_PROVIDER,
+            "model": self.settings.gemini_model,
+            "grounding_enabled": self.settings.gemini_grounding_enabled,
+            "mode_label": "cached-data-only" if not self.settings.gemini_grounding_enabled else "cached-data-plus-search",
+        }
         prompt = build_review_prompt(context)
         try:
             raw_response = await self.gemini_client.review(api_key, prompt)
             result = normalize_gemini_review(raw_response)
         except Exception as exc:
+            error = readable_gemini_error(exc)
             result = GeminiReviewResult(
-                status="failed",
+                status=failure_status_for_error(error),
                 decision="IGNORE",
                 confidence=0,
-                summary="Gemini review failed. Treat this signal as not reviewed.",
+                summary=(
+                    "Gemini quota/rate limit was reached. Treat this signal as not reviewed."
+                    if "HTTP 429" in error
+                    else "Gemini review failed. Treat this signal as not reviewed."
+                ),
                 support_price=None,
                 resistance_price=None,
                 entry_low=None,
@@ -254,12 +271,15 @@ class AiSignalReviewService:
                 target_2=None,
                 trailing_stop_loss=None,
                 risk_reward=None,
-                wait_until="Review failed; do not act on this alert.",
-                invalidation="AI review failed before producing a valid decision.",
+                wait_until="AI review did not complete; do not act on this alert.",
+                invalidation=(
+                    "Gemini quota/rate limit stopped the review before a valid decision."
+                    if "HTTP 429" in error
+                    else "AI review failed before producing a valid decision."
+                ),
                 sources=[],
                 raw_response={},
             )
-            error = readable_gemini_error(exc)
             return self.store.insert_review(
                 hit_id=hit_id,
                 provider=GEMINI_PROVIDER,
@@ -338,8 +358,9 @@ def build_review_prompt(context: dict[str, Any]) -> str:
     return (
         "You are reviewing a demo-only swing trading early-warning alert for NSE equities. "
         "Drishti only provides the early warning; your job is detailed research and trade-quality triage. "
-        "Use the supplied EOD signal data and, if search grounding is available, current public information only "
-        "when it materially changes risk. This is not a live order instruction. Decide whether this alert is "
+        "Use the supplied EOD signal data. If ai_mode.grounding_enabled is false, do not claim live news, "
+        "live prices, or external research; the review is cached-data only. If grounding is enabled, use current "
+        "public information only when it materially changes risk. This is not a live order instruction. Decide whether this alert is "
         "ENTER, WAIT, or IGNORE for demo-trade tracking.\n\n"
         "Return strict JSON only with this shape:\n"
         "{"
@@ -530,6 +551,7 @@ def ai_review_row_to_dict(row) -> dict[str, Any]:
         "source_signal_hit_id": row["source_signal_hit_id"],
         "provider": row["provider"],
         "model": row["model"],
+        "grounding_enabled": bool(row["grounding_enabled"]) if "grounding_enabled" in row.keys() else False,
         "status": row["status"],
         "decision": row["decision"],
         "confidence": row["confidence"],

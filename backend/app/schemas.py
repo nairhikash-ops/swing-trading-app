@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 TokenState = Literal["missing", "active", "expiring_soon", "expired", "renew_failed", "config_error", "unknown"]
 GeminiKeyState = Literal["missing", "active", "validation_failed", "config_error", "unknown"]
 AiReviewDecision = Literal["ENTER", "WAIT", "IGNORE"]
-AiReviewStatus = Literal["completed", "failed"]
+AiReviewStatus = Literal["completed", "quota_limited", "failed"]
 
 
 class HealthResponse(BaseModel):
@@ -62,6 +62,7 @@ class AiSignalReviewResponse(BaseModel):
     source_signal_hit_id: int
     provider: str
     model: str
+    grounding_enabled: bool
     status: AiReviewStatus
     decision: AiReviewDecision
     confidence: float

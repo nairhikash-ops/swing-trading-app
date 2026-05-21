@@ -336,7 +336,8 @@ type AiSignalReview = {
   source_signal_hit_id: number;
   provider: string;
   model: string;
-  status: "completed" | "failed";
+  grounding_enabled: boolean;
+  status: "completed" | "quota_limited" | "failed";
   decision: "ENTER" | "WAIT" | "IGNORE";
   confidence: number;
   summary: string;
@@ -743,7 +744,7 @@ function App() {
       const review = (await response.json()) as AiSignalReview;
       setAiReviewsByHit((current) => ({ ...current, [hit.id]: review }));
       setMessage(
-        review.status === "failed"
+        review.status !== "completed"
           ? `Gemini review for ${hit.symbol} failed: ${review.error || "unknown error"}.`
           : `Gemini review for ${hit.symbol}: ${review.decision}.`,
       );
@@ -1400,7 +1401,9 @@ function App() {
                         >
                           {reviewingHitId === item.id
                             ? "..."
-                            : review?.status === "failed"
+                            : review?.status === "quota_limited"
+                              ? "Quota"
+                              : review?.status === "failed"
                               ? "Retry AI"
                               : review
                                 ? review.decision
@@ -1427,12 +1430,24 @@ function App() {
                             <div>
                               <p
                                 className={`review-decision ${
-                                  review.status === "failed" ? "failed" : review.decision.toLowerCase()
+                                  review.status === "quota_limited"
+                                    ? "quota"
+                                    : review.status === "failed"
+                                      ? "failed"
+                                      : review.decision.toLowerCase()
                                 }`}
                               >
-                                {review.status === "failed" ? "AI FAILED" : review.decision}
+                                {review.status === "quota_limited"
+                                  ? "QUOTA LIMITED"
+                                  : review.status === "failed"
+                                    ? "AI FAILED"
+                                    : review.decision}
                               </p>
                               <p>{review.summary || "No summary returned."}</p>
+                              <p className="review-mode">
+                                {review.provider} / {review.model} /{" "}
+                                {review.grounding_enabled ? "cached data + search" : "cached data only"}
+                              </p>
                             </div>
                             <dl className="review-grid">
                               <StatusRow label="Confidence" value={`${formatNumber(review.confidence)}%`} />

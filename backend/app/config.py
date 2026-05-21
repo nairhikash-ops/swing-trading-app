@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     demo_max_holding_sessions: int = Field(default=15, ge=1, le=120)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-2.5-pro"
-    gemini_grounding_enabled: bool = True
+    gemini_grounding_enabled: bool = False
     ai_review_candle_limit: int = Field(default=80, ge=20, le=120)
 
     @property

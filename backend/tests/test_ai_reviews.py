@@ -37,6 +37,14 @@ class FakeGeminiReviewClient:
         }
 
 
+class RateLimitedGeminiReviewClient:
+    async def review(self, api_key: str, prompt: str):
+        import httpx
+
+        response = httpx.Response(429, request=httpx.Request("POST", "https://example.test"))
+        raise httpx.HTTPStatusError("rate limited", request=response.request, response=response)
+
+
 def seed_signal_hit(tmp_path):
     settings = Settings(
         app_secret_key=Fernet.generate_key().decode(),
@@ -90,6 +98,7 @@ async def test_ai_review_for_drishti_hit_uses_trigger_time_context_and_stores_re
 
     assert review["decision"] == "ENTER"
     assert review["status"] == "completed"
+    assert review["grounding_enabled"] is False
     assert review["trailing_stop_loss"] == 104
     assert review["risk_reward"] == 2.2
     assert service.latest_review_for_hit(hit_id)["id"] == review["id"]
@@ -123,3 +132,16 @@ async def test_ai_review_downgrades_invalid_trade_math_to_watch(tmp_path):
     assert review["confidence"] == 50
     assert "failed validation" in review["invalidation"]
     assert "risk/reward >= 2" in review["wait_until"]
+
+
+@pytest.mark.asyncio
+async def test_ai_review_marks_429_as_quota_limited(tmp_path):
+    settings, token_store, hit_id = seed_signal_hit(tmp_path)
+    service = AiSignalReviewService(settings, token_store, gemini_client=RateLimitedGeminiReviewClient())
+
+    review = await service.review_drishti_hit(hit_id)
+
+    assert review["status"] == "quota_limited"
+    assert review["decision"] == "IGNORE"
+    assert "HTTP 429" in review["error"]
+    assert "quota" in review["summary"].lower()
