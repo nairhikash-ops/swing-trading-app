@@ -480,6 +480,7 @@ function App() {
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
   const [aiReviewsByHit, setAiReviewsByHit] = useState<Record<number, AiSignalReview>>({});
+  const [drishtiBusy, setDrishtiBusy] = useState(false);
   const [reviewingHitId, setReviewingHitId] = useState<number | null>(null);
   const [demoSummary, setDemoSummary] = useState<DemoSummary | null>(null);
   const [demoOrders, setDemoOrders] = useState<DemoOrder[]>([]);
@@ -724,7 +725,11 @@ function App() {
     }
   }
 
-  async function loadDrishtiSignal01() {
+  async function loadDrishtiSignal01(showBusy = false) {
+    if (showBusy) {
+      setDrishtiBusy(true);
+      setMessage("");
+    }
     try {
       const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal?limit=500`);
       if (!response.ok) throw new Error(await readError(response));
@@ -732,6 +737,8 @@ function App() {
       setDrishtiReport(data);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load Drishti signal.");
+    } finally {
+      if (showBusy) setDrishtiBusy(false);
     }
   }
 
@@ -756,7 +763,7 @@ function App() {
   }
 
   async function refreshDrishtiSignal01() {
-    setBusy(true);
+    setDrishtiBusy(true);
     setMessage("");
     try {
       const params = new URLSearchParams({
@@ -775,7 +782,7 @@ function App() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to refresh Drishti signal.");
     } finally {
-      setBusy(false);
+      setDrishtiBusy(false);
     }
   }
 
@@ -1329,11 +1336,11 @@ function App() {
         {drishtiReport?.error ? <p className="error-text">{drishtiReport.error}</p> : null}
 
         <div className="button-row">
-          <button onClick={refreshDrishtiSignal01} disabled={busy}>
+          <button onClick={refreshDrishtiSignal01} disabled={drishtiBusy}>
             <RefreshCcw size={17} />
-            Run Signal 01
+            {drishtiBusy ? "Running..." : "Run Signal 01"}
           </button>
-          <button className="secondary" onClick={loadDrishtiSignal01} disabled={busy}>
+          <button className="secondary" onClick={() => loadDrishtiSignal01(true)} disabled={drishtiBusy}>
             <Wifi size={17} />
             Load saved run
           </button>
@@ -1396,7 +1403,7 @@ function App() {
                           type="button"
                           className="mini-action ai-action"
                           onClick={() => reviewDrishtiHitWithAi(item)}
-                          disabled={busy || reviewingHitId === item.id || geminiStatus?.state !== "active"}
+                          disabled={reviewingHitId === item.id || geminiStatus?.state !== "active"}
                           title={`Ask Gemini to review ${item.symbol}`}
                         >
                           {reviewingHitId === item.id
