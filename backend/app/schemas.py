@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 TokenState = Literal["missing", "active", "expiring_soon", "expired", "renew_failed", "config_error", "unknown"]
 GeminiKeyState = Literal["missing", "active", "validation_failed", "config_error", "unknown"]
+AiReviewDecision = Literal["ENTER", "WAIT", "IGNORE"]
+AiReviewStatus = Literal["completed", "failed"]
 
 
 class HealthResponse(BaseModel):
@@ -53,6 +55,32 @@ class GeminiKeyStatusResponse(BaseModel):
     last_validated_at: datetime | None = None
     last_error: str = ""
     updated_at: datetime | None = None
+
+
+class AiSignalReviewResponse(BaseModel):
+    id: int
+    source_signal_hit_id: int
+    provider: str
+    model: str
+    status: AiReviewStatus
+    decision: AiReviewDecision
+    confidence: float
+    summary: str
+    support_price: float | None = None
+    resistance_price: float | None = None
+    entry_low: float | None = None
+    entry_high: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    trailing_stop_loss: float | None = None
+    risk_reward: float | None = None
+    wait_until: str
+    invalidation: str
+    sources: list[dict] = Field(default_factory=list)
+    error: str = ""
+    created_at: datetime
+    updated_at: datetime
 
 
 class RenewResponse(BaseModel):

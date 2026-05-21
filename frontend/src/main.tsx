@@ -331,6 +331,32 @@ type DrishtiSignalReport = {
   items: DrishtiSignalHitItem[];
 };
 
+type AiSignalReview = {
+  id: number;
+  source_signal_hit_id: number;
+  provider: string;
+  model: string;
+  status: "completed" | "failed";
+  decision: "ENTER" | "WAIT" | "IGNORE";
+  confidence: number;
+  summary: string;
+  support_price?: number | null;
+  resistance_price?: number | null;
+  entry_low?: number | null;
+  entry_high?: number | null;
+  stop_loss?: number | null;
+  target_1?: number | null;
+  target_2?: number | null;
+  trailing_stop_loss?: number | null;
+  risk_reward?: number | null;
+  wait_until: string;
+  invalidation: string;
+  sources: { title?: string; uri?: string }[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type DemoSummary = {
   currency: string;
   cash_balance: number;
@@ -452,6 +478,8 @@ function App() {
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
+  const [aiReviewsByHit, setAiReviewsByHit] = useState<Record<number, AiSignalReview>>({});
+  const [reviewingHitId, setReviewingHitId] = useState<number | null>(null);
   const [demoSummary, setDemoSummary] = useState<DemoSummary | null>(null);
   const [demoOrders, setDemoOrders] = useState<DemoOrder[]>([]);
   const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
@@ -699,9 +727,26 @@ function App() {
     try {
       const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal?limit=500`);
       if (!response.ok) throw new Error(await readError(response));
-      setDrishtiReport(await response.json());
+      const data = (await response.json()) as DrishtiSignalReport | null;
+      setDrishtiReport(data);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load Drishti signal.");
+    }
+  }
+
+  async function reviewDrishtiHitWithAi(hit: DrishtiSignalHitItem) {
+    setReviewingHitId(hit.id);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ai/reviews/drishti-hit/${hit.id}`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const review = (await response.json()) as AiSignalReview;
+      setAiReviewsByHit((current) => ({ ...current, [hit.id]: review }));
+      setMessage(`Gemini review for ${hit.symbol}: ${review.decision}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to review Drishti hit with Gemini.");
+    } finally {
+      setReviewingHitId(null);
     }
   }
 
@@ -1295,6 +1340,7 @@ function App() {
               <tr>
                 <th>Chart</th>
                 <th>Demo</th>
+                <th>AI</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Anchor</th>
@@ -1310,48 +1356,85 @@ function App() {
             <tbody>
               {!drishtiReport || drishtiReport.items.length === 0 ? (
                 <tr>
-                  <td colSpan={12}>No saved Drishti hits yet.</td>
+                  <td colSpan={13}>No saved Drishti hits yet.</td>
                 </tr>
               ) : (
-                drishtiReport.items.map((item) => (
-                  <tr key={`${item.symbol}-${item.trigger_date}-${item.id}`}>
-                    <td>
-                      <a
-                        className="table-action"
-                        href={dhanTradingViewUrl(item)}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`Open ${item.symbol} in Dhan TradingView`}
-                        title={`Open ${item.symbol} in Dhan TradingView`}
-                      >
-                        <ExternalLink size={16} />
-                      </a>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="mini-action"
-                        onClick={() => createDemoOrderFromHit(item)}
-                        disabled={busy}
-                        title={`Create demo order for ${item.symbol}`}
-                      >
-                        Paper
-                      </button>
-                    </td>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.anchor_date}</td>
-                    <td>{item.trigger_date}</td>
-                    <td>{formatPrice(item.anchor_low)}</td>
-                    <td>{formatPrice(item.trigger_close)}</td>
-                    <td>{formatMultiplier(item.volume_ratio_1d)}</td>
-                    <td>{formatMultiplier(item.volume_vs_sma)}</td>
-                    <td>
-                      {formatPrice(item.future_high)} on {item.future_high_date}
-                    </td>
-                    <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
-                  </tr>
-                ))
+                drishtiReport.items.map((item) => {
+                  const review = aiReviewsByHit[item.id];
+                  return [
+                    <tr key={`${item.symbol}-${item.trigger_date}-${item.id}`}>
+                      <td>
+                        <a
+                          className="table-action"
+                          href={dhanTradingViewUrl(item)}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open ${item.symbol} in Dhan TradingView`}
+                          title={`Open ${item.symbol} in Dhan TradingView`}
+                        >
+                          <ExternalLink size={16} />
+                        </a>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="mini-action"
+                          onClick={() => createDemoOrderFromHit(item)}
+                          disabled={busy}
+                          title={`Create demo order for ${item.symbol}`}
+                        >
+                          Paper
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="mini-action ai-action"
+                          onClick={() => reviewDrishtiHitWithAi(item)}
+                          disabled={busy || reviewingHitId === item.id || geminiStatus?.state !== "active"}
+                          title={`Ask Gemini to review ${item.symbol}`}
+                        >
+                          {reviewingHitId === item.id ? "..." : review ? review.decision : "AI"}
+                        </button>
+                      </td>
+                      <td>{item.symbol}</td>
+                      <td>{item.company_name}</td>
+                      <td>{item.anchor_date}</td>
+                      <td>{item.trigger_date}</td>
+                      <td>{formatPrice(item.anchor_low)}</td>
+                      <td>{formatPrice(item.trigger_close)}</td>
+                      <td>{formatMultiplier(item.volume_ratio_1d)}</td>
+                      <td>{formatMultiplier(item.volume_vs_sma)}</td>
+                      <td>
+                        {formatPrice(item.future_high)} on {item.future_high_date}
+                      </td>
+                      <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
+                    </tr>,
+                    review ? (
+                      <tr key={`review-${review.id}`} className="review-row">
+                        <td colSpan={13}>
+                          <div className="review-card">
+                            <div>
+                              <p className={`review-decision ${review.decision.toLowerCase()}`}>{review.decision}</p>
+                              <p>{review.summary || "No summary returned."}</p>
+                            </div>
+                            <dl className="review-grid">
+                              <StatusRow label="Confidence" value={`${formatNumber(review.confidence)}%`} />
+                              <StatusRow label="Entry" value={`${formatPrice(review.entry_low)} - ${formatPrice(review.entry_high)}`} />
+                              <StatusRow label="Stop" value={formatPrice(review.stop_loss)} />
+                              <StatusRow label="Trail stop" value={formatPrice(review.trailing_stop_loss)} />
+                              <StatusRow label="Target 1" value={formatPrice(review.target_1)} />
+                              <StatusRow label="Target 2" value={formatPrice(review.target_2)} />
+                              <StatusRow label="R:R" value={formatNumber(review.risk_reward)} />
+                              <StatusRow label="Wait until" value={review.wait_until || "-"} />
+                              <StatusRow label="Invalidation" value={review.invalidation || "-"} />
+                            </dl>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null,
+                  ];
+                })
               )}
             </tbody>
           </table>

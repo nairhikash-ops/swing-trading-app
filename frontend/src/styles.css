@@ -73,6 +73,15 @@ button:disabled {
   background: #c6d5ce;
 }
 
+.mini-action.ai-action {
+  color: #ffffff;
+  background: #263b54;
+}
+
+.mini-action.ai-action:hover {
+  background: #1d2f45;
+}
+
 .secondary,
 .icon-button {
   color: #24332d;
@@ -193,6 +202,57 @@ h2 {
   padding: 20px;
   background: #ffffff;
   box-shadow: 0 16px 35px rgba(35, 51, 44, 0.08);
+}
+
+.review-row td {
+  background: #f6f8f7;
+}
+
+.review-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(360px, 1.2fr);
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #d5ddd8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.review-card p {
+  margin: 0;
+}
+
+.review-decision {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  margin-bottom: 8px !important;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.review-decision.enter {
+  color: #ffffff;
+  background: #176b53;
+}
+
+.review-decision.wait {
+  color: #4f3f00;
+  background: #f2d46b;
+}
+
+.review-decision.ignore {
+  color: #7a271a;
+  background: #f4c7bf;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 0;
 }
 
 .dashboard-grid {
@@ -476,5 +536,10 @@ th {
 
   .status-list.compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-card,
+  .review-grid {
+    grid-template-columns: 1fr;
   }
 }

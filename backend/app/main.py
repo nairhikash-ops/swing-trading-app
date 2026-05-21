@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai_credentials import AiCredentialService, AiCredentialStore
+from app.ai_reviews import AiSignalReviewService
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
@@ -16,6 +17,7 @@ from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.schemas import (
     DailyCandleItem,
+    AiSignalReviewResponse,
     DemoAccountSummary,
     DemoOrderCreateResponse,
     DemoOrderFromSignalRequest,
@@ -94,6 +96,10 @@ def build_ai_credential_service(settings: Settings) -> AiCredentialService:
     return AiCredentialService(settings=settings, store=AiCredentialStore(token_store))
 
 
+def build_ai_signal_review_service(settings: Settings) -> AiSignalReviewService:
+    return AiSignalReviewService(settings=settings, token_store=TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -107,6 +113,7 @@ async def lifespan(app: FastAPI):
     drishti_signal_service = build_drishti_signal_service(settings)
     demo_trading_service = build_demo_trading_service(settings)
     ai_credential_service = build_ai_credential_service(settings)
+    ai_signal_review_service = build_ai_signal_review_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(settings, token_service, historical_service)
     app.state.settings = settings
@@ -120,6 +127,7 @@ async def lifespan(app: FastAPI):
     app.state.drishti_signal_service = drishti_signal_service
     app.state.demo_trading_service = demo_trading_service
     app.state.ai_credential_service = ai_credential_service
+    app.state.ai_signal_review_service = ai_signal_review_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -178,6 +186,10 @@ def get_demo_trading_service_dep() -> DemoTradingService:
 
 def get_ai_credential_service_dep() -> AiCredentialService:
     return app.state.ai_credential_service
+
+
+def get_ai_signal_review_service_dep() -> AiSignalReviewService:
+    return app.state.ai_signal_review_service
 
 
 def get_settings_dep() -> Settings:
@@ -254,6 +266,26 @@ async def gemini_validate_key(
 ) -> GeminiKeyStatusResponse:
     try:
         return await ai_credential_service.validate_saved_gemini_key()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse | None)
+async def ai_review_for_drishti_hit(
+    hit_id: int,
+    ai_signal_review_service: AiSignalReviewService = Depends(get_ai_signal_review_service_dep),
+) -> AiSignalReviewResponse | None:
+    review = ai_signal_review_service.latest_review_for_hit(hit_id)
+    return AiSignalReviewResponse(**review) if review else None
+
+
+@app.post("/api/ai/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse)
+async def ai_review_drishti_hit(
+    hit_id: int,
+    ai_signal_review_service: AiSignalReviewService = Depends(get_ai_signal_review_service_dep),
+) -> AiSignalReviewResponse:
+    try:
+        return AiSignalReviewResponse(**(await ai_signal_review_service.review_drishti_hit(hit_id)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
