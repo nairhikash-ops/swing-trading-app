@@ -1,5 +1,6 @@
 services:
   backend:
+    restart: unless-stopped
     build:
       context: ./backend
     env_file:
@@ -15,6 +16,7 @@ services:
       - "8000:8000"
 
   frontend:
+    restart: unless-stopped
     build:
       context: ./frontend
     environment:
