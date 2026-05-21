@@ -742,7 +742,11 @@ function App() {
       if (!response.ok) throw new Error(await readError(response));
       const review = (await response.json()) as AiSignalReview;
       setAiReviewsByHit((current) => ({ ...current, [hit.id]: review }));
-      setMessage(`Gemini review for ${hit.symbol}: ${review.decision}.`);
+      setMessage(
+        review.status === "failed"
+          ? `Gemini review for ${hit.symbol} failed: ${review.error || "unknown error"}.`
+          : `Gemini review for ${hit.symbol}: ${review.decision}.`,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to review Drishti hit with Gemini.");
     } finally {
@@ -1394,7 +1398,13 @@ function App() {
                           disabled={busy || reviewingHitId === item.id || geminiStatus?.state !== "active"}
                           title={`Ask Gemini to review ${item.symbol}`}
                         >
-                          {reviewingHitId === item.id ? "..." : review ? review.decision : "AI"}
+                          {reviewingHitId === item.id
+                            ? "..."
+                            : review?.status === "failed"
+                              ? "Retry AI"
+                              : review
+                                ? review.decision
+                                : "AI"}
                         </button>
                       </td>
                       <td>{item.symbol}</td>
@@ -1415,11 +1425,18 @@ function App() {
                         <td colSpan={13}>
                           <div className="review-card">
                             <div>
-                              <p className={`review-decision ${review.decision.toLowerCase()}`}>{review.decision}</p>
+                              <p
+                                className={`review-decision ${
+                                  review.status === "failed" ? "failed" : review.decision.toLowerCase()
+                                }`}
+                              >
+                                {review.status === "failed" ? "AI FAILED" : review.decision}
+                              </p>
                               <p>{review.summary || "No summary returned."}</p>
                             </div>
                             <dl className="review-grid">
                               <StatusRow label="Confidence" value={`${formatNumber(review.confidence)}%`} />
+                              <StatusRow label="Error" value={review.error || "-"} />
                               <StatusRow label="Entry" value={`${formatPrice(review.entry_low)} - ${formatPrice(review.entry_high)}`} />
                               <StatusRow label="Stop" value={formatPrice(review.stop_loss)} />
                               <StatusRow label="Trail stop" value={formatPrice(review.trailing_stop_loss)} />

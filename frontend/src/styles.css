@@ -248,6 +248,11 @@ h2 {
   background: #f4c7bf;
 }
 
+.review-decision.failed {
+  color: #ffffff;
+  background: #7a271a;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
