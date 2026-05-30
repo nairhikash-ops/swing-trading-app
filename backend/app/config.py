@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     demo_automation_enabled: bool = True
     demo_automation_max_ai_reviews_per_run: int = Field(default=5, ge=1, le=50)
     demo_automation_retry_failed_ai_reviews: bool = False
+    demo_automation_review_engine: str = "local"
+    local_discipline_model: str = "drishti-discipline-v1"
+    local_discipline_candle_limit: int = Field(default=260, ge=60, le=365)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-2.5-pro"
     gemini_grounding_enabled: bool = False

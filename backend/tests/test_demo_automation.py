@@ -45,6 +45,7 @@ def seed_gemini_key(settings, token_store) -> None:
 
 
 def build_automation(settings, token_store, fake_client) -> tuple[DemoAutomationService, DemoTradingService]:
+    settings.demo_automation_review_engine = GEMINI_PROVIDER
     demo_service = DemoTradingService(settings, token_store)
     automation = DemoAutomationService(
         settings=settings,
@@ -153,3 +154,29 @@ def test_demo_ledger_reset_clears_orders_positions_and_cash(tmp_path):
     assert result["summary"]["realized_pnl"] == 0
     assert demo_service.orders() == []
     assert demo_service.positions() == []
+
+
+@pytest.mark.asyncio
+async def test_demo_automation_uses_local_discipline_engine_without_gemini_key(tmp_path):
+    settings, token_store, _ = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    automation = DemoAutomationService(
+        settings=settings,
+        token_store=token_store,
+        drishti_signal_service=DrishtiSignalService(settings, token_store),
+        ai_signal_review_service=AiSignalReviewService(
+            settings,
+            token_store,
+            gemini_client=FakeGeminiReviewClient({"decision": "IGNORE"}),
+        ),
+        demo_trading_service=demo_service,
+    )
+
+    result = await automation.run_once({"id": 1, "status": "completed", "failed_count": 0})
+
+    assert result["status"] == "ok"
+    assert result["fresh_hit_count"] == 1
+    assert result["ai_reviewed_count"] == 1
+    with token_store._connect() as conn:
+        reviews = conn.execute("SELECT * FROM ai_signal_reviews WHERE provider = 'local'").fetchall()
+    assert len(reviews) == 1

@@ -124,20 +124,26 @@ class AiReviewStore:
                 ORDER BY trading_date DESC
                 LIMIT ?
                 """,
-                (instrument_id, trigger_date, min(max(limit, 20), 120)),
+                (instrument_id, trigger_date, min(max(limit, 20), 365)),
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
-    def latest_for_hit(self, hit_id: int) -> dict[str, Any] | None:
+    def latest_for_hit(self, hit_id: int, provider: str | None = None) -> dict[str, Any] | None:
+        params: list[Any] = [hit_id]
+        provider_filter = ""
+        if provider:
+            provider_filter = "AND provider = ?"
+            params.append(provider)
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT * FROM ai_signal_reviews
                 WHERE source_signal_hit_id = ?
+                {provider_filter}
                 ORDER BY id DESC
                 LIMIT 1
                 """,
-                (hit_id,),
+                params,
             ).fetchone()
         return ai_review_row_to_dict(row) if row else None
 

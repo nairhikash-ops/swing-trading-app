@@ -1,9 +1,11 @@
 import logging
 from typing import Any
 
+from app.ai_credentials import GEMINI_PROVIDER
 from app.ai_reviews import AiSignalReviewService
 from app.config import Settings
 from app.demo_trading import DemoTradingService
+from app.discipline import LocalDisciplineReviewService
 from app.drishti import DrishtiSignalService
 from app.learning import LearningStore
 from app.store import TokenStore
@@ -141,6 +143,7 @@ class DemoAutomationService:
         self.ai_signal_review_service = ai_signal_review_service
         self.demo_trading_service = demo_trading_service
         self.learning_store = LearningStore(token_store)
+        self.local_discipline_review_service = LocalDisciplineReviewService(settings, token_store)
 
     def latest_status(self) -> dict[str, Any] | None:
         return self.store.latest_run()
@@ -236,12 +239,17 @@ class DemoAutomationService:
             return self.store.finish_run(run_id, base_result)
 
     async def _review_hit(self, hit_id: int) -> dict[str, Any] | None:
-        latest_review = self.ai_signal_review_service.latest_review_for_hit(hit_id)
+        review_service = (
+            self.ai_signal_review_service
+            if self.settings.demo_automation_review_engine.strip().lower() == GEMINI_PROVIDER
+            else self.local_discipline_review_service
+        )
+        latest_review = review_service.latest_review_for_hit(hit_id)
         if latest_review and (
             latest_review.get("status") == "completed" or not self.settings.demo_automation_retry_failed_ai_reviews
         ):
             return latest_review
-        return await self.ai_signal_review_service.review_drishti_hit(hit_id)
+        return await review_service.review_drishti_hit(hit_id)
 
 
 def historical_ready(historical_status: dict[str, Any] | None) -> bool:
