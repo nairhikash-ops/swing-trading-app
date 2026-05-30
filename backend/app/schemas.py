@@ -527,6 +527,50 @@ class DemoAutomationRunResponse(BaseModel):
     completed_at: datetime | None = None
 
 
+class WatchlistCandidateItem(BaseModel):
+    id: int
+    source_signal_hit_id: int
+    decision_snapshot_id: int | None = None
+    analysis_review_id: int | None = None
+    source_signal_id: str
+    source_run_id: int | None = None
+    instrument_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    trigger_date: str
+    status: str
+    decision: str
+    confidence: float
+    entry_rule: str
+    entry_low: float | None = None
+    entry_high: float | None = None
+    breakout_price: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    trailing_stop_loss: float | None = None
+    risk_reward: float | None = None
+    invalidation_price: float | None = None
+    expires_after_date: str
+    summary: str
+    features: dict
+    entered_order_id: int | None = None
+    closed_reason: str
+    last_checked_date: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WatchlistMonitorResponse(BaseModel):
+    entered: list[WatchlistCandidateItem]
+    expired: list[WatchlistCandidateItem]
+    invalidated: list[WatchlistCandidateItem]
+    waiting: list[WatchlistCandidateItem]
+
+
 class LearningStatusResponse(BaseModel):
     decision_snapshot_count: int
     trade_outcome_count: int

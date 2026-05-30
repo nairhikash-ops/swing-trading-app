@@ -193,10 +193,12 @@ class DemoTradingStore:
         entry_high: float | None = None,
         trailing_stop_loss: float | None = None,
         ai_review_id: int | None = None,
+        fill_after_date: str | None = None,
     ) -> int:
         timestamp = now_utc().isoformat()
         effective_stop_loss = stop_loss if stop_loss is not None else hit["anchor_low"]
         snapshot = self.learning_store.ensure_snapshot_for_hit(int(hit["id"]))
+        effective_fill_after_date = fill_after_date or hit["trigger_date"]
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -227,7 +229,7 @@ class DemoTradingStore:
                     ORDER_PENDING_ENTRY,
                     hit["trigger_date"],
                     hit["trigger_close"],
-                    hit["trigger_date"],
+                    effective_fill_after_date,
                     entry_low,
                     entry_high,
                     effective_stop_loss,
@@ -578,6 +580,7 @@ class DemoTradingService:
         entry_high: float | None = None,
         trailing_stop_loss: float | None = None,
         ai_review_id: int | None = None,
+        fill_after_date: str | None = None,
     ) -> dict[str, Any]:
         hit = self.store.signal_hit(hit_id)
         if hit is None:
@@ -602,6 +605,7 @@ class DemoTradingService:
             entry_high=entry_high,
             trailing_stop_loss=trailing_stop_loss,
             ai_review_id=ai_review_id,
+            fill_after_date=fill_after_date,
         )
         self.refresh()
         return {

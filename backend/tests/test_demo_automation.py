@@ -94,8 +94,12 @@ async def test_demo_automation_places_order_only_after_enter_review(tmp_path):
     assert result["orders_created_count"] == 1
     orders = demo_service.orders()
     learning_status = LearningStore(token_store).status()
+    with token_store._connect() as conn:
+        candidate = conn.execute("SELECT * FROM watchlist_candidates").fetchone()
     assert len(orders) == 1
     assert learning_status["decision_snapshot_count"] == 1
+    assert candidate["status"] == "entered"
+    assert candidate["entered_order_id"] == orders[0]["id"]
     assert orders[0]["status"] == "pending_entry"
     assert orders[0]["ai_review_id"] is not None
     assert orders[0]["entry_low"] == 100
@@ -138,6 +142,9 @@ async def test_demo_automation_does_not_order_when_ai_ignores_signal(tmp_path):
     assert result["ai_reviewed_count"] == 1
     assert result["enter_count"] == 0
     assert result["orders_created_count"] == 0
+    with token_store._connect() as conn:
+        candidate = conn.execute("SELECT * FROM watchlist_candidates").fetchone()
+    assert candidate["status"] == "ignored"
     assert demo_service.orders() == []
 
 
@@ -179,4 +186,6 @@ async def test_demo_automation_uses_local_discipline_engine_without_gemini_key(t
     assert result["ai_reviewed_count"] == 1
     with token_store._connect() as conn:
         reviews = conn.execute("SELECT * FROM ai_signal_reviews WHERE provider = 'local'").fetchall()
+        candidates = conn.execute("SELECT * FROM watchlist_candidates").fetchall()
     assert len(reviews) == 1
+    assert len(candidates) == 1

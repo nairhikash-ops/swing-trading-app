@@ -10,6 +10,7 @@ from app.drishti import DrishtiSignalService
 from app.learning import LearningStore
 from app.store import TokenStore
 from app.timezone import now_utc
+from app.watchlist import WatchlistService
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,7 @@ class DemoAutomationService:
         self.demo_trading_service = demo_trading_service
         self.learning_store = LearningStore(token_store)
         self.local_discipline_review_service = LocalDisciplineReviewService(settings, token_store)
+        self.watchlist_service = WatchlistService(settings, token_store, demo_trading_service)
 
     def latest_status(self) -> dict[str, Any] | None:
         return self.store.latest_run()
@@ -167,6 +169,7 @@ class DemoAutomationService:
         }
         try:
             self.demo_trading_service.refresh()
+            self.watchlist_service.monitor_entries()
             if not self.settings.demo_automation_enabled:
                 base_result["reason"] = "Demo automation is disabled."
                 return self.store.finish_run(run_id, base_result)
@@ -203,17 +206,21 @@ class DemoAutomationService:
                     continue
                 if review.get("status") == "quota_limited":
                     base_result["ai_reviewed_count"] += 1
+                    self.watchlist_service.upsert_review_for_hit(hit, review)
                     base_result["skipped_count"] += 1
                     break
                 if review.get("status") != "completed":
                     base_result["ai_reviewed_count"] += 1
+                    self.watchlist_service.upsert_review_for_hit(hit, review)
                     base_result["skipped_count"] += 1
                     continue
                 base_result["ai_reviewed_count"] += 1
                 if review.get("decision") != "ENTER":
+                    self.watchlist_service.upsert_review_for_hit(hit, review)
                     base_result["skipped_count"] += 1
                     continue
                 base_result["enter_count"] += 1
+                self.watchlist_service.upsert_review_for_hit(hit, review)
                 order_result = self.demo_trading_service.place_order_from_drishti_hit(
                     int(hit["id"]),
                     risk_reward=optional_float(review.get("risk_reward")),
@@ -226,6 +233,13 @@ class DemoAutomationService:
                 )
                 if order_result.get("order"):
                     base_result["orders_created_count"] += 1
+                    candidate = self.watchlist_service.store.candidate_for_hit(int(hit["id"]))
+                    if candidate:
+                        self.watchlist_service.store.mark_entered(
+                            int(candidate["id"]),
+                            int(order_result["order"]["id"]),
+                            str(hit["trigger_date"]),
+                        )
 
             if len(fresh_hits) > self.settings.demo_automation_max_ai_reviews_per_run:
                 base_result["skipped_count"] += len(fresh_hits) - self.settings.demo_automation_max_ai_reviews_per_run

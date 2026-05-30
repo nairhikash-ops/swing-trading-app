@@ -579,6 +579,7 @@ def extract_grounding_sources(raw_response: dict[str, Any]) -> list[dict[str, st
 
 def ai_review_row_to_dict(row) -> dict[str, Any]:
     sources = json.loads(row["sources_json"] or "[]") if "sources_json" in row.keys() else []
+    raw_response = json.loads(row["raw_response_json"] or "{}") if "raw_response_json" in row.keys() else {}
     return {
         "id": row["id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
@@ -602,6 +603,7 @@ def ai_review_row_to_dict(row) -> dict[str, Any]:
         "wait_until": row["wait_until"] if "wait_until" in row.keys() else "",
         "invalidation": row["invalidation"],
         "sources": sources,
+        "raw_response": raw_response,
         "error": row["error"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

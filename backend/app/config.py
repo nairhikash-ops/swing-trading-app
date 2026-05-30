@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     demo_automation_review_engine: str = "local"
     local_discipline_model: str = "drishti-discipline-v1"
     local_discipline_candle_limit: int = Field(default=260, ge=60, le=365)
+    watchlist_entry_expiry_sessions: int = Field(default=8, ge=1, le=30)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-2.5-pro"
     gemini_grounding_enabled: bool = False

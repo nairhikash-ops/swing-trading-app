@@ -49,10 +49,13 @@ from app.schemas import (
     UniverseConstituentItem,
     UniverseImportSummary,
     UniverseStatusResponse,
+    WatchlistCandidateItem,
+    WatchlistMonitorResponse,
 )
 from app.scheduler import RenewalScheduler
 from app.store import TokenStore
 from app.token_service import TokenService
+from app.watchlist import WatchlistService
 
 
 def build_token_service(settings: Settings) -> TokenService:
@@ -126,6 +129,10 @@ def build_learning_store(settings: Settings) -> LearningStore:
     return LearningStore(TokenStore(settings.database_path))
 
 
+def build_watchlist_service(settings: Settings, demo_trading_service: DemoTradingService) -> WatchlistService:
+    return WatchlistService(settings, TokenStore(settings.database_path), demo_trading_service)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -147,6 +154,7 @@ async def lifespan(app: FastAPI):
         demo_trading_service,
     )
     learning_store = build_learning_store(settings)
+    watchlist_service = build_watchlist_service(settings, demo_trading_service)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -168,6 +176,7 @@ async def lifespan(app: FastAPI):
     app.state.ai_signal_review_service = ai_signal_review_service
     app.state.demo_automation_service = demo_automation_service
     app.state.learning_store = learning_store
+    app.state.watchlist_service = watchlist_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -238,6 +247,10 @@ def get_demo_automation_service_dep() -> DemoAutomationService:
 
 def get_learning_store_dep() -> LearningStore:
     return app.state.learning_store
+
+
+def get_watchlist_service_dep() -> WatchlistService:
+    return app.state.watchlist_service
 
 
 def get_settings_dep() -> Settings:
@@ -634,6 +647,22 @@ async def demo_order_from_drishti_hit(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/watchlist/candidates", response_model=list[WatchlistCandidateItem])
+async def watchlist_candidates(
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
+) -> list[WatchlistCandidateItem]:
+    return [WatchlistCandidateItem.model_validate(item) for item in watchlist_service.latest(status=status, limit=limit)]
+
+
+@app.post("/api/watchlist/monitor", response_model=WatchlistMonitorResponse)
+async def watchlist_monitor(
+    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
+) -> WatchlistMonitorResponse:
+    return WatchlistMonitorResponse(**watchlist_service.monitor_entries())
 
 
 @app.get("/api/learning/status", response_model=LearningStatusResponse)
