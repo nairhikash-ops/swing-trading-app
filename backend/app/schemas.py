@@ -60,6 +60,7 @@ class GeminiKeyStatusResponse(BaseModel):
 class AiSignalReviewResponse(BaseModel):
     id: int
     source_signal_hit_id: int
+    decision_snapshot_id: int | None = None
     provider: str
     model: str
     grounding_enabled: bool
@@ -420,6 +421,7 @@ class DemoAccountSummary(BaseModel):
 class DemoOrderItem(BaseModel):
     id: int
     source_signal_hit_id: int | None = None
+    decision_snapshot_id: int | None = None
     ai_review_id: int | None = None
     source_signal_id: str
     source_run_id: int | None = None
@@ -453,6 +455,7 @@ class DemoPositionItem(BaseModel):
     id: int
     order_id: int
     source_signal_hit_id: int | None = None
+    decision_snapshot_id: int | None = None
     ai_review_id: int | None = None
     instrument_id: int
     company_name: str
@@ -522,3 +525,59 @@ class DemoAutomationRunResponse(BaseModel):
     error: str
     started_at: datetime
     completed_at: datetime | None = None
+
+
+class LearningStatusResponse(BaseModel):
+    decision_snapshot_count: int
+    trade_outcome_count: int
+    outcome_counts: dict[str, int]
+
+
+class LearningDecisionSnapshotItem(BaseModel):
+    id: int
+    source_signal_hit_id: int
+    signal_id: str
+    source_run_id: int | None = None
+    instrument_id: int
+    symbol: str
+    isin: str
+    security_id: str
+    trigger_date: str
+    snapshot_version: int
+    candle_count: int
+    context: dict
+    features: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class LearningTradeOutcomeItem(BaseModel):
+    id: int
+    position_id: int
+    order_id: int
+    source_signal_hit_id: int | None = None
+    decision_snapshot_id: int | None = None
+    ai_review_id: int | None = None
+    instrument_id: int
+    symbol: str
+    isin: str
+    security_id: str
+    status: str
+    entry_date: str
+    entry_price: float
+    exit_date: str | None = None
+    exit_price: float | None = None
+    exit_reason: str
+    holding_sessions: int
+    max_favorable_price: float | None = None
+    max_favorable_percent: float | None = None
+    max_adverse_price: float | None = None
+    max_adverse_percent: float | None = None
+    target_hit: bool
+    stop_hit: bool
+    time_exit: bool
+    realized_pnl: float
+    realized_pnl_percent: float
+    outcome_label: str
+    created_at: datetime
+    updated_at: datetime

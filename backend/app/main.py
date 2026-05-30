@@ -14,6 +14,7 @@ from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
+from app.learning import LearningStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.schemas import (
@@ -36,6 +37,9 @@ from app.schemas import (
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
+    LearningDecisionSnapshotItem,
+    LearningStatusResponse,
+    LearningTradeOutcomeItem,
     MoveEventReportResponse,
     QualityReportResponse,
     RangeMoverReportResponse,
@@ -118,6 +122,10 @@ def build_demo_automation_service(
     )
 
 
+def build_learning_store(settings: Settings) -> LearningStore:
+    return LearningStore(TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -138,6 +146,7 @@ async def lifespan(app: FastAPI):
         ai_signal_review_service,
         demo_trading_service,
     )
+    learning_store = build_learning_store(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -158,6 +167,7 @@ async def lifespan(app: FastAPI):
     app.state.ai_credential_service = ai_credential_service
     app.state.ai_signal_review_service = ai_signal_review_service
     app.state.demo_automation_service = demo_automation_service
+    app.state.learning_store = learning_store
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -224,6 +234,10 @@ def get_ai_signal_review_service_dep() -> AiSignalReviewService:
 
 def get_demo_automation_service_dep() -> DemoAutomationService:
     return app.state.demo_automation_service
+
+
+def get_learning_store_dep() -> LearningStore:
+    return app.state.learning_store
 
 
 def get_settings_dep() -> Settings:
@@ -620,3 +634,26 @@ async def demo_order_from_drishti_hit(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/learning/status", response_model=LearningStatusResponse)
+async def learning_status(
+    learning_store: LearningStore = Depends(get_learning_store_dep),
+) -> LearningStatusResponse:
+    return LearningStatusResponse(**learning_store.status())
+
+
+@app.get("/api/learning/snapshots", response_model=list[LearningDecisionSnapshotItem])
+async def learning_snapshots(
+    limit: int = Query(default=100, ge=1, le=500),
+    learning_store: LearningStore = Depends(get_learning_store_dep),
+) -> list[LearningDecisionSnapshotItem]:
+    return [LearningDecisionSnapshotItem.model_validate(item) for item in learning_store.latest_snapshots(limit=limit)]
+
+
+@app.get("/api/learning/trade-outcomes", response_model=list[LearningTradeOutcomeItem])
+async def learning_trade_outcomes(
+    limit: int = Query(default=100, ge=1, le=500),
+    learning_store: LearningStore = Depends(get_learning_store_dep),
+) -> list[LearningTradeOutcomeItem]:
+    return [LearningTradeOutcomeItem.model_validate(item) for item in learning_store.latest_trade_outcomes(limit=limit)]

@@ -5,6 +5,7 @@ from app.ai_reviews import AiSignalReviewService
 from app.config import Settings
 from app.demo_trading import DemoTradingService
 from app.drishti import DrishtiSignalService
+from app.learning import LearningStore
 from app.store import TokenStore
 from app.timezone import now_utc
 
@@ -139,6 +140,7 @@ class DemoAutomationService:
         self.drishti_signal_service = drishti_signal_service
         self.ai_signal_review_service = ai_signal_review_service
         self.demo_trading_service = demo_trading_service
+        self.learning_store = LearningStore(token_store)
 
     def latest_status(self) -> dict[str, Any] | None:
         return self.store.latest_run()
@@ -187,6 +189,9 @@ class DemoAutomationService:
                 base_result["status"] = "ok"
                 base_result["reason"] = "No fresh Drishti Signal 1 hits on the latest trading date."
                 return self.store.finish_run(run_id, base_result)
+
+            for hit in fresh_hits:
+                self.learning_store.ensure_snapshot_for_hit(int(hit["id"]))
 
             for hit in fresh_hits[: self.settings.demo_automation_max_ai_reviews_per_run]:
                 review = await self._review_hit(int(hit["id"]))

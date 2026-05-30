@@ -1,6 +1,7 @@
 from typing import Any
 
 from app.config import Settings
+from app.learning import LearningStore
 from app.store import TokenStore
 from app.timezone import now_utc
 
@@ -42,6 +43,7 @@ class DemoTradingStore:
                 CREATE TABLE IF NOT EXISTS demo_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_signal_hit_id INTEGER,
+                    decision_snapshot_id INTEGER,
                     ai_review_id INTEGER,
                     source_signal_id TEXT NOT NULL,
                     source_run_id INTEGER,
@@ -79,6 +81,7 @@ class DemoTradingStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_id INTEGER NOT NULL UNIQUE,
                     source_signal_hit_id INTEGER,
+                    decision_snapshot_id INTEGER,
                     ai_review_id INTEGER,
                     instrument_id INTEGER NOT NULL,
                     company_name TEXT NOT NULL,
@@ -117,6 +120,7 @@ class DemoTradingStore:
                 conn,
                 "demo_orders",
                 {
+                    "decision_snapshot_id": "INTEGER",
                     "ai_review_id": "INTEGER",
                     "entry_low": "REAL",
                     "entry_high": "REAL",
@@ -127,6 +131,7 @@ class DemoTradingStore:
                 conn,
                 "demo_positions",
                 {
+                    "decision_snapshot_id": "INTEGER",
                     "ai_review_id": "INTEGER",
                     "entry_low": "REAL",
                     "entry_high": "REAL",
@@ -136,6 +141,7 @@ class DemoTradingStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_orders_status ON demo_orders(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_positions_status ON demo_positions(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_positions_symbol ON demo_positions(symbol)")
+        self.learning_store = LearningStore(self.token_store)
 
     def ensure_account(self) -> None:
         timestamp = now_utc().isoformat()
@@ -190,20 +196,23 @@ class DemoTradingStore:
     ) -> int:
         timestamp = now_utc().isoformat()
         effective_stop_loss = stop_loss if stop_loss is not None else hit["anchor_low"]
+        snapshot = self.learning_store.ensure_snapshot_for_hit(int(hit["id"]))
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO demo_orders (
-                    source_signal_hit_id, ai_review_id, source_signal_id, source_run_id, instrument_id,
+                    source_signal_hit_id, decision_snapshot_id, ai_review_id,
+                    source_signal_id, source_run_id, instrument_id,
                     company_name, industry, symbol, isin, security_id, side, quantity, order_type,
                     status, trigger_date, requested_price, fill_after_date, entry_low, entry_high,
                     stop_loss, target_price, trailing_stop_loss, risk_reward,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'next_session_open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'next_session_open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hit["id"],
+                    snapshot.get("id"),
                     ai_review_id,
                     hit["signal_id"],
                     hit["run_id"],
@@ -359,15 +368,16 @@ class DemoTradingStore:
             conn.execute(
                 """
                 INSERT INTO demo_positions (
-                    order_id, source_signal_hit_id, ai_review_id, instrument_id, company_name, industry, symbol,
+                    order_id, source_signal_hit_id, decision_snapshot_id, ai_review_id, instrument_id, company_name, industry, symbol,
                     isin, security_id, side, quantity, entry_date, entry_price, entry_low, entry_high,
                     stop_loss, target_price, trailing_stop_loss, risk_amount, risk_reward, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order["id"],
                     order["source_signal_hit_id"],
+                    order.get("decision_snapshot_id"),
                     order.get("ai_review_id"),
                     order["instrument_id"],
                     order["company_name"],
@@ -641,6 +651,7 @@ class DemoTradingService:
             result = self._process_position(position)
             if not result:
                 continue
+            self.store.learning_store.upsert_trade_outcome(result)
             if result["status"] == POSITION_CLOSED:
                 closed_positions.append(result)
             else:
@@ -710,6 +721,7 @@ def order_row_to_dict(row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
+        "decision_snapshot_id": row["decision_snapshot_id"] if "decision_snapshot_id" in row.keys() else None,
         "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
         "source_signal_id": row["source_signal_id"],
         "source_run_id": row["source_run_id"],
@@ -745,6 +757,7 @@ def position_row_to_dict(row) -> dict[str, Any]:
         "id": row["id"],
         "order_id": row["order_id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
+        "decision_snapshot_id": row["decision_snapshot_id"] if "decision_snapshot_id" in row.keys() else None,
         "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
         "instrument_id": row["instrument_id"],
         "company_name": row["company_name"],

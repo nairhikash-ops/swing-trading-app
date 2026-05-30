@@ -9,6 +9,7 @@ from app.crypto import TokenCrypto
 from app.demo_automation import DemoAutomationService
 from app.demo_trading import DemoTradingService
 from app.drishti import DrishtiSignalService
+from app.learning import LearningStore
 from app.store import TokenStore
 from test_demo_trading import seed_drishti_hit
 
@@ -91,7 +92,9 @@ async def test_demo_automation_places_order_only_after_enter_review(tmp_path):
     assert result["enter_count"] == 1
     assert result["orders_created_count"] == 1
     orders = demo_service.orders()
+    learning_status = LearningStore(token_store).status()
     assert len(orders) == 1
+    assert learning_status["decision_snapshot_count"] == 1
     assert orders[0]["status"] == "pending_entry"
     assert orders[0]["ai_review_id"] is not None
     assert orders[0]["entry_low"] == 100

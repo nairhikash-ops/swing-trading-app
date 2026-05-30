@@ -7,6 +7,7 @@ import httpx
 from app.ai_credentials import GEMINI_PROVIDER, AiCredentialStore, readable_gemini_error
 from app.config import Settings
 from app.crypto import TokenCrypto
+from app.learning import LearningStore
 from app.store import TokenStore
 from app.timezone import now_utc
 
@@ -61,6 +62,7 @@ class AiReviewStore:
                 CREATE TABLE IF NOT EXISTS ai_signal_reviews (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_signal_hit_id INTEGER NOT NULL,
+                    decision_snapshot_id INTEGER,
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
                     grounding_enabled INTEGER NOT NULL DEFAULT 0,
@@ -98,6 +100,7 @@ class AiReviewStore:
                 conn,
                 "ai_signal_reviews",
                 {
+                    "decision_snapshot_id": "INTEGER",
                     "grounding_enabled": "INTEGER NOT NULL DEFAULT 0",
                     "trailing_stop_loss": "REAL",
                     "wait_until": "TEXT NOT NULL DEFAULT ''",
@@ -145,6 +148,7 @@ class AiReviewStore:
         model: str,
         context: dict[str, Any],
         result: GeminiReviewResult,
+        decision_snapshot_id: int | None = None,
         error: str = "",
     ) -> dict[str, Any]:
         timestamp = now_utc().isoformat()
@@ -152,16 +156,17 @@ class AiReviewStore:
             cursor = conn.execute(
                 """
                 INSERT INTO ai_signal_reviews (
-                    source_signal_hit_id, provider, model, grounding_enabled, status, decision, confidence,
+                    source_signal_hit_id, decision_snapshot_id, provider, model, grounding_enabled, status, decision, confidence,
                     summary, support_price, resistance_price, entry_low, entry_high,
                     stop_loss, target_1, target_2, trailing_stop_loss, risk_reward,
                     wait_until, invalidation, sources_json, context_json, raw_response_json,
                     error, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hit_id,
+                    decision_snapshot_id,
                     provider,
                     model,
                     1 if context.get("ai_mode", {}).get("grounding_enabled") else 0,
@@ -231,6 +236,7 @@ class AiSignalReviewService:
         self.token_store = token_store
         self.store = store or AiReviewStore(token_store)
         self.credential_store = credential_store or AiCredentialStore(token_store)
+        self.learning_store = LearningStore(token_store)
         self.gemini_client = gemini_client or GeminiSignalReviewClient(
             settings.gemini_api_base_url,
             settings.gemini_model,
@@ -265,6 +271,7 @@ class AiSignalReviewService:
             "grounding_enabled": self.settings.gemini_grounding_enabled,
             "mode_label": "cached-data-only" if not self.settings.gemini_grounding_enabled else "cached-data-plus-search",
         }
+        snapshot = self.learning_store.ensure_snapshot_for_hit(hit_id, context=context)
         prompt = build_review_prompt(context)
         try:
             raw_response = await self.gemini_client.review(api_key, prompt)
@@ -304,6 +311,7 @@ class AiSignalReviewService:
                 model=self.settings.gemini_model,
                 context=context,
                 result=result,
+                decision_snapshot_id=snapshot.get("id"),
                 error=error,
             )
 
@@ -314,6 +322,7 @@ class AiSignalReviewService:
             model=self.settings.gemini_model,
             context=context,
             result=result,
+            decision_snapshot_id=snapshot.get("id"),
         )
 
 
@@ -567,6 +576,7 @@ def ai_review_row_to_dict(row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
+        "decision_snapshot_id": row["decision_snapshot_id"] if "decision_snapshot_id" in row.keys() else None,
         "provider": row["provider"],
         "model": row["model"],
         "grounding_enabled": bool(row["grounding_enabled"]) if "grounding_enabled" in row.keys() else False,
