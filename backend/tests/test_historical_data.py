@@ -55,21 +55,34 @@ def test_historical_window_always_ends_at_previous_calendar_day(tmp_path):
     assert evening_window == morning_window
 
 
-def test_reusable_current_window_run_accepts_completed_with_errors():
+def test_reusable_current_window_run_accepts_completed_with_skipped_unmapped_only():
     window = HistoricalWindow(from_date=date(2025, 5, 18), to_date_exclusive=date(2026, 5, 18))
     run = {
         "lookback_calendar_days": 365,
         "from_date": "2025-05-18",
         "to_date_exclusive": "2026-05-18",
         "status": "completed_with_errors",
+        "failed_count": 0,
+        "skipped_count": 4,
     }
 
     assert reusable_current_window_run(run, 365, window) is True
 
 
-def test_reusable_current_window_run_rejects_failed_or_different_windows():
+def test_reusable_current_window_run_rejects_failed_counts_failed_status_or_different_windows():
     window = HistoricalWindow(from_date=date(2025, 5, 18), to_date_exclusive=date(2026, 5, 18))
 
+    assert reusable_current_window_run(
+        {
+            "lookback_calendar_days": 365,
+            "from_date": "2025-05-18",
+            "to_date_exclusive": "2026-05-18",
+            "status": "completed_with_errors",
+            "failed_count": 1,
+        },
+        365,
+        window,
+    ) is False
     assert reusable_current_window_run(
         {
             "lookback_calendar_days": 365,

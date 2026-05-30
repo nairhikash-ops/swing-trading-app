@@ -860,12 +860,13 @@ class HistoricalDataService:
                 self._access_token()
                 window = historical_window(self.settings)
                 latest_run = self.store.latest_run(NIFTY_500_INDEX_NAME)
+                latest_status = self.store.status(int(latest_run["id"])) if latest_run else None
                 if reusable_current_window_run(
-                    latest_run,
+                    latest_status,
                     self.settings.historical_lookback_calendar_days,
                     window,
                 ):
-                    return self.store.status(int(latest_run["id"])) or {}
+                    return latest_status or {}
                 coverage = self.store.coverage_status(
                     NIFTY_500_INDEX_NAME,
                     self.settings.historical_lookback_calendar_days,
@@ -1034,6 +1035,8 @@ def reusable_current_window_run(
     window: HistoricalWindow,
 ) -> bool:
     if not run or run.get("status") not in REUSABLE_TERMINAL_FETCH_STATUSES:
+        return False
+    if int(run.get("failed_count") or 0) > 0:
         return False
     return (
         int(run.get("lookback_calendar_days") or 0) == lookback_days
