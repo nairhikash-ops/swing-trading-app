@@ -1016,11 +1016,13 @@ class HistoricalDataService:
         return TokenCrypto(self.settings.app_secret_key).decrypt(token.encrypted_access_token)
 
 
-def historical_window(settings: Settings, lookback_calendar_days: int | None = None) -> HistoricalWindow:
-    now_ist = datetime.now(tz=IST)
-    end_date = now_ist.date()
-    if now_ist.hour < settings.historical_finalized_after_hour_ist:
-        end_date -= timedelta(days=1)
+def historical_window(
+    settings: Settings,
+    lookback_calendar_days: int | None = None,
+    as_of: datetime | None = None,
+) -> HistoricalWindow:
+    now_ist = as_of.astimezone(IST) if as_of else datetime.now(tz=IST)
+    end_date = now_ist.date() - timedelta(days=1)
     lookback_days = lookback_calendar_days or settings.historical_lookback_calendar_days
     from_date = end_date - timedelta(days=lookback_days - 1)
     return HistoricalWindow(from_date=from_date, to_date_exclusive=end_date + timedelta(days=1))

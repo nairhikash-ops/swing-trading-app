@@ -1,9 +1,10 @@
-from datetime import date
+from datetime import datetime, date
 
 from app.config import Settings
 from app.historical_data import (
     HistoricalDataStore,
     HistoricalWindow,
+    historical_window,
     parse_historical_payload,
     reusable_current_window_run,
 )
@@ -39,6 +40,19 @@ def test_parse_historical_payload_returns_ist_trading_dates():
     assert candles[0]["trading_date"] == "2024-05-01"
     assert candles[0]["close"] == 105.0
     assert candles[1]["volume"] == 1200.0
+
+
+def test_historical_window_always_ends_at_previous_calendar_day(tmp_path):
+    settings = Settings(app_secret_key="a" * 44, data_dir=tmp_path, historical_lookback_calendar_days=365)
+    morning = datetime.fromisoformat("2026-05-30T09:15:00+05:30")
+    evening = datetime.fromisoformat("2026-05-30T20:15:00+05:30")
+
+    morning_window = historical_window(settings, as_of=morning)
+    evening_window = historical_window(settings, as_of=evening)
+
+    assert morning_window.to_date_exclusive == date(2026, 5, 30)
+    assert morning_window.from_date == date(2025, 5, 30)
+    assert evening_window == morning_window
 
 
 def test_reusable_current_window_run_accepts_completed_with_errors():
