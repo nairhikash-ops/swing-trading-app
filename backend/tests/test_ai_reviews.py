@@ -4,7 +4,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.ai_credentials import GEMINI_PROVIDER, AiCredentialStore
-from app.ai_reviews import AiSignalReviewService
+from app.ai_reviews import AiReviewStore, AiSignalReviewService
 from app.config import Settings
 from app.crypto import TokenCrypto
 from app.drishti import DrishtiSignalService
@@ -69,6 +69,49 @@ def seed_signal_hit(tmp_path):
         validated=True,
     )
     return settings, token_store, int(report["items"][0]["id"])
+
+
+def test_ai_review_store_migrates_legacy_review_table(tmp_path):
+    settings = Settings(app_secret_key=Fernet.generate_key().decode(), data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    with token_store._connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE ai_signal_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_signal_hit_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                status TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0,
+                summary TEXT NOT NULL DEFAULT '',
+                support_price REAL,
+                resistance_price REAL,
+                entry_low REAL,
+                entry_high REAL,
+                stop_loss REAL,
+                target_1 REAL,
+                target_2 REAL,
+                risk_reward REAL,
+                invalidation TEXT NOT NULL DEFAULT '',
+                context_json TEXT NOT NULL,
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    AiReviewStore(token_store)
+
+    with token_store._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(ai_signal_reviews)").fetchall()}
+    assert "grounding_enabled" in columns
+    assert "trailing_stop_loss" in columns
+    assert "wait_until" in columns
+    assert "sources_json" in columns
+    assert "raw_response_json" in columns
 
 
 @pytest.mark.asyncio

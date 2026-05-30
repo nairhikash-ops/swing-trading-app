@@ -39,6 +39,13 @@ def failure_status_for_error(error: str) -> str:
     return "quota_limited" if "HTTP 429" in error else "failed"
 
 
+def ensure_columns(conn, table_name: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+
+
 class AiReviewStore:
     def __init__(self, token_store: TokenStore) -> None:
         self.token_store = token_store
@@ -86,6 +93,17 @@ class AiReviewStore:
                 CREATE INDEX IF NOT EXISTS idx_ai_signal_reviews_hit
                 ON ai_signal_reviews(source_signal_hit_id, id DESC)
                 """
+            )
+            ensure_columns(
+                conn,
+                "ai_signal_reviews",
+                {
+                    "grounding_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "trailing_stop_loss": "REAL",
+                    "wait_until": "TEXT NOT NULL DEFAULT ''",
+                    "sources_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "raw_response_json": "TEXT NOT NULL DEFAULT '{}'",
+                },
             )
 
     def signal_hit(self, hit_id: int) -> dict[str, Any] | None:
