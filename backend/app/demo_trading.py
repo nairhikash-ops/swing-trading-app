@@ -42,6 +42,7 @@ class DemoTradingStore:
                 CREATE TABLE IF NOT EXISTS demo_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_signal_hit_id INTEGER,
+                    ai_review_id INTEGER,
                     source_signal_id TEXT NOT NULL,
                     source_run_id INTEGER,
                     instrument_id INTEGER NOT NULL,
@@ -59,8 +60,11 @@ class DemoTradingStore:
                     fill_after_date TEXT NOT NULL,
                     filled_date TEXT,
                     filled_price REAL,
+                    entry_low REAL,
+                    entry_high REAL,
                     stop_loss REAL NOT NULL,
                     target_price REAL,
+                    trailing_stop_loss REAL,
                     risk_reward REAL NOT NULL,
                     rejection_reason TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -75,6 +79,7 @@ class DemoTradingStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_id INTEGER NOT NULL UNIQUE,
                     source_signal_hit_id INTEGER,
+                    ai_review_id INTEGER,
                     instrument_id INTEGER NOT NULL,
                     company_name TEXT NOT NULL,
                     industry TEXT NOT NULL,
@@ -85,8 +90,11 @@ class DemoTradingStore:
                     quantity REAL NOT NULL,
                     entry_date TEXT NOT NULL,
                     entry_price REAL NOT NULL,
+                    entry_low REAL,
+                    entry_high REAL,
                     stop_loss REAL NOT NULL,
                     target_price REAL NOT NULL,
+                    trailing_stop_loss REAL,
                     risk_amount REAL NOT NULL,
                     risk_reward REAL NOT NULL,
                     status TEXT NOT NULL,
@@ -104,6 +112,26 @@ class DemoTradingStore:
                     updated_at TEXT NOT NULL
                 )
                 """
+            )
+            ensure_columns(
+                conn,
+                "demo_orders",
+                {
+                    "ai_review_id": "INTEGER",
+                    "entry_low": "REAL",
+                    "entry_high": "REAL",
+                    "trailing_stop_loss": "REAL",
+                },
+            )
+            ensure_columns(
+                conn,
+                "demo_positions",
+                {
+                    "ai_review_id": "INTEGER",
+                    "entry_low": "REAL",
+                    "entry_high": "REAL",
+                    "trailing_stop_loss": "REAL",
+                },
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_orders_status ON demo_orders(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_positions_status ON demo_positions(status)")
@@ -148,21 +176,35 @@ class DemoTradingStore:
             row = conn.execute("SELECT * FROM demo_positions WHERE order_id = ?", (order_id,)).fetchone()
         return position_row_to_dict(row) if row else None
 
-    def insert_order_from_hit(self, hit: dict[str, Any], quantity: float, risk_reward: float) -> int:
+    def insert_order_from_hit(
+        self,
+        hit: dict[str, Any],
+        quantity: float,
+        risk_reward: float,
+        stop_loss: float | None = None,
+        target_price: float | None = None,
+        entry_low: float | None = None,
+        entry_high: float | None = None,
+        trailing_stop_loss: float | None = None,
+        ai_review_id: int | None = None,
+    ) -> int:
         timestamp = now_utc().isoformat()
+        effective_stop_loss = stop_loss if stop_loss is not None else hit["anchor_low"]
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO demo_orders (
-                    source_signal_hit_id, source_signal_id, source_run_id, instrument_id,
+                    source_signal_hit_id, ai_review_id, source_signal_id, source_run_id, instrument_id,
                     company_name, industry, symbol, isin, security_id, side, quantity, order_type,
-                    status, trigger_date, requested_price, fill_after_date, stop_loss, risk_reward,
+                    status, trigger_date, requested_price, fill_after_date, entry_low, entry_high,
+                    stop_loss, target_price, trailing_stop_loss, risk_reward,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'next_session_open', ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'next_session_open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hit["id"],
+                    ai_review_id,
                     hit["signal_id"],
                     hit["run_id"],
                     hit["instrument_id"],
@@ -177,7 +219,11 @@ class DemoTradingStore:
                     hit["trigger_date"],
                     hit["trigger_close"],
                     hit["trigger_date"],
-                    hit["anchor_low"],
+                    entry_low,
+                    entry_high,
+                    effective_stop_loss,
+                    target_price,
+                    trailing_stop_loss,
                     risk_reward,
                     timestamp,
                     timestamp,
@@ -208,6 +254,27 @@ class DemoTradingStore:
                 (POSITION_OPEN,),
             ).fetchall()
         return [position_row_to_dict(row) for row in rows]
+
+    def reset_ledger(self) -> dict[str, Any]:
+        timestamp = now_utc().isoformat()
+        with self._connect() as conn:
+            order_count = conn.execute("SELECT COUNT(*) AS count FROM demo_orders").fetchone()["count"]
+            position_count = conn.execute("SELECT COUNT(*) AS count FROM demo_positions").fetchone()["count"]
+            conn.execute("DELETE FROM demo_positions")
+            conn.execute("DELETE FROM demo_orders")
+            conn.execute(
+                """
+                UPDATE demo_accounts
+                SET cash_balance = ?, realized_pnl = 0, updated_at = ?
+                WHERE id = 1
+                """,
+                (self.settings.demo_initial_cash, timestamp),
+            )
+        return {
+            "deleted_orders": int(order_count or 0),
+            "deleted_positions": int(position_count or 0),
+            "summary": self.summary(),
+        }
 
     def first_candle_after(self, instrument_id: int, after_date: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -292,15 +359,16 @@ class DemoTradingStore:
             conn.execute(
                 """
                 INSERT INTO demo_positions (
-                    order_id, source_signal_hit_id, instrument_id, company_name, industry, symbol,
-                    isin, security_id, side, quantity, entry_date, entry_price, stop_loss, target_price,
-                    risk_amount, risk_reward, status, created_at, updated_at
+                    order_id, source_signal_hit_id, ai_review_id, instrument_id, company_name, industry, symbol,
+                    isin, security_id, side, quantity, entry_date, entry_price, entry_low, entry_high,
+                    stop_loss, target_price, trailing_stop_loss, risk_amount, risk_reward, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order["id"],
                     order["source_signal_hit_id"],
+                    order.get("ai_review_id"),
                     order["instrument_id"],
                     order["company_name"],
                     order["industry"],
@@ -311,8 +379,11 @@ class DemoTradingStore:
                     order["quantity"],
                     candle["trading_date"],
                     candle["open"],
+                    order.get("entry_low"),
+                    order.get("entry_high"),
                     order["stop_loss"],
                     target_price,
+                    order.get("trailing_stop_loss"),
                     risk_amount,
                     order["risk_reward"],
                     POSITION_OPEN,
@@ -491,6 +562,12 @@ class DemoTradingService:
         hit_id: int,
         quantity: float | None = None,
         risk_reward: float | None = None,
+        stop_loss: float | None = None,
+        target_price: float | None = None,
+        entry_low: float | None = None,
+        entry_high: float | None = None,
+        trailing_stop_loss: float | None = None,
+        ai_review_id: int | None = None,
     ) -> dict[str, Any]:
         hit = self.store.signal_hit(hit_id)
         if hit is None:
@@ -509,6 +586,12 @@ class DemoTradingService:
             hit=hit,
             quantity=quantity or self.settings.demo_default_quantity,
             risk_reward=risk_reward or self.settings.demo_default_risk_reward,
+            stop_loss=stop_loss,
+            target_price=target_price,
+            entry_low=entry_low,
+            entry_high=entry_high,
+            trailing_stop_loss=trailing_stop_loss,
+            ai_review_id=ai_review_id,
         )
         self.refresh()
         return {
@@ -528,6 +611,18 @@ class DemoTradingService:
             if candle is None:
                 continue
             entry_price = float(candle["open"])
+            entry_low = optional_float(order.get("entry_low"))
+            entry_high = optional_float(order.get("entry_high"))
+            if entry_low is not None and entry_price < entry_low:
+                rejected_orders.append(
+                    self.store.reject_order(int(order["id"]), "Next-session open was below the AI entry range.")
+                )
+                continue
+            if entry_high is not None and entry_price > entry_high:
+                rejected_orders.append(
+                    self.store.reject_order(int(order["id"]), "Next-session open was above the AI entry range.")
+                )
+                continue
             stop_loss = float(order["stop_loss"])
             risk_amount = entry_price - stop_loss
             if risk_amount <= 0:
@@ -535,7 +630,7 @@ class DemoTradingService:
                     self.store.reject_order(int(order["id"]), "Next-session entry is not above the signal stop loss.")
                 )
                 continue
-            target_price = entry_price + risk_amount * float(order["risk_reward"])
+            target_price = optional_float(order.get("target_price")) or entry_price + risk_amount * float(order["risk_reward"])
             filled = self.store.fill_order(order, candle, target_price, risk_amount)
             if filled["status"] == ORDER_REJECTED:
                 rejected_orders.append(filled)
@@ -591,11 +686,31 @@ class DemoTradingService:
     def positions(self, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         return self.store.list_positions(status=status, limit=limit)
 
+    def reset_ledger(self) -> dict[str, Any]:
+        return self.store.reset_ledger()
+
+
+def ensure_columns(conn, table_name: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+
+
+def optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def order_row_to_dict(row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
+        "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
         "source_signal_id": row["source_signal_id"],
         "source_run_id": row["source_run_id"],
         "instrument_id": row["instrument_id"],
@@ -613,8 +728,11 @@ def order_row_to_dict(row) -> dict[str, Any]:
         "fill_after_date": row["fill_after_date"],
         "filled_date": row["filled_date"],
         "filled_price": row["filled_price"],
+        "entry_low": row["entry_low"] if "entry_low" in row.keys() else None,
+        "entry_high": row["entry_high"] if "entry_high" in row.keys() else None,
         "stop_loss": row["stop_loss"],
         "target_price": row["target_price"],
+        "trailing_stop_loss": row["trailing_stop_loss"] if "trailing_stop_loss" in row.keys() else None,
         "risk_reward": row["risk_reward"],
         "rejection_reason": row["rejection_reason"],
         "created_at": row["created_at"],
@@ -627,6 +745,7 @@ def position_row_to_dict(row) -> dict[str, Any]:
         "id": row["id"],
         "order_id": row["order_id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
+        "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
         "instrument_id": row["instrument_id"],
         "company_name": row["company_name"],
         "industry": row["industry"],
@@ -637,8 +756,11 @@ def position_row_to_dict(row) -> dict[str, Any]:
         "quantity": row["quantity"],
         "entry_date": row["entry_date"],
         "entry_price": row["entry_price"],
+        "entry_low": row["entry_low"] if "entry_low" in row.keys() else None,
+        "entry_high": row["entry_high"] if "entry_high" in row.keys() else None,
         "stop_loss": row["stop_loss"],
         "target_price": row["target_price"],
+        "trailing_stop_loss": row["trailing_stop_loss"] if "trailing_stop_loss" in row.keys() else None,
         "risk_amount": row["risk_amount"],
         "risk_reward": row["risk_reward"],
         "status": row["status"],

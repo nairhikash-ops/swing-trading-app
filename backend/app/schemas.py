@@ -395,6 +395,11 @@ class DrishtiSignalReportResponse(BaseModel):
 class DemoOrderFromSignalRequest(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
     risk_reward: float | None = Field(default=None, ge=1.0, le=10.0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    entry_low: float | None = Field(default=None, gt=0)
+    entry_high: float | None = Field(default=None, gt=0)
+    trailing_stop_loss: float | None = Field(default=None, gt=0)
 
 
 class DemoAccountSummary(BaseModel):
@@ -415,6 +420,7 @@ class DemoAccountSummary(BaseModel):
 class DemoOrderItem(BaseModel):
     id: int
     source_signal_hit_id: int | None = None
+    ai_review_id: int | None = None
     source_signal_id: str
     source_run_id: int | None = None
     instrument_id: int
@@ -432,8 +438,11 @@ class DemoOrderItem(BaseModel):
     fill_after_date: str
     filled_date: str | None = None
     filled_price: float | None = None
+    entry_low: float | None = None
+    entry_high: float | None = None
     stop_loss: float
     target_price: float | None = None
+    trailing_stop_loss: float | None = None
     risk_reward: float
     rejection_reason: str
     created_at: datetime
@@ -444,6 +453,7 @@ class DemoPositionItem(BaseModel):
     id: int
     order_id: int
     source_signal_hit_id: int | None = None
+    ai_review_id: int | None = None
     instrument_id: int
     company_name: str
     industry: str
@@ -454,8 +464,11 @@ class DemoPositionItem(BaseModel):
     quantity: float
     entry_date: str
     entry_price: float
+    entry_low: float | None = None
+    entry_high: float | None = None
     stop_loss: float
     target_price: float
+    trailing_stop_loss: float | None = None
     risk_amount: float
     risk_reward: float
     status: str
@@ -485,3 +498,27 @@ class DemoRefreshResponse(BaseModel):
     updated_positions: list[DemoPositionItem]
     closed_positions: list[DemoPositionItem]
     summary: DemoAccountSummary
+
+
+class DemoLedgerResetResponse(BaseModel):
+    deleted_orders: int
+    deleted_positions: int
+    summary: DemoAccountSummary
+
+
+class DemoAutomationRunResponse(BaseModel):
+    id: int
+    status: str
+    reason: str
+    historical_status: str
+    historical_run_id: int | None = None
+    drishti_run_id: int | None = None
+    latest_trading_date: str | None = None
+    fresh_hit_count: int
+    ai_reviewed_count: int
+    enter_count: int
+    orders_created_count: int
+    skipped_count: int
+    error: str
+    started_at: datetime
+    completed_at: datetime | None = None

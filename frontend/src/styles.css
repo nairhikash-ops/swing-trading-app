@@ -529,6 +529,11 @@ th {
   background: #f8ddd8;
 }
 
+.muted {
+  margin: 18px 0 0;
+  color: #59665f;
+}
+
 @media (max-width: 840px) {
   .topbar {
     flex-direction: column;

@@ -8,6 +8,7 @@ from app.ai_reviews import AiSignalReviewService
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
+from app.demo_automation import DemoAutomationService
 from app.demo_trading import DemoTradingService
 from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
@@ -19,6 +20,8 @@ from app.schemas import (
     DailyCandleItem,
     AiSignalReviewResponse,
     DemoAccountSummary,
+    DemoAutomationRunResponse,
+    DemoLedgerResetResponse,
     DemoOrderCreateResponse,
     DemoOrderFromSignalRequest,
     DemoOrderItem,
@@ -100,6 +103,21 @@ def build_ai_signal_review_service(settings: Settings) -> AiSignalReviewService:
     return AiSignalReviewService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
+def build_demo_automation_service(
+    settings: Settings,
+    drishti_signal_service: DrishtiSignalService,
+    ai_signal_review_service: AiSignalReviewService,
+    demo_trading_service: DemoTradingService,
+) -> DemoAutomationService:
+    return DemoAutomationService(
+        settings=settings,
+        token_store=TokenStore(settings.database_path),
+        drishti_signal_service=drishti_signal_service,
+        ai_signal_review_service=ai_signal_review_service,
+        demo_trading_service=demo_trading_service,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -114,8 +132,19 @@ async def lifespan(app: FastAPI):
     demo_trading_service = build_demo_trading_service(settings)
     ai_credential_service = build_ai_credential_service(settings)
     ai_signal_review_service = build_ai_signal_review_service(settings)
+    demo_automation_service = build_demo_automation_service(
+        settings,
+        drishti_signal_service,
+        ai_signal_review_service,
+        demo_trading_service,
+    )
     renewal_scheduler = RenewalScheduler(settings, token_service)
-    data_maintenance_scheduler = DataMaintenanceScheduler(settings, token_service, historical_service)
+    data_maintenance_scheduler = DataMaintenanceScheduler(
+        settings,
+        token_service,
+        historical_service,
+        demo_automation_service,
+    )
     app.state.settings = settings
     app.state.token_service = token_service
     app.state.instrument_service = instrument_service
@@ -128,6 +157,7 @@ async def lifespan(app: FastAPI):
     app.state.demo_trading_service = demo_trading_service
     app.state.ai_credential_service = ai_credential_service
     app.state.ai_signal_review_service = ai_signal_review_service
+    app.state.demo_automation_service = demo_automation_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -190,6 +220,10 @@ def get_ai_credential_service_dep() -> AiCredentialService:
 
 def get_ai_signal_review_service_dep() -> AiSignalReviewService:
     return app.state.ai_signal_review_service
+
+
+def get_demo_automation_service_dep() -> DemoAutomationService:
+    return app.state.demo_automation_service
 
 
 def get_settings_dep() -> Settings:
@@ -541,6 +575,30 @@ async def demo_refresh(
     return DemoRefreshResponse(**demo_trading_service.refresh())
 
 
+@app.post("/api/demo/reset", response_model=DemoLedgerResetResponse)
+async def demo_reset(
+    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
+) -> DemoLedgerResetResponse:
+    return DemoLedgerResetResponse(**demo_trading_service.reset_ledger())
+
+
+@app.get("/api/demo/automation/status", response_model=DemoAutomationRunResponse | None)
+async def demo_automation_status(
+    demo_automation_service: DemoAutomationService = Depends(get_demo_automation_service_dep),
+) -> DemoAutomationRunResponse | None:
+    status = demo_automation_service.latest_status()
+    return DemoAutomationRunResponse(**status) if status else None
+
+
+@app.post("/api/demo/automation/run", response_model=DemoAutomationRunResponse)
+async def demo_automation_run(
+    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+    demo_automation_service: DemoAutomationService = Depends(get_demo_automation_service_dep),
+) -> DemoAutomationRunResponse:
+    status = historical_service.latest_status("NIFTY_500")
+    return DemoAutomationRunResponse(**(await demo_automation_service.run_once(status)))
+
+
 @app.post("/api/demo/orders/from-drishti-hit/{hit_id}", response_model=DemoOrderCreateResponse)
 async def demo_order_from_drishti_hit(
     hit_id: int,
@@ -553,6 +611,11 @@ async def demo_order_from_drishti_hit(
                 hit_id=hit_id,
                 quantity=request.quantity if request else None,
                 risk_reward=request.risk_reward if request else None,
+                stop_loss=request.stop_loss if request else None,
+                target_price=request.target_price if request else None,
+                entry_low=request.entry_low if request else None,
+                entry_high=request.entry_high if request else None,
+                trailing_stop_loss=request.trailing_stop_loss if request else None,
             )
         )
     except ValueError as exc:

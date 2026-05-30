@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     demo_default_quantity: float = Field(default=1.0, gt=0)
     demo_default_risk_reward: float = Field(default=2.0, ge=1.0, le=10.0)
     demo_max_holding_sessions: int = Field(default=15, ge=1, le=120)
+    demo_automation_enabled: bool = True
+    demo_automation_max_ai_reviews_per_run: int = Field(default=5, ge=1, le=50)
+    demo_automation_retry_failed_ai_reviews: bool = False
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-2.5-pro"
     gemini_grounding_enabled: bool = False

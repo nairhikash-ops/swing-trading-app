@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   Clock,
   Database,
@@ -443,6 +444,24 @@ type DemoRefreshResponse = {
   summary: DemoSummary;
 };
 
+type DemoAutomationRun = {
+  id: number;
+  status: string;
+  reason: string;
+  historical_status: string;
+  historical_run_id?: number | null;
+  drishti_run_id?: number | null;
+  latest_trading_date?: string | null;
+  fresh_hit_count: number;
+  ai_reviewed_count: number;
+  enter_count: number;
+  orders_created_count: number;
+  skipped_count: number;
+  error: string;
+  started_at: string;
+  completed_at?: string | null;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -486,6 +505,7 @@ function App() {
   const [demoOrders, setDemoOrders] = useState<DemoOrder[]>([]);
   const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
   const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
+  const [demoAutomationStatus, setDemoAutomationStatus] = useState<DemoAutomationRun | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
@@ -788,22 +808,45 @@ function App() {
 
   async function loadDemoTrading() {
     try {
-      const [summaryResponse, ordersResponse, openPositionsResponse, closedPositionsResponse] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/demo/summary`),
-        fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
-        fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
-        fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
-      ]);
+      const [summaryResponse, ordersResponse, openPositionsResponse, closedPositionsResponse, automationResponse] =
+        await Promise.all([
+          fetch(`${apiBaseUrl}/api/demo/summary`),
+          fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
+          fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
+          fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
+          fetch(`${apiBaseUrl}/api/demo/automation/status`),
+        ]);
       if (!summaryResponse.ok) throw new Error(await readError(summaryResponse));
       if (!ordersResponse.ok) throw new Error(await readError(ordersResponse));
       if (!openPositionsResponse.ok) throw new Error(await readError(openPositionsResponse));
       if (!closedPositionsResponse.ok) throw new Error(await readError(closedPositionsResponse));
+      if (!automationResponse.ok) throw new Error(await readError(automationResponse));
       setDemoSummary(await summaryResponse.json());
       setDemoOrders(await ordersResponse.json());
       setDemoOpenPositions(await openPositionsResponse.json());
       setDemoClosedPositions(await closedPositionsResponse.json());
+      setDemoAutomationStatus(await automationResponse.json());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load demo trading ledger.");
+    }
+  }
+
+  async function runDemoAutomation() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/automation/run`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as DemoAutomationRun;
+      setDemoAutomationStatus(data);
+      setMessage(
+        `Automation ${formatStatus(data.status)}: ${formatNumber(data.fresh_hit_count)} fresh hit(s), ${formatNumber(data.orders_created_count)} order(s).`,
+      );
+      await loadDemoTrading();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to run demo automation.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1505,9 +1548,23 @@ function App() {
           <StatusRow label="Closed positions" value={formatNumber(demoSummary?.closed_positions)} />
           <StatusRow label="Rejected orders" value={formatNumber(demoSummary?.rejected_orders)} />
           <StatusRow label="Updated" value={formatDate(demoSummary?.updated_at)} />
+          <StatusRow label="Automation" value={formatStatus(demoAutomationStatus?.status)} />
+          <StatusRow label="Latest trade date" value={demoAutomationStatus?.latest_trading_date ?? "-"} />
+          <StatusRow label="Fresh hits" value={formatNumber(demoAutomationStatus?.fresh_hit_count)} />
+          <StatusRow label="AI reviewed" value={formatNumber(demoAutomationStatus?.ai_reviewed_count)} />
+          <StatusRow label="Auto orders" value={formatNumber(demoAutomationStatus?.orders_created_count)} />
         </dl>
+        {demoAutomationStatus?.reason || demoAutomationStatus?.error ? (
+          <p className={demoAutomationStatus.error ? "error-text" : "muted"}>
+            {demoAutomationStatus.error || demoAutomationStatus.reason}
+          </p>
+        ) : null}
 
         <div className="button-row">
+          <button onClick={runDemoAutomation} disabled={busy}>
+            <Bot size={17} />
+            Run automation now
+          </button>
           <button onClick={refreshDemoTrading} disabled={busy}>
             <RefreshCcw size={17} />
             Refresh demo lifecycle
