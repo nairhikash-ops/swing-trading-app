@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai_credentials import AiCredentialService, AiCredentialStore
 from app.ai_reviews import AiSignalReviewService
+from app.candlesticks import CandlestickService
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
@@ -20,8 +21,9 @@ from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
 from app.support_resistance import SupportResistanceService
 from app.schemas import (
-    DailyCandleItem,
     AiSignalReviewResponse,
+    CandlestickReportResponse,
+    DailyCandleItem,
     DemoAccountSummary,
     DemoAutomationRunResponse,
     DemoLedgerResetResponse,
@@ -146,6 +148,10 @@ def build_support_resistance_service(settings: Settings) -> SupportResistanceSer
     return SupportResistanceService(TokenStore(settings.database_path))
 
 
+def build_candlestick_service(settings: Settings) -> CandlestickService:
+    return CandlestickService(TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -170,6 +176,7 @@ async def lifespan(app: FastAPI):
     watchlist_service = build_watchlist_service(settings, demo_trading_service)
     regime_service = build_regime_service(settings)
     support_resistance_service = build_support_resistance_service(settings)
+    candlestick_service = build_candlestick_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -195,6 +202,7 @@ async def lifespan(app: FastAPI):
     app.state.watchlist_service = watchlist_service
     app.state.regime_service = regime_service
     app.state.support_resistance_service = support_resistance_service
+    app.state.candlestick_service = candlestick_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -277,6 +285,10 @@ def get_regime_service_dep() -> StockRegimeService:
 
 def get_support_resistance_service_dep() -> SupportResistanceService:
     return app.state.support_resistance_service
+
+
+def get_candlestick_service_dep() -> CandlestickService:
+    return app.state.candlestick_service
 
 
 def get_settings_dep() -> Settings:
@@ -638,6 +650,15 @@ async def technical_support_resistance(
     return SupportResistanceReportResponse(
         **support_resistance_service.report_for_symbol(symbol=symbol, limit=limit)
     )
+
+
+@app.get("/api/technical/candlesticks", response_model=CandlestickReportResponse)
+async def technical_candlesticks(
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=120, ge=5, le=365),
+    candlestick_service: CandlestickService = Depends(get_candlestick_service_dep),
+) -> CandlestickReportResponse:
+    return CandlestickReportResponse(**candlestick_service.report_for_symbol(symbol=symbol, limit=limit))
 
 
 @app.get("/api/demo/summary", response_model=DemoAccountSummary)

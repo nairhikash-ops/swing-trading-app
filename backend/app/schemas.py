@@ -478,6 +478,37 @@ class SupportResistanceReportResponse(BaseModel):
     resistances: list[SupportResistanceLevelItem]
 
 
+class CandlestickItem(BaseModel):
+    trading_date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    direction: Literal["green", "red", "flat"]
+    body_percent: float
+    upper_wick_percent: float
+    lower_wick_percent: float
+    range_amount: float
+    patterns: list[str]
+    indecision_score: float
+
+
+class CandlestickReportResponse(BaseModel):
+    symbol: str
+    instrument_id: int | None = None
+    security_id: str
+    isin: str
+    display_name: str
+    status: str
+    generated_at: datetime
+    candle_count: int
+    latest_date: str
+    latest_patterns: list[str]
+    pattern_counts: dict[str, int]
+    items: list[CandlestickItem]
+
+
 class DemoOrderFromSignalRequest(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
     risk_reward: float | None = Field(default=None, ge=1.0, le=10.0)
