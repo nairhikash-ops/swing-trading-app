@@ -9,6 +9,7 @@ from app.config import Settings
 from app.crypto import TokenCrypto
 from app.learning import LearningStore
 from app.store import TokenStore
+from app.support_resistance import detect_support_resistance
 from app.timezone import now_utc
 
 
@@ -343,6 +344,7 @@ def build_review_context(hit: dict[str, Any], candles: list[dict[str, Any]]) -> 
     avg_volume_20 = sum(volumes[-20:]) / min(len(volumes), 20)
     low_45 = min(lows[-45:]) if len(lows) >= 45 else min(lows)
     high_45 = max(highs[-45:]) if len(highs) >= 45 else max(highs)
+    support_resistance = detect_support_resistance(candles, max_levels=5)
     return {
         "review_mode": "alert_time_only_no_future_candles",
         "signal": {
@@ -368,10 +370,17 @@ def build_review_context(hit: dict[str, Any], candles: list[dict[str, Any]]) -> 
             "latest_close": closes[-1],
             "low_45": low_45,
             "high_45": high_45,
+            "nearest_support": support_resistance["nearest_support"],
+            "nearest_resistance": support_resistance["nearest_resistance"],
             "move_from_45d_low_percent": ((trigger_close - low_45) / low_45) * 100 if low_45 > 0 else 0,
             "distance_to_45d_high_percent": ((high_45 - trigger_close) / high_45) * 100 if high_45 > 0 else 0,
             "avg_volume_20": avg_volume_20,
             "trigger_volume_vs_20d_avg": float(hit["trigger_volume"]) / avg_volume_20 if avg_volume_20 > 0 else 0,
+        },
+        "support_resistance": {
+            "method": "classic_swing_high_low_clustering",
+            "supports": support_resistance["supports"],
+            "resistances": support_resistance["resistances"],
         },
         "recent_candles": [
             {

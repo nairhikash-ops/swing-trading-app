@@ -9,6 +9,7 @@ from app.ai_reviews import (
 from app.config import Settings
 from app.learning import LearningStore
 from app.store import TokenStore
+from app.support_resistance import detect_support_resistance
 
 
 LOCAL_DISCIPLINE_PROVIDER = "local"
@@ -86,6 +87,9 @@ def compute_discipline_features(hit: dict[str, Any], candles: list[dict[str, Any
     low_45 = min(lows[-45:])
     high_90 = max(highs[-90:]) if len(highs) >= 90 else high_45
     avg_volume_20 = average(volumes[-20:])
+    support_resistance = detect_support_resistance(candles, max_levels=5)
+    nearest_support = support_resistance["nearest_support"]
+    nearest_resistance = support_resistance["nearest_resistance"]
     recent_return_5d = percent_change(closes[-6], closes[-1]) if len(closes) >= 6 else 0
     recent_return_20d = percent_change(closes[-21], closes[-1]) if len(closes) >= 21 else 0
     stop_loss = max(0.01, anchor_low - atr_14 * 0.25)
@@ -111,6 +115,11 @@ def compute_discipline_features(hit: dict[str, Any], candles: list[dict[str, Any
         "low_45": low_45,
         "high_45": high_45,
         "high_90": high_90,
+        "nearest_support_price": nearest_support["price"] if nearest_support else None,
+        "nearest_support_distance_percent": nearest_support["distance_percent"] if nearest_support else None,
+        "nearest_resistance_price": nearest_resistance["price"] if nearest_resistance else None,
+        "nearest_resistance_distance_percent": nearest_resistance["distance_percent"] if nearest_resistance else None,
+        "support_resistance": support_resistance,
         "move_from_45d_low_percent": percent_change(low_45, trigger_close),
         "distance_to_45d_high_percent": percent_change(trigger_close, high_45),
         "distance_to_90d_high_percent": percent_change(trigger_close, high_90),
@@ -171,8 +180,8 @@ def build_local_review_result(hit: dict[str, Any], features: dict[str, Any]) -> 
         reasons.append("price is stretched, so chasing is not disciplined")
 
     confidence = min(max(confidence, 0), 100)
-    support_price = float(features["low_45"])
-    resistance_price = float(features["high_45"])
+    support_price = optional_feature_float(features.get("nearest_support_price")) or float(features["low_45"])
+    resistance_price = optional_feature_float(features.get("nearest_resistance_price")) or float(features["high_45"])
 
     if risk_percent > 16 or close_strength < 0.35:
         return GeminiReviewResult(
@@ -236,6 +245,12 @@ def local_summary(hit: dict[str, Any], decision: str, reasons: list[str]) -> str
 
 def average(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def optional_feature_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def percent_change(base: float | None, value: float | None) -> float:

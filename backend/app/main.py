@@ -18,6 +18,7 @@ from app.learning import LearningStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
+from app.support_resistance import SupportResistanceService
 from app.schemas import (
     DailyCandleItem,
     AiSignalReviewResponse,
@@ -47,6 +48,7 @@ from app.schemas import (
     RenewResponse,
     StockRegimeItem,
     StockRegimeReportResponse,
+    SupportResistanceReportResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
     UniverseConstituentItem,
@@ -140,6 +142,10 @@ def build_regime_service(settings: Settings) -> StockRegimeService:
     return StockRegimeService(TokenStore(settings.database_path))
 
 
+def build_support_resistance_service(settings: Settings) -> SupportResistanceService:
+    return SupportResistanceService(TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -163,6 +169,7 @@ async def lifespan(app: FastAPI):
     learning_store = build_learning_store(settings)
     watchlist_service = build_watchlist_service(settings, demo_trading_service)
     regime_service = build_regime_service(settings)
+    support_resistance_service = build_support_resistance_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -187,6 +194,7 @@ async def lifespan(app: FastAPI):
     app.state.learning_store = learning_store
     app.state.watchlist_service = watchlist_service
     app.state.regime_service = regime_service
+    app.state.support_resistance_service = support_resistance_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -265,6 +273,10 @@ def get_watchlist_service_dep() -> WatchlistService:
 
 def get_regime_service_dep() -> StockRegimeService:
     return app.state.regime_service
+
+
+def get_support_resistance_service_dep() -> SupportResistanceService:
+    return app.state.support_resistance_service
 
 
 def get_settings_dep() -> Settings:
@@ -615,6 +627,17 @@ async def regimes_nifty_500_history(
         StockRegimeItem.model_validate(item)
         for item in regime_service.history_for_symbol(symbol=symbol, limit=limit)
     ]
+
+
+@app.get("/api/technical/support-resistance", response_model=SupportResistanceReportResponse)
+async def technical_support_resistance(
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=365, ge=20, le=365),
+    support_resistance_service: SupportResistanceService = Depends(get_support_resistance_service_dep),
+) -> SupportResistanceReportResponse:
+    return SupportResistanceReportResponse(
+        **support_resistance_service.report_for_symbol(symbol=symbol, limit=limit)
+    )
 
 
 @app.get("/api/demo/summary", response_model=DemoAccountSummary)

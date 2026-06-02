@@ -438,6 +438,38 @@ class StockRegimeReportResponse(BaseModel):
     items: list[StockRegimeItem]
 
 
+class SupportResistanceLevelItem(BaseModel):
+    price: float
+    role: Literal["support", "resistance"]
+    touch_count: int
+    first_touch_date: str
+    last_touch_date: str
+    recency_sessions: int
+    distance_percent: float
+    strength: float
+    sources: list[str]
+
+
+class SupportResistanceReportResponse(BaseModel):
+    symbol: str
+    instrument_id: int | None = None
+    security_id: str
+    isin: str
+    display_name: str
+    status: str
+    generated_at: datetime
+    candle_count: int
+    latest_date: str
+    latest_close: float
+    pivot_left: int
+    pivot_right: int
+    cluster_tolerance_percent: float
+    nearest_support: SupportResistanceLevelItem | None = None
+    nearest_resistance: SupportResistanceLevelItem | None = None
+    supports: list[SupportResistanceLevelItem]
+    resistances: list[SupportResistanceLevelItem]
+
+
 class DemoOrderFromSignalRequest(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
     risk_reward: float | None = Field(default=None, ge=1.0, le=10.0)
