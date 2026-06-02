@@ -5,12 +5,13 @@ from typing import Any
 from app.config import Settings
 from app.historical_data import HistoricalWindow, historical_window
 from app.index_universe import NIFTY_500_INDEX_NAME
+from app.regime import classify_regime_series
 from app.store import TokenStore
 from app.timezone import now_utc
 
 
 DRISHTI_SIGNAL_01_ID = "DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL"
-DRISHTI_SIGNAL_01_NAME = "Signal 01: Local Low Reversal"
+DRISHTI_SIGNAL_01_NAME = "Signal 01: Downtrend Local Low Reversal"
 
 
 class DrishtiSignalStore:
@@ -82,6 +83,11 @@ class DrishtiSignalStore:
                     anchor_low REAL NOT NULL,
                     anchor_close REAL NOT NULL,
                     anchor_volume REAL NOT NULL,
+                    anchor_regime TEXT NOT NULL DEFAULT '',
+                    anchor_regime_confidence REAL NOT NULL DEFAULT 0,
+                    anchor_sma_50 REAL NOT NULL DEFAULT 0,
+                    anchor_sma_50_slope_10d_percent REAL NOT NULL DEFAULT 0,
+                    anchor_range_position REAL NOT NULL DEFAULT 0,
                     trigger_open REAL NOT NULL,
                     trigger_high REAL NOT NULL,
                     trigger_low REAL NOT NULL,
@@ -99,6 +105,25 @@ class DrishtiSignalStore:
                 )
                 """
             )
+            existing_hit_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(drishti_signal_hits)").fetchall()
+            }
+            for column_name, ddl in {
+                "anchor_regime": "ALTER TABLE drishti_signal_hits ADD COLUMN anchor_regime TEXT NOT NULL DEFAULT ''",
+                "anchor_regime_confidence": (
+                    "ALTER TABLE drishti_signal_hits ADD COLUMN anchor_regime_confidence REAL NOT NULL DEFAULT 0"
+                ),
+                "anchor_sma_50": "ALTER TABLE drishti_signal_hits ADD COLUMN anchor_sma_50 REAL NOT NULL DEFAULT 0",
+                "anchor_sma_50_slope_10d_percent": (
+                    "ALTER TABLE drishti_signal_hits ADD COLUMN anchor_sma_50_slope_10d_percent REAL NOT NULL DEFAULT 0"
+                ),
+                "anchor_range_position": (
+                    "ALTER TABLE drishti_signal_hits ADD COLUMN anchor_range_position REAL NOT NULL DEFAULT 0"
+                ),
+            }.items():
+                if column_name not in existing_hit_columns:
+                    conn.execute(ddl)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_drishti_runs_signal ON drishti_signal_runs(signal_id, universe_name)"
             )
@@ -118,6 +143,7 @@ class DrishtiSignalStore:
                 "Trigger close is above anchor high.",
                 "Trigger volume is at least 1.2x anchor volume.",
                 "Trigger volume is at least average 20-session volume.",
+                "Anchor candle regime is DOWNTREND by SMA50, SMA50 slope, and 45-session range position.",
             ],
         }
         with self._connect() as conn:
@@ -138,7 +164,7 @@ class DrishtiSignalStore:
                 (
                     DRISHTI_SIGNAL_01_ID,
                     DRISHTI_SIGNAL_01_NAME,
-                    "Early-watch signal for a fresh local low followed by immediate upside demand and volume confirmation.",
+                    "Early-watch signal for a stock already in downtrend that makes a fresh local low, then shows immediate upside demand and volume confirmation.",
                     json.dumps(config, sort_keys=True),
                     timestamp,
                     timestamp,
@@ -251,12 +277,14 @@ class DrishtiSignalStore:
                         run_id, signal_id, index_constituent_id, instrument_id, company_name,
                         industry, symbol, isin, security_id, anchor_date, trigger_date,
                         anchor_open, anchor_high, anchor_low, anchor_close, anchor_volume,
+                        anchor_regime, anchor_regime_confidence, anchor_sma_50,
+                        anchor_sma_50_slope_10d_percent, anchor_range_position,
                         trigger_open, trigger_high, trigger_low, trigger_close, trigger_volume,
                         volume_ratio_1d, volume_vs_sma, close_to_anchor_high_ratio,
                         future_high, future_high_date, outcome_from_trigger_percent,
                         outcome_from_anchor_percent, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -275,6 +303,11 @@ class DrishtiSignalStore:
                         hit["anchor_low"],
                         hit["anchor_close"],
                         hit["anchor_volume"],
+                        hit["anchor_regime"],
+                        hit["anchor_regime_confidence"],
+                        hit["anchor_sma_50"],
+                        hit["anchor_sma_50_slope_10d_percent"],
+                        hit["anchor_range_position"],
                         hit["trigger_open"],
                         hit["trigger_high"],
                         hit["trigger_low"],
@@ -430,6 +463,10 @@ def detect_signal_01_local_low_reversal(
     if len(candles) < max(lookback_sessions + 1, volume_sma_sessions + 1):
         return []
 
+    regime_by_date = {
+        row["trading_date"]: row
+        for row in classify_regime_series(candles)
+    }
     hits: list[dict[str, Any]] = []
     for trigger_index in range(1, len(candles)):
         anchor_index = trigger_index - 1
@@ -451,6 +488,9 @@ def detect_signal_01_local_low_reversal(
         if anchor_low != min(float(candle["low"]) for candle in lookback):
             continue
         if anchor_close >= anchor_open:
+            continue
+        anchor_regime = regime_by_date.get(str(anchor["trading_date"]))
+        if anchor_regime is None or anchor_regime["regime"] != "DOWNTREND":
             continue
         if trigger_close <= trigger_open:
             continue
@@ -481,6 +521,11 @@ def detect_signal_01_local_low_reversal(
                 "anchor_low": anchor_low,
                 "anchor_close": anchor_close,
                 "anchor_volume": anchor_volume,
+                "anchor_regime": anchor_regime["regime"],
+                "anchor_regime_confidence": anchor_regime["confidence"],
+                "anchor_sma_50": anchor_regime["sma_50"],
+                "anchor_sma_50_slope_10d_percent": anchor_regime["sma_50_slope_10d_percent"],
+                "anchor_range_position": anchor_regime["range_position"],
                 "trigger_open": trigger_open,
                 "trigger_high": float(trigger["high"]),
                 "trigger_low": float(trigger["low"]),
@@ -546,6 +591,11 @@ def drishti_hit_row_to_dict(row) -> dict[str, Any]:
         "anchor_low": row["anchor_low"],
         "anchor_close": row["anchor_close"],
         "anchor_volume": row["anchor_volume"],
+        "anchor_regime": row["anchor_regime"],
+        "anchor_regime_confidence": row["anchor_regime_confidence"],
+        "anchor_sma_50": row["anchor_sma_50"],
+        "anchor_sma_50_slope_10d_percent": row["anchor_sma_50_slope_10d_percent"],
+        "anchor_range_position": row["anchor_range_position"],
         "trigger_open": row["trigger_open"],
         "trigger_high": row["trigger_high"],
         "trigger_low": row["trigger_low"],

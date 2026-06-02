@@ -355,6 +355,11 @@ class DrishtiSignalHitItem(BaseModel):
     anchor_low: float
     anchor_close: float
     anchor_volume: float
+    anchor_regime: str
+    anchor_regime_confidence: float
+    anchor_sma_50: float
+    anchor_sma_50_slope_10d_percent: float
+    anchor_range_position: float
     trigger_open: float
     trigger_high: float
     trigger_low: float

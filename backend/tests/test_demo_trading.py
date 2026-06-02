@@ -59,33 +59,34 @@ def seed_symbol(universe_store, instrument_store, isin: str = "INE000000001", sy
 
 def signal_candles(start_date: date, include_next_session: bool = True):
     candles = []
-    for index in range(44):
+    for index in range(59):
+        close = 180.0 - index * 0.8
         candles.append(
             {
                 "trading_date": date.fromordinal(start_date.toordinal() + index).isoformat(),
-                "open": 150.0 - index * 0.2,
-                "high": 152.0 - index * 0.2,
-                "low": 110.0 + index,
-                "close": 151.0 - index * 0.2,
+                "open": close + 0.5,
+                "high": close + 2.0,
+                "low": close - 2.0,
+                "close": close,
                 "volume": 1000.0,
             }
         )
     candles.extend(
         [
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 44).isoformat(),
-                "open": 105.0,
-                "high": 106.0,
-                "low": 90.0,
-                "close": 92.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 59).isoformat(),
+                "open": 108.0,
+                "high": 110.0,
+                "low": 100.0,
+                "close": 102.0,
                 "volume": 1000.0,
             },
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 45).isoformat(),
-                "open": 96.0,
-                "high": 115.0,
-                "low": 95.0,
-                "close": 112.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 60).isoformat(),
+                "open": 106.0,
+                "high": 126.0,
+                "low": 105.0,
+                "close": 124.0,
                 "volume": 1500.0,
             },
         ]
@@ -93,11 +94,11 @@ def signal_candles(start_date: date, include_next_session: bool = True):
     if include_next_session:
         candles.append(
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 46).isoformat(),
-                "open": 95.0,
-                "high": 106.0,
-                "low": 94.0,
-                "close": 104.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 61).isoformat(),
+                "open": 101.0,
+                "high": 104.0,
+                "low": 100.5,
+                "close": 103.0,
                 "volume": 1200.0,
             }
         )
@@ -142,13 +143,13 @@ def test_demo_order_from_drishti_hit_fills_next_session_and_tracks_target_exit(t
 
     assert result["order"]["status"] == "filled"
     assert result["order"]["filled_date"] == expected_entry_date
-    assert result["order"]["filled_price"] == 95.0
-    assert result["order"]["stop_loss"] == 90.0
-    assert result["order"]["target_price"] == 105.0
+    assert result["order"]["filled_price"] == 101.0
+    assert result["order"]["stop_loss"] == 100.0
+    assert result["order"]["target_price"] == 103.0
     assert result["position"]["status"] == "closed"
     assert result["position"]["exit_reason"] == "TARGET"
-    assert result["position"]["realized_pnl"] == 10.0
-    assert result["summary"]["realized_pnl"] == 10.0
+    assert result["position"]["realized_pnl"] == 2.0
+    assert result["summary"]["realized_pnl"] == 2.0
 
 
 def test_demo_order_creation_is_idempotent_for_same_signal_hit(tmp_path):

@@ -62,41 +62,42 @@ def seed_symbol(universe_store, instrument_store, isin: str = "INE000000001", sy
 
 def sample_signal_candles(start_date: date):
     candles = []
-    for index in range(44):
+    for index in range(59):
+        close = 180.0 - index * 0.8
         candles.append(
             {
                 "trading_date": date.fromordinal(start_date.toordinal() + index).isoformat(),
-                "open": 150.0 - index * 0.2,
-                "high": 152.0 - index * 0.2,
-                "low": 110.0 + index,
-                "close": 151.0 - index * 0.2,
+                "open": close + 0.5,
+                "high": close + 2.0,
+                "low": close - 2.0,
+                "close": close,
                 "volume": 1000.0,
             }
         )
     candles.extend(
         [
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 44).isoformat(),
-                "open": 105.0,
-                "high": 106.0,
-                "low": 90.0,
-                "close": 92.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 59).isoformat(),
+                "open": 108.0,
+                "high": 110.0,
+                "low": 100.0,
+                "close": 102.0,
                 "volume": 1000.0,
             },
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 45).isoformat(),
-                "open": 96.0,
-                "high": 115.0,
-                "low": 95.0,
-                "close": 112.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 60).isoformat(),
+                "open": 106.0,
+                "high": 126.0,
+                "low": 105.0,
+                "close": 124.0,
                 "volume": 1500.0,
             },
             {
-                "trading_date": date.fromordinal(start_date.toordinal() + 46).isoformat(),
-                "open": 113.0,
-                "high": 130.0,
-                "low": 110.0,
-                "close": 128.0,
+                "trading_date": date.fromordinal(start_date.toordinal() + 61).isoformat(),
+                "open": 125.0,
+                "high": 145.0,
+                "low": 120.0,
+                "close": 140.0,
                 "volume": 1200.0,
             },
         ]
@@ -123,18 +124,19 @@ def test_signal_01_detects_volume_confirmed_local_low_reversal():
     hits = detect_signal_01_local_low_reversal(candles)
 
     assert len(hits) == 1
-    assert hits[0]["anchor_date"] == "2026-02-14"
-    assert hits[0]["trigger_date"] == "2026-02-15"
-    assert hits[0]["anchor_low"] == 90.0
-    assert hits[0]["trigger_close"] == 112.0
-    assert hits[0]["future_high"] == 130.0
+    assert hits[0]["anchor_date"] == "2026-03-01"
+    assert hits[0]["trigger_date"] == "2026-03-02"
+    assert hits[0]["anchor_low"] == 100.0
+    assert hits[0]["trigger_close"] == 124.0
+    assert hits[0]["future_high"] == 145.0
+    assert hits[0]["anchor_regime"] == "DOWNTREND"
     assert round(hits[0]["volume_ratio_1d"], 2) == 1.5
-    assert round(hits[0]["outcome_from_trigger_percent"], 2) == 16.07
+    assert round(hits[0]["outcome_from_trigger_percent"], 2) == 16.94
 
 
 def test_signal_01_rejects_trigger_without_volume_confirmation():
     candles = sample_signal_candles(date(2026, 1, 1))
-    candles[45]["volume"] = 1100.0
+    candles[60]["volume"] = 1100.0
 
     hits = detect_signal_01_local_low_reversal(candles)
 
@@ -143,6 +145,19 @@ def test_signal_01_rejects_trigger_without_volume_confirmation():
 
 def test_signal_01_requires_full_lookback_before_anchor():
     candles = sample_signal_candles(date(2026, 1, 1))[10:]
+
+    hits = detect_signal_01_local_low_reversal(candles)
+
+    assert hits == []
+
+
+def test_signal_01_requires_anchor_downtrend_context():
+    candles = sample_signal_candles(date(2026, 1, 1))
+    for index in range(59):
+        candles[index]["open"] = 130.0
+        candles[index]["high"] = 132.0
+        candles[index]["low"] = 128.0
+        candles[index]["close"] = 130.0
 
     hits = detect_signal_01_local_low_reversal(candles)
 
@@ -161,8 +176,9 @@ def test_drishti_refresh_stores_signal_definition_and_hits(tmp_path):
     report = DrishtiSignalService(settings, token_store).refresh_nifty_500_signal_01()
 
     assert report["signal_id"] == DRISHTI_SIGNAL_01_ID
-    assert report["signal_name"] == "Signal 01: Local Low Reversal"
+    assert report["signal_name"] == "Signal 01: Downtrend Local Low Reversal"
     assert report["hit_count"] == 1
     assert report["outcome_ge_10_count"] == 1
     assert report["items"][0]["symbol"] == "BEML"
     assert report["items"][0]["security_id"] == "395"
+    assert report["items"][0]["anchor_regime"] == "DOWNTREND"
