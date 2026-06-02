@@ -393,6 +393,46 @@ class DrishtiSignalReportResponse(BaseModel):
     items: list[DrishtiSignalHitItem]
 
 
+class StockRegimeItem(BaseModel):
+    instrument_id: int
+    trading_date: str
+    run_id: int
+    index_constituent_id: int
+    company_name: str
+    industry: str
+    symbol: str
+    isin: str
+    security_id: str
+    regime: Literal["UPTREND", "DOWNTREND", "SIDEWAYS"]
+    confidence: float
+    close: float
+    sma_50: float
+    sma_50_slope_10d_percent: float
+    low_45: float
+    high_45: float
+    range_position: float
+    reason: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class StockRegimeReportResponse(BaseModel):
+    run_id: int | None = None
+    universe_name: str
+    from_date: str
+    to_date_exclusive: str
+    status: str
+    total_symbols: int
+    scanned_symbols: int
+    classified_count: int
+    uptrend_count: int
+    downtrend_count: int
+    sideways_count: int
+    error: str
+    generated_at: datetime
+    items: list[StockRegimeItem]
+
+
 class DemoOrderFromSignalRequest(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
     risk_reward: float | None = Field(default=None, ge=1.0, le=10.0)

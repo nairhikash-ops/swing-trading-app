@@ -17,6 +17,7 @@ from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.learning import LearningStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
+from app.regime import StockRegimeService
 from app.schemas import (
     DailyCandleItem,
     AiSignalReviewResponse,
@@ -44,6 +45,8 @@ from app.schemas import (
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
+    StockRegimeItem,
+    StockRegimeReportResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
     UniverseConstituentItem,
@@ -133,6 +136,10 @@ def build_watchlist_service(settings: Settings, demo_trading_service: DemoTradin
     return WatchlistService(settings, TokenStore(settings.database_path), demo_trading_service)
 
 
+def build_regime_service(settings: Settings) -> StockRegimeService:
+    return StockRegimeService(TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -155,11 +162,13 @@ async def lifespan(app: FastAPI):
     )
     learning_store = build_learning_store(settings)
     watchlist_service = build_watchlist_service(settings, demo_trading_service)
+    regime_service = build_regime_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
         token_service,
         historical_service,
+        regime_service,
         demo_automation_service,
     )
     app.state.settings = settings
@@ -177,6 +186,7 @@ async def lifespan(app: FastAPI):
     app.state.demo_automation_service = demo_automation_service
     app.state.learning_store = learning_store
     app.state.watchlist_service = watchlist_service
+    app.state.regime_service = regime_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -251,6 +261,10 @@ def get_learning_store_dep() -> LearningStore:
 
 def get_watchlist_service_dep() -> WatchlistService:
     return app.state.watchlist_service
+
+
+def get_regime_service_dep() -> StockRegimeService:
+    return app.state.regime_service
 
 
 def get_settings_dep() -> Settings:
@@ -568,6 +582,39 @@ async def drishti_nifty_500_local_low_reversal_refresh(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/regimes/nifty500/latest", response_model=StockRegimeReportResponse | None)
+async def regimes_nifty_500_latest(
+    regime: str | None = Query(default=None, max_length=32),
+    query: str = Query(default="", max_length=64),
+    limit: int = Query(default=500, ge=1, le=1000),
+    regime_service: StockRegimeService = Depends(get_regime_service_dep),
+) -> StockRegimeReportResponse | None:
+    report = regime_service.latest_nifty_500_regimes(regime=regime, query=query, limit=limit)
+    return StockRegimeReportResponse(**report) if report else None
+
+
+@app.post("/api/regimes/nifty500/refresh", response_model=StockRegimeReportResponse)
+async def regimes_nifty_500_refresh(
+    regime_service: StockRegimeService = Depends(get_regime_service_dep),
+) -> StockRegimeReportResponse:
+    try:
+        return StockRegimeReportResponse(**regime_service.refresh_nifty_500_regimes())
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/regimes/nifty500/history", response_model=list[StockRegimeItem])
+async def regimes_nifty_500_history(
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=365, ge=1, le=365),
+    regime_service: StockRegimeService = Depends(get_regime_service_dep),
+) -> list[StockRegimeItem]:
+    return [
+        StockRegimeItem.model_validate(item)
+        for item in regime_service.history_for_symbol(symbol=symbol, limit=limit)
+    ]
 
 
 @app.get("/api/demo/summary", response_model=DemoAccountSummary)

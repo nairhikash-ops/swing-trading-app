@@ -5,6 +5,7 @@ import logging
 from app.config import Settings
 from app.demo_automation import DemoAutomationService
 from app.historical_data import HistoricalDataService
+from app.regime import StockRegimeService
 from app.schemas import TokenStatusResponse
 from app.timezone import now_utc
 from app.token_service import TokenService
@@ -19,11 +20,13 @@ class DataMaintenanceScheduler:
         settings: Settings,
         token_service: TokenService,
         historical_service: HistoricalDataService,
+        regime_service: StockRegimeService | None = None,
         demo_automation_service: DemoAutomationService | None = None,
     ) -> None:
         self.settings = settings
         self.token_service = token_service
         self.historical_service = historical_service
+        self.regime_service = regime_service
         self.demo_automation_service = demo_automation_service
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -55,6 +58,9 @@ class DataMaintenanceScheduler:
 
         retention_result = self.historical_service.prune_retention_window()
         historical_status = await self.historical_service.start_or_resume_nifty_500_fetch()
+        regime_result = None
+        if self.regime_service is not None and can_refresh_regimes(historical_status):
+            regime_result = self.regime_service.refresh_nifty_500_regimes()
         automation_result = None
         if self.demo_automation_service is not None:
             automation_result = await self.demo_automation_service.run_once(historical_status)
@@ -63,6 +69,8 @@ class DataMaintenanceScheduler:
             "renewed": renewed,
             "historical_status": historical_status.get("status"),
             "historical_run_id": historical_status.get("id"),
+            "regime_status": regime_result.get("status") if regime_result else None,
+            "regime_run_id": regime_result.get("run_id") if regime_result else None,
             "demo_automation_status": automation_result.get("status") if automation_result else None,
             "demo_automation_run_id": automation_result.get("id") if automation_result else None,
             **retention_result,
@@ -96,3 +104,7 @@ def token_can_fetch(status: TokenStatusResponse) -> bool:
     if status.expiry_time is not None and status.expiry_time <= now_utc():
         return False
     return True
+
+
+def can_refresh_regimes(historical_status: dict[str, object]) -> bool:
+    return historical_status.get("status") in {"up_to_date", "completed", "completed_with_errors"}
