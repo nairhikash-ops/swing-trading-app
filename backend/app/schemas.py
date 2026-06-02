@@ -440,7 +440,12 @@ class StockRegimeReportResponse(BaseModel):
 
 class SupportResistanceLevelItem(BaseModel):
     price: float
+    mid_price: float
+    zone_low: float
+    zone_high: float
+    zone_width: float
     role: Literal["support", "resistance"]
+    inside_zone: bool
     touch_count: int
     first_touch_date: str
     last_touch_date: str
@@ -461,9 +466,12 @@ class SupportResistanceReportResponse(BaseModel):
     candle_count: int
     latest_date: str
     latest_close: float
+    atr_14: float
     pivot_left: int
     pivot_right: int
     cluster_tolerance_percent: float
+    zone_percent: float
+    zone_atr_multiplier: float
     nearest_support: SupportResistanceLevelItem | None = None
     nearest_resistance: SupportResistanceLevelItem | None = None
     supports: list[SupportResistanceLevelItem]

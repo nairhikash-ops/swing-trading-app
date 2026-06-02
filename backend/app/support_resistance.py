@@ -7,6 +7,8 @@ from app.timezone import now_utc
 DEFAULT_PIVOT_LEFT = 2
 DEFAULT_PIVOT_RIGHT = 2
 DEFAULT_CLUSTER_TOLERANCE_PERCENT = 1.5
+DEFAULT_ZONE_PERCENT = 1.5
+DEFAULT_ZONE_ATR_MULTIPLIER = 0.5
 
 
 class SupportResistanceStore:
@@ -80,11 +82,12 @@ def detect_support_resistance(
 
     current = candles[-1]
     current_close = float(current["close"])
+    atr_14 = average_true_range(candles, 14)
     pivots = find_price_pivots(candles, pivot_left=pivot_left, pivot_right=pivot_right)
     pivots.extend(recent_extreme_pivots(candles))
     clusters = cluster_pivots(pivots, cluster_tolerance_percent=cluster_tolerance_percent)
-    levels = [level_from_cluster(cluster, current_close, len(candles)) for cluster in clusters]
-    levels = [level for level in levels if level["price"] > 0]
+    levels = [level_from_cluster(cluster, current_close, len(candles), atr_14) for cluster in clusters]
+    levels = [level for level in levels if level["mid_price"] > 0]
     supports = sorted(
         [level for level in levels if level["role"] == "support"],
         key=lambda item: (item["distance_percent"], -item["strength"]),
@@ -104,9 +107,12 @@ def detect_support_resistance(
         "candle_count": len(candles),
         "latest_date": current["trading_date"],
         "latest_close": current_close,
+        "atr_14": atr_14,
         "pivot_left": pivot_left,
         "pivot_right": pivot_right,
         "cluster_tolerance_percent": cluster_tolerance_percent,
+        "zone_percent": DEFAULT_ZONE_PERCENT,
+        "zone_atr_multiplier": DEFAULT_ZONE_ATR_MULTIPLIER,
         "nearest_support": supports[0] if supports else None,
         "nearest_resistance": resistances[0] if resistances else None,
         "supports": supports,
@@ -177,21 +183,36 @@ def cluster_pivots(pivots: list[dict[str, Any]], cluster_tolerance_percent: floa
     return clusters
 
 
-def level_from_cluster(cluster: dict[str, Any], current_close: float, candle_count: int) -> dict[str, Any]:
+def level_from_cluster(
+    cluster: dict[str, Any],
+    current_close: float,
+    candle_count: int,
+    atr_14: float,
+) -> dict[str, Any]:
     touches = cluster["touches"]
     latest_touch = max(touches, key=lambda item: item["index"])
     first_touch = min(touches, key=lambda item: item["index"])
-    price = float(cluster["price"])
-    role = "support" if price <= current_close else "resistance"
+    mid_price = float(cluster["price"])
+    zone_width = max(mid_price * (DEFAULT_ZONE_PERCENT / 100), atr_14 * DEFAULT_ZONE_ATR_MULTIPLIER)
+    zone_low = max(0, mid_price - zone_width)
+    zone_high = mid_price + zone_width
+    inside_zone = zone_low <= current_close <= zone_high
+    role = "support" if mid_price <= current_close else "resistance"
     recency_sessions = max(0, candle_count - 1 - int(latest_touch["index"]))
-    distance = (
-        ((current_close - price) / current_close) * 100
-        if role == "support" and current_close > 0
-        else ((price - current_close) / current_close) * 100 if current_close > 0 else 0
-    )
+    if inside_zone or current_close <= 0:
+        distance = 0
+    elif role == "support":
+        distance = ((current_close - zone_high) / current_close) * 100
+    else:
+        distance = ((zone_low - current_close) / current_close) * 100
     return {
-        "price": round(price, 2),
+        "price": round(mid_price, 2),
+        "mid_price": round(mid_price, 2),
+        "zone_low": round(zone_low, 2),
+        "zone_high": round(zone_high, 2),
+        "zone_width": round(zone_width, 2),
         "role": role,
+        "inside_zone": inside_zone,
         "touch_count": len(touches),
         "first_touch_date": first_touch["date"],
         "last_touch_date": latest_touch["date"],
@@ -220,6 +241,19 @@ def support_resistance_strength(touch_count: int, recency_sessions: int) -> floa
     return round(min(100, touch_score + recency_score), 2)
 
 
+def average_true_range(candles: list[dict[str, Any]], period: int) -> float:
+    if len(candles) < 2:
+        return 0.0
+    ranges: list[float] = []
+    start = max(1, len(candles) - period)
+    for index in range(start, len(candles)):
+        high = float(candles[index]["high"])
+        low = float(candles[index]["low"])
+        previous_close = float(candles[index - 1]["close"])
+        ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+    return sum(ranges) / len(ranges) if ranges else 0.0
+
+
 def empty_support_resistance_report(symbol: str, status: str) -> dict[str, Any]:
     return {
         "symbol": symbol,
@@ -232,9 +266,12 @@ def empty_support_resistance_report(symbol: str, status: str) -> dict[str, Any]:
         "candle_count": 0,
         "latest_date": "",
         "latest_close": 0,
+        "atr_14": 0,
         "pivot_left": DEFAULT_PIVOT_LEFT,
         "pivot_right": DEFAULT_PIVOT_RIGHT,
         "cluster_tolerance_percent": DEFAULT_CLUSTER_TOLERANCE_PERCENT,
+        "zone_percent": DEFAULT_ZONE_PERCENT,
+        "zone_atr_multiplier": DEFAULT_ZONE_ATR_MULTIPLIER,
         "nearest_support": None,
         "nearest_resistance": None,
         "supports": [],

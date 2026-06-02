@@ -92,10 +92,15 @@ def test_detect_support_resistance_clusters_nearest_levels():
     assert report["status"] == "ok"
     assert report["nearest_support"]["role"] == "support"
     assert report["nearest_resistance"]["role"] == "resistance"
-    assert report["nearest_support"]["price"] < report["latest_close"]
-    assert report["nearest_resistance"]["price"] > report["latest_close"]
+    assert report["nearest_support"]["zone_low"] < report["nearest_support"]["zone_high"]
+    assert report["nearest_resistance"]["zone_low"] < report["nearest_resistance"]["zone_high"]
+    assert report["nearest_support"]["mid_price"] < report["latest_close"]
+    assert report["nearest_resistance"]["mid_price"] > report["latest_close"]
     assert report["nearest_support"]["touch_count"] >= 2
     assert report["nearest_resistance"]["touch_count"] >= 2
+    assert report["atr_14"] > 0
+    assert report["zone_percent"] == 1.5
+    assert report["zone_atr_multiplier"] == 0.5
 
 
 def test_support_resistance_service_reads_symbol_candles(tmp_path):
@@ -118,3 +123,4 @@ def test_support_resistance_service_reads_symbol_candles(tmp_path):
     assert report["security_id"] == "395"
     assert report["nearest_support"] is not None
     assert report["nearest_resistance"] is not None
+    assert "zone_low" in report["nearest_support"]
