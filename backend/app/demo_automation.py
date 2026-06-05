@@ -246,7 +246,8 @@ class DemoAutomationService:
                 base_result["ai_reviewed_count"] += 1
                 if review.get("decision") != "ENTER":
                     self.watchlist_service.upsert_review_for_hit(hit, review)
-                    base_result["skipped_count"] += 1
+                    if review.get("decision") == "IGNORE":
+                        base_result["skipped_count"] += 1
                     continue
                 base_result["enter_count"] += 1
                 self.watchlist_service.upsert_review_for_hit(hit, review)

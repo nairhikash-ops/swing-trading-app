@@ -227,6 +227,7 @@ async def test_demo_automation_tracks_recent_signal_until_confirmation(tmp_path)
     assert result["ai_reviewed_count"] == 1
     assert result["enter_count"] == 0
     assert result["orders_created_count"] == 1
+    assert result["skipped_count"] == 0
     with token_store._connect() as conn:
         candidate = conn.execute("SELECT * FROM watchlist_candidates").fetchone()
     orders = demo_service.orders()
