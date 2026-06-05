@@ -20,19 +20,40 @@ def make_stores(tmp_path):
     )
 
 
-def seed_symbol(universe_store, instrument_store, isin: str = "INE000000001", symbol: str = "BEML"):
+def seed_symbol(
+    universe_store,
+    instrument_store,
+    isin: str = "INE000000001",
+    symbol: str = "BEML",
+    security_id: str = "395",
+):
+    seed_symbols(
+        universe_store,
+        instrument_store,
+        [
+            {
+                "isin": isin,
+                "symbol": symbol,
+                "security_id": security_id,
+            }
+        ],
+    )
+
+
+def seed_symbols(universe_store, instrument_store, symbols: list[dict[str, str]]):
     universe_run_id = universe_store.start_import("NIFTY_500", "source.csv", ["Company Name"])
     universe_store.upsert_constituents(
         universe_run_id,
         "NIFTY_500",
         [
             {
-                "COMPANY NAME": f"{symbol} Ltd.",
+                "COMPANY NAME": f"{item['symbol']} Ltd.",
                 "INDUSTRY": "Capital Goods",
-                "SYMBOL": symbol,
+                "SYMBOL": item["symbol"],
                 "SERIES": "EQ",
-                "ISIN CODE": isin,
+                "ISIN CODE": item["isin"],
             }
+            for item in symbols
         ],
     )
     instrument_run_id = instrument_store.start_import("dhan.csv", "NSE", "E", ["EXCH_ID"])
@@ -42,14 +63,15 @@ def seed_symbol(universe_store, instrument_store, isin: str = "INE000000001", sy
             {
                 "EXCH_ID": "NSE",
                 "SEGMENT": "E",
-                "SECURITY_ID": "395",
-                "ISIN": isin,
+                "SECURITY_ID": item["security_id"],
+                "ISIN": item["isin"],
                 "INSTRUMENT": "EQUITY",
-                "UNDERLYING_SYMBOL": symbol,
-                "SYMBOL_NAME": f"{symbol} LTD",
-                "DISPLAY_NAME": symbol,
+                "UNDERLYING_SYMBOL": item["symbol"],
+                "SYMBOL_NAME": f"{item['symbol']} LTD",
+                "DISPLAY_NAME": item["symbol"],
                 "SERIES": "EQ",
             }
+            for item in symbols
         ],
         "NSE",
         "E",
@@ -70,6 +92,20 @@ def sr_candles(start_date: date):
                 "volume": 1000 + index * 10,
             }
         )
+    return candles
+
+
+def near_support_reclaim_candles(start_date: date):
+    candles = sr_candles(start_date)
+    candles[-1].update(
+        {
+            "open": 90,
+            "high": 94,
+            "low": 84,
+            "close": 92,
+            "volume": 2500,
+        }
+    )
     return candles
 
 
@@ -101,6 +137,34 @@ def test_detect_support_resistance_clusters_nearest_levels():
     assert report["atr_14"] > 0
     assert report["zone_percent"] == 1.5
     assert report["zone_atr_multiplier"] == 0.5
+    assert report["near_support"] is False
+    assert report["inside_support_zone"] is False
+    assert report["support_distance_percent"] is not None
+    assert report["support_zone_state"] == "above_support"
+    assert report["support_reclaim"] is False
+
+
+def test_support_state_fields_mark_near_zone_and_reclaim():
+    report = detect_support_resistance(near_support_reclaim_candles(date(2026, 1, 1)))
+
+    assert report["nearest_support"] is not None
+    assert report["inside_support_zone"] is True
+    assert report["near_support"] is True
+    assert report["support_zone_state"] == "inside_support_zone"
+    assert report["support_distance_percent"] == 0
+    assert report["broke_below_support_recently"] is True
+    assert report["reclaimed_support_on_latest_close"] is True
+    assert report["support_reclaim"] is True
+
+
+def test_support_resistance_pivot_touches_include_confirmation_metadata():
+    report = detect_support_resistance(sr_candles(date(2026, 1, 1)))
+
+    touch = report["nearest_support"]["touches"][0]
+    assert "confirmed_index" in touch
+    assert "confirmed_date" in touch
+    if touch["source"].startswith("swing_"):
+        assert touch["confirmed_index"] == touch["index"] + report["pivot_right"]
 
 
 def test_support_resistance_service_reads_symbol_candles(tmp_path):
@@ -124,3 +188,34 @@ def test_support_resistance_service_reads_symbol_candles(tmp_path):
     assert report["nearest_support"] is not None
     assert report["nearest_resistance"] is not None
     assert "zone_low" in report["nearest_support"]
+    assert "near_support" in report
+
+
+def test_nifty_500_near_support_bulk_scan_returns_expected_symbols(tmp_path):
+    settings, token_store, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_symbols(
+        universe_store,
+        instrument_store,
+        [
+            {"isin": "INE000000001", "symbol": "BEML", "security_id": "395"},
+            {"isin": "INE000000002", "symbol": "TCS", "security_id": "11536"},
+        ],
+    )
+    window = historical_window(settings)
+    run_id = historical_store.create_run("NIFTY_500", settings.historical_lookback_calendar_days, window)
+    for item in historical_store.items(run_id, status="queued", limit=10):
+        candles = near_support_reclaim_candles(window.from_date) if item["symbol"] == "BEML" else sr_candles(window.from_date)
+        historical_store.upsert_candles(
+            item,
+            [historical_candle(candle) for candle in candles],
+            "NSE_EQ",
+            "EQUITY",
+        )
+
+    items = SupportResistanceService(token_store).nifty_500_near_support(limit=10)
+
+    assert [item["symbol"] for item in items] == ["BEML"]
+    assert items[0]["inside_support_zone"] is True
+    assert items[0]["near_support"] is True
+    assert items[0]["support_reclaim"] is True
+    assert items[0]["nearest_support"]["role"] == "support"

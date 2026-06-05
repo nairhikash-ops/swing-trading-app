@@ -46,6 +46,7 @@ from app.schemas import (
     LearningStatusResponse,
     LearningTradeOutcomeItem,
     MoveEventReportResponse,
+    Nifty500NearSupportItem,
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
@@ -616,6 +617,21 @@ async def technical_support_resistance(
     return SupportResistanceReportResponse(
         **support_resistance_service.report_for_symbol(symbol=symbol, limit=limit)
     )
+
+
+@app.get("/api/technical/support-resistance/nifty500/near-support", response_model=list[Nifty500NearSupportItem])
+async def technical_support_resistance_nifty500_near_support(
+    limit: int = Query(default=500, ge=1, le=500),
+    max_distance_percent: float = Query(default=2.0, ge=0.0, le=20.0),
+    support_resistance_service: SupportResistanceService = Depends(get_support_resistance_service_dep),
+) -> list[Nifty500NearSupportItem]:
+    return [
+        Nifty500NearSupportItem.model_validate(item)
+        for item in support_resistance_service.nifty_500_near_support(
+            limit=limit,
+            max_distance_percent=max_distance_percent,
+        )
+    ]
 
 
 @app.get("/api/technical/candlesticks", response_model=CandlestickReportResponse)

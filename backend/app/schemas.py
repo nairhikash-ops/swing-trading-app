@@ -438,6 +438,16 @@ class StockRegimeReportResponse(BaseModel):
     items: list[StockRegimeItem]
 
 
+class SupportResistancePivotTouchItem(BaseModel):
+    price: float
+    date: str
+    index: int
+    confirmed_index: int
+    confirmed_date: str
+    volume: float
+    source: str
+
+
 class SupportResistanceLevelItem(BaseModel):
     price: float
     mid_price: float
@@ -453,6 +463,7 @@ class SupportResistanceLevelItem(BaseModel):
     distance_percent: float
     strength: float
     sources: list[str]
+    touches: list[SupportResistancePivotTouchItem] = Field(default_factory=list)
 
 
 class SupportResistanceReportResponse(BaseModel):
@@ -476,6 +487,37 @@ class SupportResistanceReportResponse(BaseModel):
     nearest_resistance: SupportResistanceLevelItem | None = None
     supports: list[SupportResistanceLevelItem]
     resistances: list[SupportResistanceLevelItem]
+    near_support: bool
+    inside_support_zone: bool
+    support_distance_percent: float | None = None
+    support_zone_state: Literal[
+        "no_support",
+        "above_support",
+        "near_support",
+        "inside_support_zone",
+        "below_support_broken",
+    ]
+    support_reclaim: bool
+    broke_below_support_recently: bool
+    reclaimed_support_on_latest_close: bool
+
+
+class Nifty500NearSupportItem(BaseModel):
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    latest_date: str
+    latest_close: float
+    nearest_support: SupportResistanceLevelItem
+    support_distance_percent: float
+    inside_support_zone: bool
+    near_support: bool
+    support_zone_state: Literal["near_support", "inside_support_zone"]
+    support_reclaim: bool
+    broke_below_support_recently: bool
+    reclaimed_support_on_latest_close: bool
 
 
 class CandlestickItem(BaseModel):

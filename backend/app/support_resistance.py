@@ -46,6 +46,59 @@ class SupportResistanceStore:
             ).fetchall()
         return dict(instrument), [dict(row) for row in reversed(rows)]
 
+    def candles_for_instrument(self, instrument_id: int, limit: int = 365) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT trading_date, open, high, low, close, volume
+                FROM daily_candles
+                WHERE instrument_id = ?
+                ORDER BY trading_date DESC
+                LIMIT ?
+                """,
+                (instrument_id, min(max(limit, 20), 365)),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def nifty_500_instruments(self, limit: int = 500) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    i.id,
+                    i.security_id,
+                    i.isin,
+                    i.display_name,
+                    i.underlying_symbol,
+                    i.series,
+                    c.company_name,
+                    c.industry,
+                    c.symbol
+                FROM index_constituents c
+                JOIN instruments i ON i.isin = c.isin
+                WHERE c.index_name = 'NIFTY_500'
+                  AND c.active = 1
+                  AND i.active = 1
+                  AND i.exchange_id = 'NSE'
+                  AND i.segment = 'E'
+                  AND i.instrument = 'EQUITY'
+                ORDER BY c.symbol, CASE WHEN i.series = 'EQ' THEN 0 ELSE 1 END, i.id
+                LIMIT ?
+                """,
+                (min(max(limit * 3, limit), 2000),),
+            ).fetchall()
+        instruments: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            key = str(row["isin"] or row["symbol"])
+            if key in seen:
+                continue
+            seen.add(key)
+            instruments.append(dict(row))
+            if len(instruments) >= limit:
+                break
+        return instruments
+
 
 class SupportResistanceService:
     def __init__(self, token_store: TokenStore, store: SupportResistanceStore | None = None) -> None:
@@ -68,6 +121,50 @@ class SupportResistanceService:
             }
         )
         return report
+
+    def nifty_500_near_support(self, limit: int = 500, max_distance_percent: float = 2.0) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for instrument in self.store.nifty_500_instruments(limit=limit):
+            candles = self.store.candles_for_instrument(int(instrument["id"]))
+            if len(candles) < DEFAULT_PIVOT_LEFT + DEFAULT_PIVOT_RIGHT + 1:
+                continue
+            report = detect_support_resistance(candles)
+            nearest_support = report["nearest_support"]
+            if nearest_support is None:
+                continue
+            inside_support_zone = bool(report["inside_support_zone"])
+            support_distance_percent = float(report["support_distance_percent"])
+            near_support = inside_support_zone or support_distance_percent <= max_distance_percent
+            if not near_support:
+                continue
+            support_zone_state = "inside_support_zone" if inside_support_zone else "near_support"
+            items.append(
+                {
+                    "symbol": instrument["underlying_symbol"] or instrument["symbol"],
+                    "company_name": instrument["company_name"],
+                    "industry": instrument["industry"],
+                    "isin": instrument["isin"],
+                    "security_id": instrument["security_id"],
+                    "latest_date": report["latest_date"],
+                    "latest_close": report["latest_close"],
+                    "nearest_support": nearest_support,
+                    "support_distance_percent": support_distance_percent,
+                    "inside_support_zone": inside_support_zone,
+                    "near_support": near_support,
+                    "support_zone_state": support_zone_state,
+                    "support_reclaim": report["support_reclaim"],
+                    "broke_below_support_recently": report["broke_below_support_recently"],
+                    "reclaimed_support_on_latest_close": report["reclaimed_support_on_latest_close"],
+                }
+            )
+        return sorted(
+            items,
+            key=lambda item: (
+                0 if item["inside_support_zone"] else 1,
+                float(item["support_distance_percent"] or 0),
+                str(item["symbol"]),
+            ),
+        )
 
 
 def detect_support_resistance(
@@ -96,6 +193,7 @@ def detect_support_resistance(
         [level for level in levels if level["role"] == "resistance"],
         key=lambda item: (item["distance_percent"], -item["strength"]),
     )[:max_levels]
+    support_state = support_state_fields(supports[0] if supports else None, current_close, candles)
     return {
         "symbol": "",
         "instrument_id": None,
@@ -117,6 +215,7 @@ def detect_support_resistance(
         "nearest_resistance": resistances[0] if resistances else None,
         "supports": supports,
         "resistances": resistances,
+        **support_state,
     }
 
 
@@ -132,9 +231,9 @@ def find_price_pivots(candles: list[dict[str, Any]], pivot_left: int, pivot_righ
         low = lows[index]
         high = highs[index]
         if low <= min(left_lows + right_lows):
-            pivots.append(pivot_dict(candles[index], index, low, "swing_low"))
+            pivots.append(pivot_dict(candles, index, low, "swing_low", pivot_right=pivot_right))
         if high >= max(left_highs + right_highs):
-            pivots.append(pivot_dict(candles[index], index, high, "swing_high"))
+            pivots.append(pivot_dict(candles, index, high, "swing_high", pivot_right=pivot_right))
     return pivots
 
 
@@ -147,16 +246,28 @@ def recent_extreme_pivots(candles: list[dict[str, Any]]) -> list[dict[str, Any]]
         window_candles = candles[slice_start:]
         lowest = min(enumerate(window_candles), key=lambda item: float(item[1]["low"]))
         highest = max(enumerate(window_candles), key=lambda item: float(item[1]["high"]))
-        pivots.append(pivot_dict(lowest[1], slice_start + lowest[0], float(lowest[1]["low"]), f"low_{window}d"))
-        pivots.append(pivot_dict(highest[1], slice_start + highest[0], float(highest[1]["high"]), f"high_{window}d"))
+        pivots.append(pivot_dict(candles, slice_start + lowest[0], float(lowest[1]["low"]), f"low_{window}d"))
+        pivots.append(pivot_dict(candles, slice_start + highest[0], float(highest[1]["high"]), f"high_{window}d"))
     return pivots
 
 
-def pivot_dict(candle: dict[str, Any], index: int, price: float, source: str) -> dict[str, Any]:
+def pivot_dict(
+    candles: list[dict[str, Any]],
+    index: int,
+    price: float,
+    source: str,
+    pivot_right: int = 0,
+) -> dict[str, Any]:
+    candle = candles[index]
+    # Recent 45/90-day extremes are rolling-window facts, so their "confirmed" date is the
+    # extreme candle itself rather than a delayed swing-pivot confirmation.
+    confirmed_index = min(index + pivot_right, len(candles) - 1)
     return {
         "price": price,
         "date": candle["trading_date"],
         "index": index,
+        "confirmed_index": confirmed_index,
+        "confirmed_date": candles[confirmed_index]["trading_date"],
         "volume": float(candle.get("volume") or 0),
         "source": source,
     }
@@ -220,6 +331,52 @@ def level_from_cluster(
         "distance_percent": round(max(distance, 0), 2),
         "strength": support_resistance_strength(len(touches), recency_sessions),
         "sources": sorted({touch["source"] for touch in touches}),
+        "touches": sorted(touches, key=lambda item: item["index"]),
+    }
+
+
+def support_state_fields(
+    nearest_support: dict[str, Any] | None,
+    current_close: float,
+    candles: list[dict[str, Any]],
+    max_near_distance_percent: float = 2.0,
+) -> dict[str, Any]:
+    if nearest_support is None:
+        return {
+            "near_support": False,
+            "inside_support_zone": False,
+            "support_distance_percent": None,
+            "support_zone_state": "no_support",
+            "support_reclaim": False,
+            "broke_below_support_recently": False,
+            "reclaimed_support_on_latest_close": False,
+        }
+
+    zone_low = float(nearest_support["zone_low"])
+    inside_support_zone = bool(nearest_support["inside_zone"])
+    support_distance_percent = float(nearest_support["distance_percent"])
+    near_support = inside_support_zone or support_distance_percent <= max_near_distance_percent
+    if current_close < zone_low:
+        support_zone_state = "below_support_broken"
+    elif inside_support_zone:
+        support_zone_state = "inside_support_zone"
+    elif near_support:
+        support_zone_state = "near_support"
+    else:
+        support_zone_state = "above_support"
+
+    recent_candles = candles[-5:]
+    broke_below_support_recently = any(float(candle["low"]) < zone_low for candle in recent_candles)
+    reclaimed_support_on_latest_close = current_close >= zone_low
+    support_reclaim = broke_below_support_recently and reclaimed_support_on_latest_close
+    return {
+        "near_support": near_support,
+        "inside_support_zone": inside_support_zone,
+        "support_distance_percent": support_distance_percent,
+        "support_zone_state": support_zone_state,
+        "support_reclaim": support_reclaim,
+        "broke_below_support_recently": broke_below_support_recently,
+        "reclaimed_support_on_latest_close": reclaimed_support_on_latest_close,
     }
 
 
@@ -276,4 +433,11 @@ def empty_support_resistance_report(symbol: str, status: str) -> dict[str, Any]:
         "nearest_resistance": None,
         "supports": [],
         "resistances": [],
+        "near_support": False,
+        "inside_support_zone": False,
+        "support_distance_percent": None,
+        "support_zone_state": "no_support",
+        "support_reclaim": False,
+        "broke_below_support_recently": False,
+        "reclaimed_support_on_latest_close": False,
     }
