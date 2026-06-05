@@ -66,6 +66,25 @@ class DemoAutomationStore:
             ).fetchone()
         return str(row["latest_date"]) if row and row["latest_date"] else None
 
+    def latest_nifty_500_trading_dates(self, limit: int) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT dc.trading_date
+                FROM daily_candles dc
+                JOIN instruments i ON i.id = dc.instrument_id
+                JOIN index_constituents c ON c.isin = i.isin
+                WHERE c.index_name = 'NIFTY_500'
+                  AND c.active = 1
+                  AND i.active = 1
+                GROUP BY dc.trading_date
+                ORDER BY dc.trading_date DESC
+                LIMIT ?
+                """,
+                (min(max(limit, 1), 30),),
+            ).fetchall()
+        return [str(row["trading_date"]) for row in rows]
+
     def start_run(self, historical_status: dict[str, Any] | None) -> int:
         timestamp = now_utc().isoformat()
         with self._connect() as conn:
@@ -169,7 +188,8 @@ class DemoAutomationService:
         }
         try:
             self.demo_trading_service.refresh()
-            self.watchlist_service.monitor_entries()
+            opening_watchlist_result = self.watchlist_service.monitor_entries()
+            base_result["orders_created_count"] += len(opening_watchlist_result["entered"])
             if not self.settings.demo_automation_enabled:
                 base_result["reason"] = "Demo automation is disabled."
                 return self.store.finish_run(run_id, base_result)
@@ -185,15 +205,24 @@ class DemoAutomationService:
 
             report = self.drishti_signal_service.refresh_nifty_500_signal_01()
             base_result["drishti_run_id"] = report.get("run_id")
+            review_dates = set(
+                self.store.latest_nifty_500_trading_dates(
+                    self.settings.demo_automation_signal_review_window_sessions + 1
+                )
+            )
             fresh_hits = sorted(
-                [item for item in report.get("items", []) if item.get("trigger_date") == latest_trading_date],
+                [
+                    item
+                    for item in report.get("items", [])
+                    if item.get("trigger_date") in review_dates and self._needs_initial_review(int(item["id"]))
+                ],
                 key=lambda item: (float(item.get("volume_vs_sma") or 0), float(item.get("volume_ratio_1d") or 0)),
                 reverse=True,
             )
             base_result["fresh_hit_count"] = len(fresh_hits)
             if not fresh_hits:
                 base_result["status"] = "ok"
-                base_result["reason"] = "No fresh Drishti Signal 1 hits on the latest trading date."
+                base_result["reason"] = "No untracked Drishti Signal 1 hits inside the confirmation window."
                 return self.store.finish_run(run_id, base_result)
 
             for hit in fresh_hits:
@@ -243,6 +272,8 @@ class DemoAutomationService:
 
             if len(fresh_hits) > self.settings.demo_automation_max_ai_reviews_per_run:
                 base_result["skipped_count"] += len(fresh_hits) - self.settings.demo_automation_max_ai_reviews_per_run
+            closing_watchlist_result = self.watchlist_service.monitor_entries()
+            base_result["orders_created_count"] += len(closing_watchlist_result["entered"])
             base_result["status"] = "ok"
             base_result["reason"] = "Automation cycle completed."
             return self.store.finish_run(run_id, base_result)
@@ -251,6 +282,13 @@ class DemoAutomationService:
             base_result["status"] = "failed"
             base_result["error"] = str(exc)[:1000]
             return self.store.finish_run(run_id, base_result)
+
+    def _needs_initial_review(self, hit_id: int) -> bool:
+        candidate = self.watchlist_service.store.candidate_for_hit(hit_id)
+        if candidate is not None:
+            return False
+        order = self.demo_trading_service.store.order_for_signal_hit(hit_id)
+        return order is None
 
     async def _review_hit(self, hit_id: int) -> dict[str, Any] | None:
         review_service = (

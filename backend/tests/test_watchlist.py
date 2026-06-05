@@ -6,7 +6,15 @@ from app.watchlist import WatchlistService
 from test_demo_trading import seed_drishti_hit
 
 
-def insert_local_wait_review(token_store, hit, decision="WAIT", entry_low=100, entry_high=113, stop_loss=90):
+def insert_local_wait_review(
+    token_store,
+    hit,
+    decision="WAIT",
+    entry_low=100,
+    entry_high=113,
+    stop_loss=90,
+    recent_return_5d_percent=12,
+):
     store = AiReviewStore(token_store)
     result = {
         "status": "completed",
@@ -25,7 +33,13 @@ def insert_local_wait_review(token_store, hit, decision="WAIT", entry_low=100, e
         "wait_until": "Wait for pullback.",
         "invalidation": "Close below support.",
         "sources": [],
-        "raw_response": {"features": {"recent_return_5d_percent": 12, "risk_percent": 8, "breakout_price": 115}},
+        "raw_response": {
+            "features": {
+                "recent_return_5d_percent": recent_return_5d_percent,
+                "risk_percent": 8,
+                "breakout_price": hit["trigger_high"],
+            }
+        },
     }
     from app.ai_reviews import GeminiReviewResult
 
@@ -80,3 +94,47 @@ def test_watchlist_candidate_invalidates_before_entry(tmp_path):
 
     assert result["invalidated"][0]["status"] == "invalidated"
     assert demo_service.orders() == []
+
+
+def test_watchlist_breakout_entry_requires_strong_confirming_close(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    watchlist = WatchlistService(settings, token_store, demo_service)
+    review = insert_local_wait_review(
+        token_store,
+        hit,
+        entry_low=hit["trigger_high"],
+        entry_high=hit["trigger_close"] * 1.01,
+        stop_loss=hit["anchor_low"],
+        recent_return_5d_percent=0,
+    )
+    watchlist.upsert_from_review(int(hit["id"]), review)
+    first_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
+    second_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 2).isoformat()
+    with token_store._connect() as conn:
+        for trading_date, open_price, high, low, close in [
+            (first_date, 126.5, 140.0, 120.0, 127.0),
+            (second_date, 128.0, 133.0, 125.0, 132.0),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO daily_candles (
+                    instrument_id, security_id, exchange_segment, instrument, trading_date,
+                    source_timestamp, open, high, low, close, volume, open_interest, source, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, 'NSE_EQ', 'EQUITY', ?, 1714526100, ?, ?, ?, ?, 1000, NULL, 'test', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                """,
+                (hit["instrument_id"], hit["security_id"], trading_date, open_price, high, low, close),
+            )
+
+    weak_result = watchlist.monitor_entries()
+    strong_result = watchlist.monitor_entries()
+
+    assert weak_result["entered"] == []
+    assert weak_result["waiting"][0]["last_checked_date"] == first_date
+    assert strong_result["entered"][0]["status"] == "entered"
+    order = demo_service.orders()[0]
+    assert order["status"] == "pending_entry"
+    assert order["entry_low"] == hit["trigger_high"]
+    assert order["entry_high"] == 132.0 * 1.02
+    assert order["target_price"] is None

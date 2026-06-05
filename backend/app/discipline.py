@@ -183,7 +183,7 @@ def build_local_review_result(hit: dict[str, Any], features: dict[str, Any]) -> 
     support_price = optional_feature_float(features.get("nearest_support_price")) or float(features["low_45"])
     resistance_price = optional_feature_float(features.get("nearest_resistance_price")) or float(features["high_45"])
 
-    if risk_percent > 16 or close_strength < 0.35:
+    if risk_percent > 25 or close_strength < 0.35:
         return GeminiReviewResult(
             status="completed",
             decision="IGNORE",
@@ -204,18 +204,13 @@ def build_local_review_result(hit: dict[str, Any], features: dict[str, Any]) -> 
             raw_response={"provider": LOCAL_DISCIPLINE_PROVIDER, "features": features},
         )
 
-    if confidence >= 70 and risk_percent <= 10 and distance_to_sma_20 <= 12:
-        decision = "ENTER"
-        wait_until = ""
-        invalidation = f"Cancel if price closes below {features['stop_loss']:.2f}."
-    else:
-        decision = "WAIT"
-        wait_until = (
-            f"Wait for either a pullback into {features['entry_low']:.2f}-{features['entry_high']:.2f} "
-            f"with no close below {features['stop_loss']:.2f}, or a close above {hit['trigger_high']:.2f} "
-            "on above-average volume."
-        )
-        invalidation = f"Invalidate if price closes below {features['stop_loss']:.2f} before entry."
+    decision = "WAIT"
+    wait_until = (
+        f"Wait for price to hold above {features['stop_loss']:.2f} and confirm with a strong close above "
+        f"{hit['trigger_high']:.2f}, or wait for a controlled pullback into "
+        f"{features['entry_low']:.2f}-{features['entry_high']:.2f} without invalidation."
+    )
+    invalidation = f"Invalidate if price closes below {features['stop_loss']:.2f} before entry."
 
     return GeminiReviewResult(
         status="completed",

@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import pytest
 from cryptography.fernet import Fernet
@@ -189,3 +190,46 @@ async def test_demo_automation_uses_local_discipline_engine_without_gemini_key(t
         candidates = conn.execute("SELECT * FROM watchlist_candidates").fetchall()
     assert len(reviews) == 1
     assert len(candidates) == 1
+
+
+@pytest.mark.asyncio
+async def test_demo_automation_tracks_recent_signal_until_confirmation(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    confirmation_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
+    with token_store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_candles (
+                instrument_id, security_id, exchange_segment, instrument, trading_date,
+                source_timestamp, open, high, low, close, volume, open_interest, source, raw_json, fetched_at, updated_at
+            )
+            VALUES (?, ?, 'NSE_EQ', 'EQUITY', ?, 1714526100, 125, 132, 124, 130, 2500, NULL, 'test', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            """,
+            (hit["instrument_id"], hit["security_id"], confirmation_date),
+        )
+    automation = DemoAutomationService(
+        settings=settings,
+        token_store=token_store,
+        drishti_signal_service=DrishtiSignalService(settings, token_store),
+        ai_signal_review_service=AiSignalReviewService(
+            settings,
+            token_store,
+            gemini_client=FakeGeminiReviewClient({"decision": "IGNORE"}),
+        ),
+        demo_trading_service=demo_service,
+    )
+
+    result = await automation.run_once({"id": 1, "status": "completed", "failed_count": 0})
+
+    assert result["status"] == "ok"
+    assert result["fresh_hit_count"] == 1
+    assert result["ai_reviewed_count"] == 1
+    assert result["enter_count"] == 0
+    assert result["orders_created_count"] == 1
+    with token_store._connect() as conn:
+        candidate = conn.execute("SELECT * FROM watchlist_candidates").fetchone()
+    orders = demo_service.orders()
+    assert candidate["status"] == "entered"
+    assert orders[0]["status"] == "pending_entry"
+    assert orders[0]["fill_after_date"] == confirmation_date

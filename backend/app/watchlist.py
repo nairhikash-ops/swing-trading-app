@@ -301,13 +301,14 @@ class WatchlistService:
                 continue
 
             if self._entry_triggered(candidate, candle):
+                entry_low, entry_high, target_price = self._order_plan_for_entry(candidate, candle)
                 order_result = self.demo_trading_service.place_order_from_drishti_hit(
                     int(candidate["source_signal_hit_id"]),
                     risk_reward=optional_float(candidate.get("risk_reward")),
                     stop_loss=optional_float(candidate.get("stop_loss")),
-                    target_price=optional_float(candidate.get("target_1")),
-                    entry_low=optional_float(candidate.get("entry_low")),
-                    entry_high=optional_float(candidate.get("entry_high")),
+                    target_price=target_price,
+                    entry_low=entry_low,
+                    entry_high=entry_high,
                     trailing_stop_loss=optional_float(candidate.get("trailing_stop_loss")),
                     ai_review_id=candidate.get("analysis_review_id"),
                     fill_after_date=str(candle["trading_date"]),
@@ -331,6 +332,31 @@ class WatchlistService:
             "waiting": waiting,
         }
 
+    def _order_plan_for_entry(
+        self,
+        candidate: dict[str, Any],
+        candle: dict[str, Any],
+    ) -> tuple[float | None, float | None, float | None]:
+        entry_low = optional_float(candidate.get("entry_low"))
+        entry_high = optional_float(candidate.get("entry_high"))
+        target_price = optional_float(candidate.get("target_1"))
+        if candidate.get("entry_rule") != ENTRY_WAIT_BREAKOUT:
+            return entry_low, entry_high, target_price
+
+        breakout_price = optional_float(candidate.get("breakout_price"))
+        confirmation_close = float(candle["close"])
+        effective_entry_low = breakout_price if breakout_price is not None else entry_low
+        effective_entry_high = max(
+            value
+            for value in [
+                entry_high,
+                confirmation_close * 1.02,
+                (breakout_price * 1.02) if breakout_price is not None else None,
+            ]
+            if value is not None
+        )
+        return effective_entry_low, effective_entry_high, None
+
     def _entry_triggered(self, candidate: dict[str, Any], candle: dict[str, Any]) -> bool:
         rule = candidate.get("entry_rule")
         if rule == ENTRY_ENTER_NOW:
@@ -341,7 +367,11 @@ class WatchlistService:
             return entry_low is not None and entry_high is not None and float(candle["low"]) <= entry_high and float(candle["high"]) >= entry_low
         if rule == ENTRY_WAIT_BREAKOUT:
             breakout_price = optional_float(candidate.get("breakout_price"))
-            return breakout_price is not None and float(candle["close"]) > breakout_price
+            return (
+                breakout_price is not None
+                and float(candle["close"]) > breakout_price
+                and candle_close_strength(candle) >= self.settings.watchlist_breakout_min_close_strength
+            )
         return False
 
 
@@ -412,3 +442,12 @@ def optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def candle_close_strength(candle: dict[str, Any]) -> float:
+    high = float(candle["high"])
+    low = float(candle["low"])
+    candle_range = high - low
+    if candle_range <= 0:
+        return 0.5
+    return (float(candle["close"]) - low) / candle_range
