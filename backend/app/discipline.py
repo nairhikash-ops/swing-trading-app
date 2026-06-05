@@ -12,10 +12,10 @@ from app.store import TokenStore
 from app.support_resistance import detect_support_resistance
 
 
-LOCAL_DISCIPLINE_PROVIDER = "local"
+ALGO_DISCIPLINE_PROVIDER = "algo"
 
 
-class LocalDisciplineReviewService:
+class AlgoDisciplineReviewService:
     def __init__(
         self,
         settings: Settings,
@@ -27,7 +27,7 @@ class LocalDisciplineReviewService:
         self.learning_store = LearningStore(token_store)
 
     def latest_review_for_hit(self, hit_id: int) -> dict[str, Any] | None:
-        return self.store.latest_for_hit(hit_id, provider=LOCAL_DISCIPLINE_PROVIDER)
+        return self.store.latest_for_hit(hit_id, provider=ALGO_DISCIPLINE_PROVIDER)
 
     async def review_drishti_hit(self, hit_id: int) -> dict[str, Any]:
         hit = self.store.signal_hit(hit_id)
@@ -37,26 +37,26 @@ class LocalDisciplineReviewService:
         candles = self.store.candles_until_trigger(
             int(hit["instrument_id"]),
             hit["trigger_date"],
-            self.settings.local_discipline_candle_limit,
+            self.settings.algo_discipline_candle_limit,
         )
         if len(candles) < 45:
-            raise ValueError("Not enough cached candles to create a local discipline review.")
+            raise ValueError("Not enough cached candles to create an algorithmic analysis.")
 
         context = build_review_context(hit, candles)
         features = compute_discipline_features(hit, candles)
-        context["ai_mode"] = {
-            "provider": LOCAL_DISCIPLINE_PROVIDER,
-            "model": self.settings.local_discipline_model,
+        context["analysis_mode"] = {
+            "provider": ALGO_DISCIPLINE_PROVIDER,
+            "model": self.settings.algo_discipline_model,
             "grounding_enabled": False,
-            "mode_label": "local-disciplined-rules",
+            "mode_label": "deterministic-algo-rules",
         }
         context["discipline_features"] = features
         snapshot = self.learning_store.ensure_snapshot_for_hit(hit_id, context=context)
         result = enforce_review_safety(build_local_review_result(hit, features), hit)
         return self.store.insert_review(
             hit_id=hit_id,
-            provider=LOCAL_DISCIPLINE_PROVIDER,
-            model=self.settings.local_discipline_model,
+            provider=ALGO_DISCIPLINE_PROVIDER,
+            model=self.settings.algo_discipline_model,
             context=context,
             result=result,
             decision_snapshot_id=snapshot.get("id"),
@@ -201,7 +201,7 @@ def build_local_review_result(hit: dict[str, Any], features: dict[str, Any]) -> 
             wait_until="",
             invalidation="Local discipline rules rejected the setup because entry risk or candle quality was unacceptable.",
             sources=[],
-            raw_response={"provider": LOCAL_DISCIPLINE_PROVIDER, "features": features},
+            raw_response={"provider": ALGO_DISCIPLINE_PROVIDER, "features": features},
         )
 
     decision = "WAIT"
@@ -229,13 +229,16 @@ def build_local_review_result(hit: dict[str, Any], features: dict[str, Any]) -> 
         wait_until=wait_until,
         invalidation=invalidation,
         sources=[],
-        raw_response={"provider": LOCAL_DISCIPLINE_PROVIDER, "features": features},
+        raw_response={"provider": ALGO_DISCIPLINE_PROVIDER, "features": features},
     )
 
 
 def local_summary(hit: dict[str, Any], decision: str, reasons: list[str]) -> str:
     detail = "; ".join(reasons) if reasons else "setup passed the basic discipline checks"
-    return f"{hit['symbol']} local discipline review: {decision}. {detail}."
+    return f"{hit['symbol']} algorithmic discipline analysis: {decision}. {detail}."
+
+
+LocalDisciplineReviewService = AlgoDisciplineReviewService
 
 
 def average(values: list[float]) -> float:

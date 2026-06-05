@@ -49,17 +49,6 @@ type TokenStatus = {
   token_source?: string | null;
 };
 
-type GeminiKeyStatus = {
-  provider: "gemini";
-  state: "missing" | "active" | "validation_failed" | "config_error" | "unknown";
-  has_key: boolean;
-  masked_key?: string | null;
-  key_source?: string | null;
-  last_validated_at?: string | null;
-  last_error: string;
-  updated_at?: string | null;
-};
-
 type RenewResponse = {
   renewed: boolean;
   status: TokenStatus;
@@ -333,7 +322,7 @@ type DrishtiSignalReport = {
   items: DrishtiSignalHitItem[];
 };
 
-type AiSignalReview = {
+type AlgoSignalReview = {
   id: number;
   source_signal_hit_id: number;
   provider: string;
@@ -454,6 +443,7 @@ type DemoAutomationRun = {
   drishti_run_id?: number | null;
   latest_trading_date?: string | null;
   fresh_hit_count: number;
+  algo_analyzed_count: number;
   ai_reviewed_count: number;
   enter_count: number;
   orders_created_count: number;
@@ -586,7 +576,6 @@ function dhanTradingViewUrl(item: { symbol: string; security_id?: string | null 
 
 function App() {
   const [status, setStatus] = useState<TokenStatus | null>(null);
-  const [geminiStatus, setGeminiStatus] = useState<GeminiKeyStatus | null>(null);
   const [instrumentStatus, setInstrumentStatus] = useState<InstrumentStatus | null>(null);
   const [instrumentResults, setInstrumentResults] = useState<InstrumentItem[]>([]);
   const [instrumentQuery, setInstrumentQuery] = useState("");
@@ -601,7 +590,7 @@ function App() {
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
-  const [aiReviewsByHit, setAiReviewsByHit] = useState<Record<number, AiSignalReview>>({});
+  const [algoReviewsByHit, setAlgoReviewsByHit] = useState<Record<number, AlgoSignalReview>>({});
   const [drishtiBusy, setDrishtiBusy] = useState(false);
   const [reviewingHitId, setReviewingHitId] = useState<number | null>(null);
   const [demoSummary, setDemoSummary] = useState<DemoSummary | null>(null);
@@ -624,13 +613,8 @@ function App() {
     expiryTime: "",
     validateWithDhan: true,
   });
-  const [geminiForm, setGeminiForm] = useState({
-    apiKey: "",
-    validateWithGemini: true,
-  });
 
   const stateMeta = useMemo(() => getStateMeta(status?.state ?? "unknown"), [status?.state]);
-  const geminiStateMeta = useMemo(() => getGeminiStateMeta(geminiStatus?.state ?? "unknown"), [geminiStatus?.state]);
 
   async function loadStatus(refresh = false) {
     setBusy(true);
@@ -642,32 +626,6 @@ function App() {
       setStatus(await response.json());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load Dhan status.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadGeminiStatus() {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/status`);
-      if (!response.ok) throw new Error(await readError(response));
-      setGeminiStatus(await response.json());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load Gemini key status.");
-    }
-  }
-
-  async function validateGeminiKey() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/validate`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as GeminiKeyStatus;
-      setGeminiStatus(data);
-      setMessage(data.state === "active" ? "Gemini API key validated." : data.last_error || "Gemini validation failed.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to validate Gemini key.");
     } finally {
       setBusy(false);
     }
@@ -870,21 +828,21 @@ function App() {
     }
   }
 
-  async function reviewDrishtiHitWithAi(hit: DrishtiSignalHitItem) {
+  async function analyzeDrishtiHitWithAlgo(hit: DrishtiSignalHitItem) {
     setReviewingHitId(hit.id);
     setMessage("");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/ai/reviews/drishti-hit/${hit.id}`, { method: "POST" });
+      const response = await fetch(`${apiBaseUrl}/api/algo/reviews/drishti-hit/${hit.id}`, { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
-      const review = (await response.json()) as AiSignalReview;
-      setAiReviewsByHit((current) => ({ ...current, [hit.id]: review }));
+      const review = (await response.json()) as AlgoSignalReview;
+      setAlgoReviewsByHit((current) => ({ ...current, [hit.id]: review }));
       setMessage(
         review.status !== "completed"
-          ? `Gemini review for ${hit.symbol} failed: ${review.error || "unknown error"}.`
-          : `Gemini review for ${hit.symbol}: ${review.decision}.`,
+          ? `Algo analysis for ${hit.symbol} failed: ${review.error || "unknown error"}.`
+          : `Algo analysis for ${hit.symbol}: ${review.decision}.`,
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to review Drishti hit with Gemini.");
+      setMessage(error instanceof Error ? error.message : "Unable to analyze Drishti hit with the algo engine.");
     } finally {
       setReviewingHitId(null);
     }
@@ -1140,38 +1098,8 @@ function App() {
     }
   }
 
-  async function saveGeminiKey(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/ai/gemini/key`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: geminiForm.apiKey.trim(),
-          validate_with_gemini: geminiForm.validateWithGemini,
-        }),
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as GeminiKeyStatus;
-      setGeminiStatus(data);
-      setGeminiForm({ apiKey: "", validateWithGemini: true });
-      setMessage(
-        data.state === "active"
-          ? "Gemini API key saved on the backend."
-          : data.last_error || "Gemini API key saved, but validation is not active.",
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save Gemini key.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   useEffect(() => {
     loadStatus();
-    loadGeminiStatus();
     loadInstrumentStatus();
     loadUniverseStatus();
     loadUniverse();
@@ -1201,16 +1129,14 @@ function App() {
       : 0;
   const systemStateMeta = getSystemStateMeta(
     status?.state ?? "unknown",
-    geminiStatus?.state ?? "unknown",
     historicalStatus?.status,
     qualityReport?.blocked_count ?? 0,
   );
-  const activeStatusMeta = activePage === "settings" ? getSettingsStateMeta(stateMeta, geminiStateMeta) : systemStateMeta;
+  const activeStatusMeta = activePage === "settings" ? getSettingsStateMeta(stateMeta) : systemStateMeta;
   const pageMeta = getPageMeta(activePage);
   const latestDrishtiItems = drishtiReport?.items.slice(0, 8) ?? [];
   const actionCount =
     (status?.state && !["active", "expiring_soon"].includes(status.state) ? 1 : 0) +
-    (geminiStatus?.state === "missing" || geminiStatus?.state === "validation_failed" ? 1 : 0) +
     (historicalStatus?.failed_count ?? 0) +
     (qualityReport?.blocked_count ?? 0);
 
@@ -1275,77 +1201,6 @@ function App() {
 
       {activePage === "settings" ? (
         <>
-        <section className="grid">
-          <div className="panel status-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Gemini</p>
-                <h2>API Key Status</h2>
-              </div>
-              <button className="icon-button" onClick={loadGeminiStatus} disabled={busy} title="Refresh Gemini status">
-                <RefreshCcw size={18} />
-              </button>
-            </div>
-
-            <dl className="status-list">
-              <StatusRow label="Provider" value={geminiStatus?.provider ?? "gemini"} />
-              <StatusRow label="State" value={formatStatus(geminiStatus?.state)} />
-              <StatusRow label="Stored key" value={geminiStatus?.masked_key ?? "-"} />
-              <StatusRow label="Key source" value={geminiStatus?.key_source ?? "-"} />
-              <StatusRow label="Last validation" value={formatDate(geminiStatus?.last_validated_at)} />
-              <StatusRow label="Updated" value={formatDate(geminiStatus?.updated_at)} />
-            </dl>
-
-            {geminiStatus?.last_error ? <p className="error-text">{geminiStatus.last_error}</p> : null}
-
-            <div className="button-row">
-              <button onClick={validateGeminiKey} disabled={busy || !geminiStatus?.has_key}>
-                <CheckCircle2 size={17} />
-                Validate key
-              </button>
-              <button className="secondary" onClick={loadGeminiStatus} disabled={busy}>
-                <Wifi size={17} />
-                Check local
-              </button>
-            </div>
-          </div>
-
-          <form className="panel" onSubmit={saveGeminiKey}>
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Backend Secret</p>
-                <h2>Save Gemini API Key</h2>
-              </div>
-              <Shield size={22} />
-            </div>
-
-            <label>
-              Gemini API key
-              <textarea
-                value={geminiForm.apiKey}
-                onChange={(event) => setGeminiForm({ ...geminiForm, apiKey: event.target.value })}
-                autoComplete="off"
-                rows={4}
-                required
-              />
-            </label>
-
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={geminiForm.validateWithGemini}
-                onChange={(event) => setGeminiForm({ ...geminiForm, validateWithGemini: event.target.checked })}
-              />
-              Validate with Gemini before saving
-            </label>
-
-            <button type="submit" disabled={busy}>
-              <Save size={17} />
-              Save Gemini key
-            </button>
-          </form>
-        </section>
-
         <section className="grid instruments-panel">
         <div className="panel status-panel">
           <div className="panel-heading">
@@ -1470,10 +1325,10 @@ function App() {
             <article className="dashboard-card">
               <div className="card-icon ok"><Wifi size={19} /></div>
               <p className="eyebrow">Connections</p>
-              <h2>Dhan & Gemini</h2>
+              <h2>Dhan Data Feed</h2>
               <dl className="mini-list">
                 <StatusRow label="Dhan" value={formatStatus(status?.state)} />
-                <StatusRow label="Gemini" value={formatStatus(geminiStatus?.state)} />
+                <StatusRow label="Algo engine" value="active" />
                 <StatusRow label="Token expiry" value={formatDate(status?.expiry_time)} />
               </dl>
               <button className="secondary" onClick={() => setActivePage("settings")}>
@@ -1587,7 +1442,7 @@ function App() {
               <tr>
                 <th>Chart</th>
                 <th>Demo</th>
-                <th>AI</th>
+                <th>Algo</th>
                 <th>Symbol</th>
                 <th>Company</th>
                 <th>Anchor</th>
@@ -1607,7 +1462,7 @@ function App() {
                 </tr>
               ) : (
                 drishtiReport.items.map((item) => {
-                  const review = aiReviewsByHit[item.id];
+                  const review = algoReviewsByHit[item.id];
                   return [
                     <tr key={`${item.symbol}-${item.trigger_date}-${item.id}`}>
                       <td>
@@ -1636,20 +1491,20 @@ function App() {
                       <td>
                         <button
                           type="button"
-                          className="mini-action ai-action"
-                          onClick={() => reviewDrishtiHitWithAi(item)}
-                          disabled={reviewingHitId === item.id || geminiStatus?.state !== "active"}
-                          title={`Ask Gemini to review ${item.symbol}`}
+                          className="mini-action algo-action"
+                          onClick={() => analyzeDrishtiHitWithAlgo(item)}
+                          disabled={reviewingHitId === item.id}
+                          title={`Run algorithmic analysis for ${item.symbol}`}
                         >
                           {reviewingHitId === item.id
                             ? "..."
                             : review?.status === "quota_limited"
                               ? "Quota"
-                              : review?.status === "failed"
-                              ? "Retry AI"
+                            : review?.status === "failed"
+                              ? "Retry"
                               : review
                                 ? review.decision
-                                : "AI"}
+                                : "Algo"}
                         </button>
                       </td>
                       <td>{item.symbol}</td>
@@ -1682,13 +1537,12 @@ function App() {
                                 {review.status === "quota_limited"
                                   ? "QUOTA LIMITED"
                                   : review.status === "failed"
-                                    ? "AI FAILED"
+                                    ? "FAILED"
                                     : review.decision}
                               </p>
                               <p>{review.summary || "No summary returned."}</p>
                               <p className="review-mode">
-                                {review.provider} / {review.model} /{" "}
-                                {review.grounding_enabled ? "cached data + search" : "cached data only"}
+                                {review.provider} / {review.model} / deterministic cached-data rules
                               </p>
                             </div>
                             <dl className="review-grid">
@@ -1743,7 +1597,10 @@ function App() {
           <StatusRow label="Automation" value={formatStatus(demoAutomationStatus?.status)} />
           <StatusRow label="Latest trade date" value={demoAutomationStatus?.latest_trading_date ?? "-"} />
           <StatusRow label="Fresh hits" value={formatNumber(demoAutomationStatus?.fresh_hit_count)} />
-          <StatusRow label="AI reviewed" value={formatNumber(demoAutomationStatus?.ai_reviewed_count)} />
+          <StatusRow
+            label="Algo analyzed"
+            value={formatNumber(demoAutomationStatus?.algo_analyzed_count ?? demoAutomationStatus?.ai_reviewed_count)}
+          />
           <StatusRow label="Auto orders" value={formatNumber(demoAutomationStatus?.orders_created_count)} />
         </dl>
         {demoAutomationStatus?.reason || demoAutomationStatus?.error ? (
@@ -2011,7 +1868,7 @@ function App() {
                     <StatusRow label="Sessions" value={formatNumber(item.holding_sessions)} />
                     <StatusRow label="MFE" value={formatPercent(item.max_favorable_percent)} />
                     <StatusRow label="MAE" value={formatPercent(item.max_adverse_percent)} />
-                    <StatusRow label="AI decision" value={formatStatus(item.review_decision)} />
+                    <StatusRow label="Algo decision" value={formatStatus(item.review_decision)} />
                     <StatusRow label="Watchlist" value={formatStatus(item.watchlist_status)} />
                   </dl>
 
@@ -2019,7 +1876,7 @@ function App() {
 
                   <div className="journal-context">
                     <p>
-                      <strong>AI:</strong> {item.review_summary || "No AI review snapshot recorded."}
+                      <strong>Algo:</strong> {item.review_summary || "No algorithmic analysis snapshot recorded."}
                     </p>
                     <p>
                       <strong>Watchlist:</strong> {item.watchlist_summary || item.watchlist_entry_rule || "No watchlist context recorded."}
@@ -2630,48 +2487,28 @@ function getStateMeta(state: TokenState) {
   return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
 }
 
-function getGeminiStateMeta(state: GeminiKeyStatus["state"]) {
-  if (state === "active") {
-    return { label: "Gemini ready", className: "ok", icon: <CheckCircle2 size={18} /> };
-  }
-  if (state === "missing") {
-    return { label: "No AI key", className: "neutral", icon: <Shield size={18} /> };
-  }
-  if (state === "validation_failed" || state === "config_error") {
-    return { label: state.replace("_", " "), className: "bad", icon: <AlertTriangle size={18} /> };
-  }
-  return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
-}
-
 function getSystemStateMeta(
   dhanState: TokenState,
-  geminiState: GeminiKeyStatus["state"],
   historicalState?: string,
   blockedCount = 0,
 ) {
   if (dhanState === "expired" || dhanState === "renew_failed" || dhanState === "config_error") {
     return { label: "Dhan needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
   }
-  if (geminiState === "validation_failed" || geminiState === "config_error") {
-    return { label: "AI needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
-  }
   if (blockedCount > 0 || historicalState === "failed") {
     return { label: "Data needs review", className: "warn", icon: <AlertTriangle size={18} /> };
   }
-  if (dhanState === "active" && geminiState === "active") {
+  if (dhanState === "active" || dhanState === "expiring_soon") {
     return { label: "System ready", className: "ok", icon: <CheckCircle2 size={18} /> };
   }
   return { label: "Setup incomplete", className: "neutral", icon: <Clock size={18} /> };
 }
 
-function getSettingsStateMeta(
-  dhanMeta: ReturnType<typeof getStateMeta>,
-  geminiMeta: ReturnType<typeof getGeminiStateMeta>,
-) {
-  if (dhanMeta.className === "bad" || geminiMeta.className === "bad") {
+function getSettingsStateMeta(dhanMeta: ReturnType<typeof getStateMeta>) {
+  if (dhanMeta.className === "bad") {
     return { label: "Settings need attention", className: "bad", icon: <AlertTriangle size={18} /> };
   }
-  if (dhanMeta.className === "ok" && geminiMeta.className === "ok") {
+  if (dhanMeta.className === "ok" || dhanMeta.className === "warn") {
     return { label: "Settings ready", className: "ok", icon: <CheckCircle2 size={18} /> };
   }
   return { label: "Settings incomplete", className: "neutral", icon: <Shield size={18} /> };

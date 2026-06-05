@@ -40,12 +40,11 @@ class Settings(BaseSettings):
     demo_default_risk_reward: float = Field(default=2.0, ge=1.0, le=10.0)
     demo_max_holding_sessions: int = Field(default=15, ge=1, le=120)
     demo_automation_enabled: bool = True
-    demo_automation_max_ai_reviews_per_run: int = Field(default=5, ge=1, le=50)
+    demo_automation_max_algo_analyses_per_run: int = Field(default=5, ge=1, le=50)
     demo_automation_signal_review_window_sessions: int = Field(default=3, ge=1, le=10)
-    demo_automation_retry_failed_ai_reviews: bool = False
-    demo_automation_review_engine: str = "local"
-    local_discipline_model: str = "drishti-discipline-v1"
-    local_discipline_candle_limit: int = Field(default=260, ge=60, le=365)
+    demo_automation_retry_failed_algo_analyses: bool = False
+    algo_discipline_model: str = "drishti-algo-v1"
+    algo_discipline_candle_limit: int = Field(default=260, ge=60, le=365)
     watchlist_entry_expiry_sessions: int = Field(default=8, ge=1, le=30)
     watchlist_breakout_min_close_strength: float = Field(default=0.60, ge=0.0, le=1.0)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"

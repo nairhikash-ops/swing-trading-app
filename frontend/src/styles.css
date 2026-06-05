@@ -73,12 +73,12 @@ button:disabled {
   background: #c6d5ce;
 }
 
-.mini-action.ai-action {
+.mini-action.algo-action {
   color: #ffffff;
   background: #263b54;
 }
 
-.mini-action.ai-action:hover {
+.mini-action.algo-action:hover {
   background: #1d2f45;
 }
 

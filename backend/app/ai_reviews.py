@@ -176,7 +176,12 @@ class AiReviewStore:
                     decision_snapshot_id,
                     provider,
                     model,
-                    1 if context.get("ai_mode", {}).get("grounding_enabled") else 0,
+                    1
+                    if (
+                        context.get("analysis_mode", {}).get("grounding_enabled")
+                        or context.get("ai_mode", {}).get("grounding_enabled")
+                    )
+                    else 0,
                     result.status,
                     result.decision,
                     result.confidence,

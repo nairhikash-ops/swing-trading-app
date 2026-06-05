@@ -639,6 +639,7 @@ class DemoAutomationRunResponse(BaseModel):
     drishti_run_id: int | None = None
     latest_trading_date: str | None = None
     fresh_hit_count: int
+    algo_analyzed_count: int = 0
     ai_reviewed_count: int
     enter_count: int
     orders_created_count: int

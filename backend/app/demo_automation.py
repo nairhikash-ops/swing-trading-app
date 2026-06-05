@@ -1,11 +1,9 @@
 import logging
 from typing import Any
 
-from app.ai_credentials import GEMINI_PROVIDER
-from app.ai_reviews import AiSignalReviewService
 from app.config import Settings
 from app.demo_trading import DemoTradingService
-from app.discipline import LocalDisciplineReviewService
+from app.discipline import AlgoDisciplineReviewService
 from app.drishti import DrishtiSignalService
 from app.learning import LearningStore
 from app.store import TokenStore
@@ -16,7 +14,6 @@ from app.watchlist import WatchlistService
 logger = logging.getLogger(__name__)
 
 READY_HISTORICAL_STATUSES = {"completed", "completed_with_errors", "up_to_date"}
-TERMINAL_AI_STATUSES = {"completed", "failed", "quota_limited"}
 
 
 class DemoAutomationStore:
@@ -153,17 +150,15 @@ class DemoAutomationService:
         settings: Settings,
         token_store: TokenStore,
         drishti_signal_service: DrishtiSignalService,
-        ai_signal_review_service: AiSignalReviewService,
         demo_trading_service: DemoTradingService,
         store: DemoAutomationStore | None = None,
     ) -> None:
         self.settings = settings
         self.store = store or DemoAutomationStore(token_store)
         self.drishti_signal_service = drishti_signal_service
-        self.ai_signal_review_service = ai_signal_review_service
         self.demo_trading_service = demo_trading_service
         self.learning_store = LearningStore(token_store)
-        self.local_discipline_review_service = LocalDisciplineReviewService(settings, token_store)
+        self.algo_discipline_review_service = AlgoDisciplineReviewService(settings, token_store)
         self.watchlist_service = WatchlistService(settings, token_store, demo_trading_service)
 
     def latest_status(self) -> dict[str, Any] | None:
@@ -228,38 +223,33 @@ class DemoAutomationService:
             for hit in fresh_hits:
                 self.learning_store.ensure_snapshot_for_hit(int(hit["id"]))
 
-            for hit in fresh_hits[: self.settings.demo_automation_max_ai_reviews_per_run]:
-                review = await self._review_hit(int(hit["id"]))
-                if review is None:
+            for hit in fresh_hits[: self.settings.demo_automation_max_algo_analyses_per_run]:
+                analysis = await self._analyze_hit(int(hit["id"]))
+                if analysis is None:
                     base_result["skipped_count"] += 1
                     continue
-                if review.get("status") == "quota_limited":
+                if analysis.get("status") != "completed":
                     base_result["ai_reviewed_count"] += 1
-                    self.watchlist_service.upsert_review_for_hit(hit, review)
-                    base_result["skipped_count"] += 1
-                    break
-                if review.get("status") != "completed":
-                    base_result["ai_reviewed_count"] += 1
-                    self.watchlist_service.upsert_review_for_hit(hit, review)
+                    self.watchlist_service.upsert_review_for_hit(hit, analysis)
                     base_result["skipped_count"] += 1
                     continue
                 base_result["ai_reviewed_count"] += 1
-                if review.get("decision") != "ENTER":
-                    self.watchlist_service.upsert_review_for_hit(hit, review)
-                    if review.get("decision") == "IGNORE":
+                if analysis.get("decision") != "ENTER":
+                    self.watchlist_service.upsert_review_for_hit(hit, analysis)
+                    if analysis.get("decision") == "IGNORE":
                         base_result["skipped_count"] += 1
                     continue
                 base_result["enter_count"] += 1
-                self.watchlist_service.upsert_review_for_hit(hit, review)
+                self.watchlist_service.upsert_review_for_hit(hit, analysis)
                 order_result = self.demo_trading_service.place_order_from_drishti_hit(
                     int(hit["id"]),
-                    risk_reward=optional_float(review.get("risk_reward")),
-                    stop_loss=optional_float(review.get("stop_loss")),
-                    target_price=optional_float(review.get("target_1")),
-                    entry_low=optional_float(review.get("entry_low")),
-                    entry_high=optional_float(review.get("entry_high")),
-                    trailing_stop_loss=optional_float(review.get("trailing_stop_loss")),
-                    ai_review_id=int(review["id"]),
+                    risk_reward=optional_float(analysis.get("risk_reward")),
+                    stop_loss=optional_float(analysis.get("stop_loss")),
+                    target_price=optional_float(analysis.get("target_1")),
+                    entry_low=optional_float(analysis.get("entry_low")),
+                    entry_high=optional_float(analysis.get("entry_high")),
+                    trailing_stop_loss=optional_float(analysis.get("trailing_stop_loss")),
+                    ai_review_id=int(analysis["id"]),
                 )
                 if order_result.get("order"):
                     base_result["orders_created_count"] += 1
@@ -271,12 +261,12 @@ class DemoAutomationService:
                             str(hit["trigger_date"]),
                         )
 
-            if len(fresh_hits) > self.settings.demo_automation_max_ai_reviews_per_run:
-                base_result["skipped_count"] += len(fresh_hits) - self.settings.demo_automation_max_ai_reviews_per_run
+            if len(fresh_hits) > self.settings.demo_automation_max_algo_analyses_per_run:
+                base_result["skipped_count"] += len(fresh_hits) - self.settings.demo_automation_max_algo_analyses_per_run
             closing_watchlist_result = self.watchlist_service.monitor_entries()
             base_result["orders_created_count"] += len(closing_watchlist_result["entered"])
             base_result["status"] = "ok"
-            base_result["reason"] = "Automation cycle completed."
+            base_result["reason"] = "Algorithmic automation cycle completed."
             return self.store.finish_run(run_id, base_result)
         except Exception as exc:
             logger.exception("Demo automation failed.")
@@ -306,18 +296,13 @@ class DemoAutomationService:
         )
         return identity_order is None
 
-    async def _review_hit(self, hit_id: int) -> dict[str, Any] | None:
-        review_service = (
-            self.ai_signal_review_service
-            if self.settings.demo_automation_review_engine.strip().lower() == GEMINI_PROVIDER
-            else self.local_discipline_review_service
-        )
-        latest_review = review_service.latest_review_for_hit(hit_id)
+    async def _analyze_hit(self, hit_id: int) -> dict[str, Any] | None:
+        latest_review = self.algo_discipline_review_service.latest_review_for_hit(hit_id)
         if latest_review and (
-            latest_review.get("status") == "completed" or not self.settings.demo_automation_retry_failed_ai_reviews
+            latest_review.get("status") == "completed" or not self.settings.demo_automation_retry_failed_algo_analyses
         ):
             return latest_review
-        return await review_service.review_drishti_hit(hit_id)
+        return await self.algo_discipline_review_service.review_drishti_hit(hit_id)
 
 
 def historical_ready(historical_status: dict[str, Any] | None) -> bool:
@@ -352,6 +337,7 @@ def automation_run_row_to_dict(row) -> dict[str, Any]:
         "drishti_run_id": row["drishti_run_id"],
         "latest_trading_date": row["latest_trading_date"],
         "fresh_hit_count": row["fresh_hit_count"],
+        "algo_analyzed_count": row["ai_reviewed_count"],
         "ai_reviewed_count": row["ai_reviewed_count"],
         "enter_count": row["enter_count"],
         "orders_created_count": row["orders_created_count"],

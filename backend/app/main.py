@@ -3,14 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.ai_credentials import AiCredentialService, AiCredentialStore
-from app.ai_reviews import AiSignalReviewService
 from app.candlesticks import CandlestickService
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
 from app.demo_automation import DemoAutomationService
 from app.demo_trading import DemoTradingService
+from app.discipline import AlgoDisciplineReviewService
 from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
@@ -37,8 +36,6 @@ from app.schemas import (
     DemoPositionItem,
     DemoRefreshResponse,
     DrishtiSignalReportResponse,
-    GeminiKeyStatusResponse,
-    GeminiKeyUpdateRequest,
     HealthResponse,
     HistoricalFetchItem,
     HistoricalFetchStatusResponse,
@@ -112,26 +109,19 @@ def build_demo_trading_service(settings: Settings) -> DemoTradingService:
     return DemoTradingService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
-def build_ai_credential_service(settings: Settings) -> AiCredentialService:
-    token_store = TokenStore(settings.database_path)
-    return AiCredentialService(settings=settings, store=AiCredentialStore(token_store))
-
-
-def build_ai_signal_review_service(settings: Settings) -> AiSignalReviewService:
-    return AiSignalReviewService(settings=settings, token_store=TokenStore(settings.database_path))
+def build_algo_discipline_review_service(settings: Settings) -> AlgoDisciplineReviewService:
+    return AlgoDisciplineReviewService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
 def build_demo_automation_service(
     settings: Settings,
     drishti_signal_service: DrishtiSignalService,
-    ai_signal_review_service: AiSignalReviewService,
     demo_trading_service: DemoTradingService,
 ) -> DemoAutomationService:
     return DemoAutomationService(
         settings=settings,
         token_store=TokenStore(settings.database_path),
         drishti_signal_service=drishti_signal_service,
-        ai_signal_review_service=ai_signal_review_service,
         demo_trading_service=demo_trading_service,
     )
 
@@ -172,12 +162,10 @@ async def lifespan(app: FastAPI):
     move_event_service = build_move_event_service(settings)
     drishti_signal_service = build_drishti_signal_service(settings)
     demo_trading_service = build_demo_trading_service(settings)
-    ai_credential_service = build_ai_credential_service(settings)
-    ai_signal_review_service = build_ai_signal_review_service(settings)
+    algo_discipline_review_service = build_algo_discipline_review_service(settings)
     demo_automation_service = build_demo_automation_service(
         settings,
         drishti_signal_service,
-        ai_signal_review_service,
         demo_trading_service,
     )
     learning_store = build_learning_store(settings)
@@ -204,8 +192,7 @@ async def lifespan(app: FastAPI):
     app.state.move_event_service = move_event_service
     app.state.drishti_signal_service = drishti_signal_service
     app.state.demo_trading_service = demo_trading_service
-    app.state.ai_credential_service = ai_credential_service
-    app.state.ai_signal_review_service = ai_signal_review_service
+    app.state.algo_discipline_review_service = algo_discipline_review_service
     app.state.demo_automation_service = demo_automation_service
     app.state.learning_store = learning_store
     app.state.trading_journal_store = trading_journal_store
@@ -269,12 +256,8 @@ def get_demo_trading_service_dep() -> DemoTradingService:
     return app.state.demo_trading_service
 
 
-def get_ai_credential_service_dep() -> AiCredentialService:
-    return app.state.ai_credential_service
-
-
-def get_ai_signal_review_service_dep() -> AiSignalReviewService:
-    return app.state.ai_signal_review_service
+def get_algo_discipline_review_service_dep() -> AlgoDisciplineReviewService:
+    return app.state.algo_discipline_review_service
 
 
 def get_demo_automation_service_dep() -> DemoAutomationService:
@@ -352,53 +335,22 @@ async def dhan_renew(token_service: TokenService = Depends(get_token_service_dep
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/ai/gemini/status", response_model=GeminiKeyStatusResponse)
-async def gemini_status(
-    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
-) -> GeminiKeyStatusResponse:
-    return ai_credential_service.gemini_status()
-
-
-@app.post("/api/ai/gemini/key", response_model=GeminiKeyStatusResponse)
-async def gemini_update_key(
-    request: GeminiKeyUpdateRequest,
-    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
-) -> GeminiKeyStatusResponse:
-    try:
-        return await ai_credential_service.save_gemini_key(
-            api_key=request.api_key,
-            validate_with_gemini=request.validate_with_gemini,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Unable to save Gemini API key: {exc}") from exc
-
-
-@app.post("/api/ai/gemini/validate", response_model=GeminiKeyStatusResponse)
-async def gemini_validate_key(
-    ai_credential_service: AiCredentialService = Depends(get_ai_credential_service_dep),
-) -> GeminiKeyStatusResponse:
-    try:
-        return await ai_credential_service.validate_saved_gemini_key()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/ai/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse | None)
-async def ai_review_for_drishti_hit(
+@app.get("/api/algo/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse | None)
+async def algo_review_for_drishti_hit(
     hit_id: int,
-    ai_signal_review_service: AiSignalReviewService = Depends(get_ai_signal_review_service_dep),
+    algo_discipline_review_service: AlgoDisciplineReviewService = Depends(get_algo_discipline_review_service_dep),
 ) -> AiSignalReviewResponse | None:
-    review = ai_signal_review_service.latest_review_for_hit(hit_id)
+    review = algo_discipline_review_service.latest_review_for_hit(hit_id)
     return AiSignalReviewResponse(**review) if review else None
 
 
-@app.post("/api/ai/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse)
-async def ai_review_drishti_hit(
+@app.post("/api/algo/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse)
+async def algo_review_drishti_hit(
     hit_id: int,
-    ai_signal_review_service: AiSignalReviewService = Depends(get_ai_signal_review_service_dep),
+    algo_discipline_review_service: AlgoDisciplineReviewService = Depends(get_algo_discipline_review_service_dep),
 ) -> AiSignalReviewResponse:
     try:
-        return AiSignalReviewResponse(**(await ai_signal_review_service.review_drishti_hit(hit_id)))
+        return AiSignalReviewResponse(**(await algo_discipline_review_service.review_drishti_hit(hit_id)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
