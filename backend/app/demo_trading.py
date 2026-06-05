@@ -177,6 +177,28 @@ class DemoTradingStore:
             ).fetchone()
         return order_row_to_dict(row) if row else None
 
+    def order_for_signal_identity(
+        self,
+        signal_id: str,
+        instrument_id: int,
+        trigger_date: str,
+        side: str = SIDE_LONG,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM demo_orders
+                WHERE source_signal_id = ?
+                  AND instrument_id = ?
+                  AND trigger_date = ?
+                  AND side = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (signal_id, instrument_id, trigger_date, side),
+            ).fetchone()
+        return order_row_to_dict(row) if row else None
+
     def position_for_order(self, order_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM demo_positions WHERE order_id = ?", (order_id,)).fetchone()
@@ -592,6 +614,19 @@ class DemoTradingService:
             return {
                 "order": self.store.order(int(existing["id"])) or existing,
                 "position": self.store.position_for_order(int(existing["id"])),
+                "summary": self.store.summary(),
+            }
+        existing_identity_order = self.store.order_for_signal_identity(
+            str(hit["signal_id"]),
+            int(hit["instrument_id"]),
+            str(hit["trigger_date"]),
+            SIDE_LONG,
+        )
+        if existing_identity_order:
+            self.refresh()
+            return {
+                "order": self.store.order(int(existing_identity_order["id"])) or existing_identity_order,
+                "position": self.store.position_for_order(int(existing_identity_order["id"])),
                 "summary": self.store.summary(),
             }
 

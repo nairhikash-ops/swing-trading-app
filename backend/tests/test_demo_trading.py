@@ -164,6 +164,29 @@ def test_demo_order_creation_is_idempotent_for_same_signal_hit(tmp_path):
     assert len(orders) == 1
 
 
+def test_demo_order_creation_is_idempotent_for_same_signal_identity(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path)
+    service = DemoTradingService(settings, token_store)
+    first = service.place_order_from_drishti_hit(hit["id"])
+    with token_store._connect() as conn:
+        original = dict(conn.execute("SELECT * FROM drishti_signal_hits WHERE id = ?", (hit["id"],)).fetchone())
+        original.pop("id")
+        original["run_id"] = int(original["run_id"]) + 1
+        columns = list(original.keys())
+        column_sql = ", ".join(columns)
+        placeholders = ", ".join("?" for _ in columns)
+        conn.execute(
+            f"INSERT INTO drishti_signal_hits ({column_sql}) VALUES ({placeholders})",
+            tuple(original[column] for column in columns),
+        )
+        duplicate_id = conn.execute("SELECT MAX(id) AS id FROM drishti_signal_hits").fetchone()["id"]
+
+    second = service.place_order_from_drishti_hit(int(duplicate_id))
+
+    assert first["order"]["id"] == second["order"]["id"]
+    assert len(service.orders()) == 1
+
+
 def test_demo_order_waits_when_next_session_candle_is_missing(tmp_path):
     settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
     service = DemoTradingService(settings, token_store)

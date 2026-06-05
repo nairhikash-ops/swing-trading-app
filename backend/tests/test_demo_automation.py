@@ -234,3 +234,10 @@ async def test_demo_automation_tracks_recent_signal_until_confirmation(tmp_path)
     assert candidate["status"] == "entered"
     assert orders[0]["status"] == "pending_entry"
     assert orders[0]["fill_after_date"] == confirmation_date
+
+    second_result = await automation.run_once({"id": 1, "status": "completed", "failed_count": 0})
+
+    assert second_result["status"] == "ok"
+    assert second_result["fresh_hit_count"] == 0
+    assert second_result["orders_created_count"] == 0
+    assert len(demo_service.orders()) == 1

@@ -214,7 +214,7 @@ class DemoAutomationService:
                 [
                     item
                     for item in report.get("items", [])
-                    if item.get("trigger_date") in review_dates and self._needs_initial_review(int(item["id"]))
+                    if item.get("trigger_date") in review_dates and self._needs_initial_review(item)
                 ],
                 key=lambda item: (float(item.get("volume_vs_sma") or 0), float(item.get("volume_ratio_1d") or 0)),
                 reverse=True,
@@ -284,12 +284,27 @@ class DemoAutomationService:
             base_result["error"] = str(exc)[:1000]
             return self.store.finish_run(run_id, base_result)
 
-    def _needs_initial_review(self, hit_id: int) -> bool:
+    def _needs_initial_review(self, hit: dict[str, Any]) -> bool:
+        hit_id = int(hit["id"])
         candidate = self.watchlist_service.store.candidate_for_hit(hit_id)
         if candidate is not None:
             return False
+        identity_candidate = self.watchlist_service.store.candidate_for_signal_identity(
+            str(hit["signal_id"]),
+            int(hit["instrument_id"]),
+            str(hit["trigger_date"]),
+        )
+        if identity_candidate is not None:
+            return False
         order = self.demo_trading_service.store.order_for_signal_hit(hit_id)
-        return order is None
+        if order is not None:
+            return False
+        identity_order = self.demo_trading_service.store.order_for_signal_identity(
+            str(hit["signal_id"]),
+            int(hit["instrument_id"]),
+            str(hit["trigger_date"]),
+        )
+        return identity_order is None
 
     async def _review_hit(self, hit_id: int) -> dict[str, Any] | None:
         review_service = (

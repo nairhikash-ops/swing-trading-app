@@ -73,6 +73,14 @@ class WatchlistStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist_candidates(symbol)")
 
     def upsert_from_review(self, hit: dict[str, Any], review: dict[str, Any], features: dict[str, Any]) -> dict[str, Any]:
+        existing_identity_candidate = self.candidate_for_signal_identity(
+            str(hit["signal_id"]),
+            int(hit["instrument_id"]),
+            str(hit["trigger_date"]),
+        )
+        if existing_identity_candidate and int(existing_identity_candidate["source_signal_hit_id"]) != int(hit["id"]):
+            return existing_identity_candidate
+
         timestamp = now_utc().isoformat()
         decision = str(review.get("decision") or "IGNORE")
         status = CANDIDATE_IGNORED if decision == "IGNORE" else CANDIDATE_ACTIVE
@@ -186,6 +194,26 @@ class WatchlistStore:
             row = conn.execute(
                 "SELECT * FROM watchlist_candidates WHERE source_signal_hit_id = ?",
                 (hit_id,),
+            ).fetchone()
+        return candidate_row_to_dict(row) if row else None
+
+    def candidate_for_signal_identity(
+        self,
+        signal_id: str,
+        instrument_id: int,
+        trigger_date: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM watchlist_candidates
+                WHERE source_signal_id = ?
+                  AND instrument_id = ?
+                  AND trigger_date = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (signal_id, instrument_id, trigger_date),
             ).fetchone()
         return candidate_row_to_dict(row) if row else None
 
