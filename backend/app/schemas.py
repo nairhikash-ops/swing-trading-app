@@ -490,8 +490,12 @@ class CandlestickItem(BaseModel):
     upper_wick_percent: float
     lower_wick_percent: float
     range_amount: float
+    setup_trend: Literal["up", "down", "sideways", "unknown"]
     patterns: list[str]
     indecision_score: float
+    reversal_patterns: list[str]
+    reversal_bias: Literal["bullish", "bearish", "mixed", "none"]
+    reversal_score: float
 
 
 class CandlestickReportResponse(BaseModel):
@@ -505,6 +509,7 @@ class CandlestickReportResponse(BaseModel):
     candle_count: int
     latest_date: str
     latest_patterns: list[str]
+    latest_reversal_patterns: list[str]
     pattern_counts: dict[str, int]
     items: list[CandlestickItem]
 

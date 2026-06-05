@@ -109,6 +109,77 @@ def test_classifies_indecision_combination_candles():
     assert "inside_bar" in items[2]["patterns"]
 
 
+def test_classifies_bullish_reversal_candles_after_downtrend():
+    items = classify_candles(
+        [
+            candle(0, 122, 123, 119, 120),
+            candle(1, 119, 120, 115, 116),
+            candle(2, 115, 116, 111, 112),
+            candle(3, 111, 112, 107, 108),
+            candle(4, 107, 108, 103, 104),
+            candle(5, 104, 105, 98, 100),
+            candle(6, 99, 108, 98, 106),
+            candle(7, 106, 107, 96, 106.5),
+        ]
+    )
+
+    assert "bullish_engulfing" in items[6]["reversal_patterns"]
+    assert items[6]["reversal_bias"] == "bullish"
+    assert items[6]["reversal_score"] > 0
+    assert "hammer" in items[7]["reversal_patterns"]
+
+
+def test_classifies_morning_and_evening_star_reversals():
+    bullish_items = classify_candles(
+        [
+            candle(0, 132, 133, 129, 130),
+            candle(1, 129, 130, 125, 126),
+            candle(2, 125, 126, 121, 122),
+            candle(3, 121, 122, 117, 118),
+            candle(4, 117, 118, 113, 114),
+            candle(5, 114, 115, 100, 102),
+            candle(6, 101, 103, 99, 101.2),
+            candle(7, 103, 111, 102, 110),
+        ]
+    )
+    bearish_items = classify_candles(
+        [
+            candle(0, 100, 103, 99, 102),
+            candle(1, 102, 107, 101, 106),
+            candle(2, 106, 111, 105, 110),
+            candle(3, 110, 115, 109, 114),
+            candle(4, 114, 119, 113, 118),
+            candle(5, 118, 130, 117, 129),
+            candle(6, 129, 131, 127, 128.8),
+            candle(7, 127, 128, 119, 121),
+        ]
+    )
+
+    assert "morning_star" in bullish_items[7]["reversal_patterns"]
+    assert bullish_items[7]["reversal_bias"] == "bullish"
+    assert "evening_star" in bearish_items[7]["reversal_patterns"]
+    assert bearish_items[7]["reversal_bias"] == "bearish"
+
+
+def test_classifies_bearish_reversal_candles_after_uptrend():
+    items = classify_candles(
+        [
+            candle(0, 100, 103, 99, 102),
+            candle(1, 102, 107, 101, 106),
+            candle(2, 106, 111, 105, 110),
+            candle(3, 110, 115, 109, 114),
+            candle(4, 114, 119, 113, 118),
+            candle(5, 118, 124, 117, 123),
+            candle(6, 124, 125, 113, 115),
+            candle(7, 121, 130, 120, 120.5),
+        ]
+    )
+
+    assert "bearish_engulfing" in items[6]["reversal_patterns"]
+    assert items[6]["reversal_bias"] == "bearish"
+    assert "shooting_star" in items[7]["reversal_patterns"]
+
+
 def test_candlestick_service_reads_symbol_candles(tmp_path):
     settings, token_store, universe_store, instrument_store, historical_store = make_stores(tmp_path)
     seed_symbol(universe_store, instrument_store)
@@ -135,3 +206,4 @@ def test_candlestick_service_reads_symbol_candles(tmp_path):
     assert report["security_id"] == "395"
     assert report["candle_count"] == 5
     assert report["pattern_counts"]["doji"] >= 3
+    assert "latest_reversal_patterns" in report
