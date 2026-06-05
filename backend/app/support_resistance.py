@@ -123,8 +123,9 @@ class SupportResistanceService:
         return report
 
     def nifty_500_near_support(self, limit: int = 500, max_distance_percent: float = 2.0) -> list[dict[str, Any]]:
+        response_limit = min(max(limit, 1), 500)
         items: list[dict[str, Any]] = []
-        for instrument in self.store.nifty_500_instruments(limit=limit):
+        for instrument in self.store.nifty_500_instruments(limit=500):
             candles = self.store.candles_for_instrument(int(instrument["id"]))
             if len(candles) < DEFAULT_PIVOT_LEFT + DEFAULT_PIVOT_RIGHT + 1:
                 continue
@@ -157,7 +158,7 @@ class SupportResistanceService:
                     "reclaimed_support_on_latest_close": report["reclaimed_support_on_latest_close"],
                 }
             )
-        return sorted(
+        sorted_items = sorted(
             items,
             key=lambda item: (
                 0 if item["inside_support_zone"] else 1,
@@ -165,6 +166,7 @@ class SupportResistanceService:
                 str(item["symbol"]),
             ),
         )
+        return sorted_items[:response_limit]
 
 
 def detect_support_resistance(

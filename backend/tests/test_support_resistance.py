@@ -219,3 +219,29 @@ def test_nifty_500_near_support_bulk_scan_returns_expected_symbols(tmp_path):
     assert items[0]["near_support"] is True
     assert items[0]["support_reclaim"] is True
     assert items[0]["nearest_support"]["role"] == "support"
+
+
+def test_nifty_500_near_support_limit_applies_after_full_scan(tmp_path):
+    settings, token_store, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_symbols(
+        universe_store,
+        instrument_store,
+        [
+            {"isin": "INE000000001", "symbol": "AAAAA", "security_id": "101"},
+            {"isin": "INE000000002", "symbol": "BEML", "security_id": "395"},
+        ],
+    )
+    window = historical_window(settings)
+    run_id = historical_store.create_run("NIFTY_500", settings.historical_lookback_calendar_days, window)
+    for item in historical_store.items(run_id, status="queued", limit=10):
+        candles = near_support_reclaim_candles(window.from_date) if item["symbol"] == "BEML" else sr_candles(window.from_date)
+        historical_store.upsert_candles(
+            item,
+            [historical_candle(candle) for candle in candles],
+            "NSE_EQ",
+            "EQUITY",
+        )
+
+    items = SupportResistanceService(token_store).nifty_500_near_support(limit=1)
+
+    assert [item["symbol"] for item in items] == ["BEML"]
