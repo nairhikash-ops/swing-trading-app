@@ -492,6 +492,88 @@ textarea {
   font-size: 0.95rem;
 }
 
+.journal-filter-row {
+  align-items: flex-end;
+}
+
+.journal-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.journal-card {
+  border: 1px solid #d5ddd8;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fbfcfb;
+}
+
+.journal-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.journal-card h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.compact-text {
+  margin-top: 6px;
+}
+
+.journal-pnl {
+  display: grid;
+  justify-items: end;
+  min-width: 150px;
+  font-weight: 800;
+}
+
+.journal-pnl small {
+  color: #59665f;
+  font-weight: 700;
+}
+
+.journal-pnl.positive span {
+  color: #176b53;
+}
+
+.journal-pnl.negative span {
+  color: #9a3412;
+}
+
+.journal-metrics {
+  margin-top: 16px;
+}
+
+.journal-context {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  color: #2d3933;
+}
+
+.journal-context p {
+  margin: 0;
+}
+
+.journal-notes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.journal-card-actions {
+  align-items: center;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -563,5 +645,17 @@ th {
   .review-card,
   .review-grid {
     grid-template-columns: 1fr;
+  }
+
+  .journal-notes-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .journal-card-header {
+    flex-direction: column;
+  }
+
+  .journal-pnl {
+    justify-items: start;
   }
 }

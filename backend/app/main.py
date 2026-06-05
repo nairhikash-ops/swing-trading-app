@@ -20,12 +20,16 @@ from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
 from app.support_resistance import SupportResistanceService
+from app.trading_journal import TradingJournalStore
 from app.schemas import (
     AiSignalReviewResponse,
     CandlestickReportResponse,
     DailyCandleItem,
     DemoAccountSummary,
     DemoAutomationRunResponse,
+    DemoJournalItem,
+    DemoJournalNotesUpdateRequest,
+    DemoJournalResponse,
     DemoLedgerResetResponse,
     DemoOrderCreateResponse,
     DemoOrderFromSignalRequest,
@@ -136,6 +140,10 @@ def build_learning_store(settings: Settings) -> LearningStore:
     return LearningStore(TokenStore(settings.database_path))
 
 
+def build_trading_journal_store(settings: Settings) -> TradingJournalStore:
+    return TradingJournalStore(TokenStore(settings.database_path))
+
+
 def build_watchlist_service(settings: Settings, demo_trading_service: DemoTradingService) -> WatchlistService:
     return WatchlistService(settings, TokenStore(settings.database_path), demo_trading_service)
 
@@ -173,6 +181,7 @@ async def lifespan(app: FastAPI):
         demo_trading_service,
     )
     learning_store = build_learning_store(settings)
+    trading_journal_store = build_trading_journal_store(settings)
     watchlist_service = build_watchlist_service(settings, demo_trading_service)
     regime_service = build_regime_service(settings)
     support_resistance_service = build_support_resistance_service(settings)
@@ -199,6 +208,7 @@ async def lifespan(app: FastAPI):
     app.state.ai_signal_review_service = ai_signal_review_service
     app.state.demo_automation_service = demo_automation_service
     app.state.learning_store = learning_store
+    app.state.trading_journal_store = trading_journal_store
     app.state.watchlist_service = watchlist_service
     app.state.regime_service = regime_service
     app.state.support_resistance_service = support_resistance_service
@@ -273,6 +283,10 @@ def get_demo_automation_service_dep() -> DemoAutomationService:
 
 def get_learning_store_dep() -> LearningStore:
     return app.state.learning_store
+
+
+def get_trading_journal_store_dep() -> TradingJournalStore:
+    return app.state.trading_journal_store
 
 
 def get_watchlist_service_dep() -> WatchlistService:
@@ -754,6 +768,36 @@ async def watchlist_monitor(
     watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
 ) -> WatchlistMonitorResponse:
     return WatchlistMonitorResponse(**watchlist_service.monitor_entries())
+
+
+@app.get("/api/demo/journal", response_model=DemoJournalResponse)
+async def demo_journal(
+    status: str = Query(default="", max_length=32),
+    symbol: str = Query(default="", max_length=64),
+    limit: int = Query(default=200, ge=1, le=500),
+    trading_journal_store: TradingJournalStore = Depends(get_trading_journal_store_dep),
+) -> DemoJournalResponse:
+    return DemoJournalResponse(**trading_journal_store.journal(status=status, symbol=symbol, limit=limit))
+
+
+@app.post("/api/demo/journal/{order_id}/notes", response_model=DemoJournalItem)
+async def demo_journal_notes_update(
+    order_id: int,
+    request: DemoJournalNotesUpdateRequest,
+    trading_journal_store: TradingJournalStore = Depends(get_trading_journal_store_dep),
+) -> DemoJournalItem:
+    try:
+        return DemoJournalItem.model_validate(
+            trading_journal_store.upsert_notes(
+                order_id=order_id,
+                setup_notes=request.setup_notes,
+                management_notes=request.management_notes,
+                mistake_notes=request.mistake_notes,
+                tags=request.tags,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/learning/status", response_model=LearningStatusResponse)

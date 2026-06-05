@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
+  BookOpen,
   Bot,
   CheckCircle2,
   Clock,
@@ -27,7 +28,7 @@ type TokenState =
   | "config_error"
   | "unknown";
 
-type AppPage = "dashboard" | "drishti" | "demo" | "data" | "settings";
+type AppPage = "dashboard" | "drishti" | "demo" | "journal" | "data" | "settings";
 
 type TokenStatus = {
   state: TokenState;
@@ -462,6 +463,108 @@ type DemoAutomationRun = {
   completed_at?: string | null;
 };
 
+type DemoJournalSummary = {
+  total_trades: number;
+  pending_orders: number;
+  rejected_orders: number;
+  open_positions: number;
+  closed_positions: number;
+  winners: number;
+  failures: number;
+  neutral: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  average_r: number;
+  win_rate_percent: number;
+};
+
+type DemoJournalItem = {
+  order_id: number;
+  position_id?: number | null;
+  source_signal_hit_id?: number | null;
+  decision_snapshot_id?: number | null;
+  ai_review_id?: number | null;
+  source_signal_id: string;
+  source_run_id?: number | null;
+  instrument_id: number;
+  symbol: string;
+  company_name: string;
+  industry: string;
+  isin: string;
+  security_id: string;
+  side: string;
+  quantity: number;
+  status: string;
+  order_status: string;
+  position_status?: string | null;
+  trigger_date: string;
+  requested_price: number;
+  fill_after_date: string;
+  filled_date?: string | null;
+  filled_price?: number | null;
+  entry_date?: string | null;
+  entry_price?: number | null;
+  entry_low?: number | null;
+  entry_high?: number | null;
+  stop_loss: number;
+  target_price?: number | null;
+  trailing_stop_loss?: number | null;
+  risk_amount?: number | null;
+  risk_reward: number;
+  latest_candle_date?: string | null;
+  latest_close?: number | null;
+  holding_sessions: number;
+  exit_date?: string | null;
+  exit_price?: number | null;
+  exit_reason: string;
+  rejection_reason: string;
+  realized_pnl: number;
+  realized_pnl_percent: number;
+  unrealized_pnl: number;
+  unrealized_pnl_percent: number;
+  pnl: number;
+  pnl_percent: number;
+  r_multiple?: number | null;
+  outcome_label: string;
+  max_favorable_price?: number | null;
+  max_favorable_percent?: number | null;
+  max_adverse_price?: number | null;
+  max_adverse_percent?: number | null;
+  target_hit: boolean;
+  stop_hit: boolean;
+  time_exit: boolean;
+  review_provider?: string | null;
+  review_model?: string | null;
+  review_decision?: string | null;
+  review_confidence?: number | null;
+  review_summary: string;
+  review_wait_until: string;
+  review_invalidation: string;
+  watchlist_status?: string | null;
+  watchlist_decision?: string | null;
+  watchlist_entry_rule?: string | null;
+  watchlist_summary: string;
+  setup_notes: string;
+  management_notes: string;
+  mistake_notes: string;
+  tags: string[];
+  notes_updated_at?: string | null;
+  order_created_at: string;
+  order_updated_at: string;
+};
+
+type DemoJournalResponse = {
+  summary: DemoJournalSummary;
+  items: DemoJournalItem[];
+};
+
+type DemoJournalNotesDraft = {
+  setup_notes: string;
+  management_notes: string;
+  mistake_notes: string;
+  tags_text: string;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -506,6 +609,11 @@ function App() {
   const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
   const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
   const [demoAutomationStatus, setDemoAutomationStatus] = useState<DemoAutomationRun | null>(null);
+  const [demoJournal, setDemoJournal] = useState<DemoJournalResponse | null>(null);
+  const [journalStatus, setJournalStatus] = useState("");
+  const [journalSymbol, setJournalSymbol] = useState("");
+  const [journalDrafts, setJournalDrafts] = useState<Record<number, DemoJournalNotesDraft>>({});
+  const [savingJournalOrderId, setSavingJournalOrderId] = useState<number | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
@@ -806,28 +914,105 @@ function App() {
     }
   }
 
+  function buildJournalParams(statusFilter = journalStatus, symbolFilter = journalSymbol) {
+    const params = new URLSearchParams({ limit: "200" });
+    if (statusFilter) params.set("status", statusFilter);
+    if (symbolFilter.trim()) params.set("symbol", symbolFilter.trim());
+    return params;
+  }
+
+  async function loadDemoJournal(statusFilter = journalStatus, symbolFilter = journalSymbol) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/journal?${buildJournalParams(statusFilter, symbolFilter)}`);
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as DemoJournalResponse;
+      setDemoJournal(data);
+      setJournalDrafts(buildJournalDrafts(data.items));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load trading journal.");
+    }
+  }
+
   async function loadDemoTrading() {
     try {
-      const [summaryResponse, ordersResponse, openPositionsResponse, closedPositionsResponse, automationResponse] =
-        await Promise.all([
-          fetch(`${apiBaseUrl}/api/demo/summary`),
-          fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
-          fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
-          fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
-          fetch(`${apiBaseUrl}/api/demo/automation/status`),
-        ]);
+      const [
+        summaryResponse,
+        ordersResponse,
+        openPositionsResponse,
+        closedPositionsResponse,
+        automationResponse,
+        journalResponse,
+      ] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/demo/summary`),
+        fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
+        fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
+        fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
+        fetch(`${apiBaseUrl}/api/demo/automation/status`),
+        fetch(`${apiBaseUrl}/api/demo/journal?${buildJournalParams()}`),
+      ]);
       if (!summaryResponse.ok) throw new Error(await readError(summaryResponse));
       if (!ordersResponse.ok) throw new Error(await readError(ordersResponse));
       if (!openPositionsResponse.ok) throw new Error(await readError(openPositionsResponse));
       if (!closedPositionsResponse.ok) throw new Error(await readError(closedPositionsResponse));
       if (!automationResponse.ok) throw new Error(await readError(automationResponse));
+      if (!journalResponse.ok) throw new Error(await readError(journalResponse));
+      const journalData = (await journalResponse.json()) as DemoJournalResponse;
       setDemoSummary(await summaryResponse.json());
       setDemoOrders(await ordersResponse.json());
       setDemoOpenPositions(await openPositionsResponse.json());
       setDemoClosedPositions(await closedPositionsResponse.json());
       setDemoAutomationStatus(await automationResponse.json());
+      setDemoJournal(journalData);
+      setJournalDrafts(buildJournalDrafts(journalData.items));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load demo trading ledger.");
+    }
+  }
+
+  function updateJournalDraft(orderId: number, patch: Partial<DemoJournalNotesDraft>) {
+    setJournalDrafts((current) => {
+      const previous = current[orderId] ?? emptyJournalDraft();
+      return {
+        ...current,
+        [orderId]: {
+          ...previous,
+          ...patch,
+        },
+      };
+    });
+  }
+
+  async function saveJournalNotes(item: DemoJournalItem) {
+    const draft = journalDrafts[item.order_id] ?? journalDraftFromItem(item);
+    setSavingJournalOrderId(item.order_id);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/journal/${item.order_id}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          setup_notes: draft.setup_notes,
+          management_notes: draft.management_notes,
+          mistake_notes: draft.mistake_notes,
+          tags: draft.tags_text
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+        }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const updated = (await response.json()) as DemoJournalItem;
+      setDemoJournal((current) =>
+        current
+          ? { ...current, items: current.items.map((entry) => (entry.order_id === updated.order_id ? updated : entry)) }
+          : current,
+      );
+      setJournalDrafts((current) => ({ ...current, [updated.order_id]: journalDraftFromItem(updated) }));
+      setMessage(`Journal notes saved for ${updated.symbol}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save journal notes.");
+    } finally {
+      setSavingJournalOrderId(null);
     }
   }
 
@@ -1062,6 +1247,13 @@ function App() {
               onClick={() => setActivePage("demo")}
             >
               Demo Trading
+            </button>
+            <button
+              type="button"
+              className={`page-tab ${activePage === "journal" ? "active" : ""}`}
+              onClick={() => setActivePage("journal")}
+            >
+              Journal
             </button>
             <button
               type="button"
@@ -1701,6 +1893,203 @@ function App() {
         </>
       ) : null}
 
+      {activePage === "journal" ? (
+        <>
+      <section className="panel instruments-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Trading Journal</p>
+            <h2>Automated Demo Trade Review</h2>
+          </div>
+          <BookOpen size={22} />
+        </div>
+
+        <dl className="status-list compact">
+          <StatusRow label="Trades" value={formatNumber(demoJournal?.summary.total_trades)} />
+          <StatusRow label="Open" value={formatNumber(demoJournal?.summary.open_positions)} />
+          <StatusRow label="Closed" value={formatNumber(demoJournal?.summary.closed_positions)} />
+          <StatusRow label="Pending" value={formatNumber(demoJournal?.summary.pending_orders)} />
+          <StatusRow label="Rejected" value={formatNumber(demoJournal?.summary.rejected_orders)} />
+          <StatusRow label="Win rate" value={formatPercent(demoJournal?.summary.win_rate_percent)} />
+          <StatusRow label="Average R" value={formatR(demoJournal?.summary.average_r)} />
+          <StatusRow label="Realized P&L" value={formatCurrency(demoJournal?.summary.realized_pnl)} />
+          <StatusRow label="Unrealized P&L" value={formatCurrency(demoJournal?.summary.unrealized_pnl)} />
+          <StatusRow label="Winners" value={formatNumber(demoJournal?.summary.winners)} />
+          <StatusRow label="Failures" value={formatNumber(demoJournal?.summary.failures)} />
+          <StatusRow label="Neutral" value={formatNumber(demoJournal?.summary.neutral)} />
+        </dl>
+
+        <form
+          className="button-row journal-filter-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void loadDemoJournal();
+          }}
+        >
+          <label className="inline-control">
+            Symbol
+            <input value={journalSymbol} onChange={(event) => setJournalSymbol(event.target.value)} placeholder="RELIANCE" />
+          </label>
+          <label className="inline-control">
+            Status
+            <select value={journalStatus} onChange={(event) => setJournalStatus(event.target.value)}>
+              <option value="">All trades</option>
+              <option value="pending_entry">Pending entry</option>
+              <option value="open">Open positions</option>
+              <option value="closed">Closed positions</option>
+              <option value="rejected">Rejected orders</option>
+              <option value="winner">Winners</option>
+              <option value="failure">Failures</option>
+              <option value="target">Target exits</option>
+              <option value="stop_loss">Stop exits</option>
+            </select>
+          </label>
+          <button type="submit" disabled={busy}>
+            <Search size={17} />
+            Filter journal
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={() => {
+              setJournalStatus("");
+              setJournalSymbol("");
+              void loadDemoJournal("", "");
+            }}
+          >
+            <RefreshCcw size={17} />
+            Reset
+          </button>
+        </form>
+
+        <div className="journal-list">
+          {!demoJournal || demoJournal.items.length === 0 ? (
+            <p className="muted">No automated demo trades found for this journal filter.</p>
+          ) : (
+            demoJournal.items.map((item) => {
+              const draft = journalDrafts[item.order_id] ?? journalDraftFromItem(item);
+              return (
+                <article className="journal-card" key={item.order_id}>
+                  <div className="journal-card-header">
+                    <div>
+                      <p className="eyebrow">
+                        {formatStatus(item.status)} | Order #{item.order_id}
+                      </p>
+                      <h3>
+                        {item.symbol}
+                        <a
+                          className="table-action"
+                          href={dhanTradingViewUrl(item)}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`Open ${item.symbol} in Dhan TradingView`}
+                        >
+                          <ExternalLink size={16} />
+                        </a>
+                      </h3>
+                      <p className="muted compact-text">
+                        {item.company_name || "-"} | {item.industry || "Industry unavailable"}
+                      </p>
+                    </div>
+                    <div className={`journal-pnl ${item.pnl >= 0 ? "positive" : "negative"}`}>
+                      <span>{formatCurrency(item.pnl)}</span>
+                      <small>
+                        {formatPercent(item.pnl_percent)} | {formatR(item.r_multiple)}
+                      </small>
+                    </div>
+                  </div>
+
+                  <dl className="status-list compact journal-metrics">
+                    <StatusRow label="Trigger" value={item.trigger_date} />
+                    <StatusRow label="Entry" value={`${formatPrice(item.entry_price)} on ${item.entry_date ?? "-"}`} />
+                    <StatusRow label="Stop" value={formatPrice(item.stop_loss)} />
+                    <StatusRow label="Target" value={formatPrice(item.target_price)} />
+                    <StatusRow label="Latest" value={`${formatPrice(item.latest_close)} on ${item.latest_candle_date ?? "-"}`} />
+                    <StatusRow label="Exit" value={`${formatPrice(item.exit_price)} on ${item.exit_date ?? "-"}`} />
+                    <StatusRow label="Exit reason" value={formatStatus(item.exit_reason || item.outcome_label || "-")} />
+                    <StatusRow label="Sessions" value={formatNumber(item.holding_sessions)} />
+                    <StatusRow label="MFE" value={formatPercent(item.max_favorable_percent)} />
+                    <StatusRow label="MAE" value={formatPercent(item.max_adverse_percent)} />
+                    <StatusRow label="AI decision" value={formatStatus(item.review_decision)} />
+                    <StatusRow label="Watchlist" value={formatStatus(item.watchlist_status)} />
+                  </dl>
+
+                  {item.rejection_reason ? <p className="error-text">Rejected: {item.rejection_reason}</p> : null}
+
+                  <div className="journal-context">
+                    <p>
+                      <strong>AI:</strong> {item.review_summary || "No AI review snapshot recorded."}
+                    </p>
+                    <p>
+                      <strong>Watchlist:</strong> {item.watchlist_summary || item.watchlist_entry_rule || "No watchlist context recorded."}
+                    </p>
+                    {item.review_wait_until || item.review_invalidation ? (
+                      <p>
+                        <strong>Plan:</strong> {item.review_wait_until || "-"} | {item.review_invalidation || "-"}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="journal-notes-grid">
+                    <label>
+                      Setup notes
+                      <textarea
+                        rows={3}
+                        value={draft.setup_notes}
+                        onChange={(event) => updateJournalDraft(item.order_id, { setup_notes: event.target.value })}
+                        placeholder="Why this automated trade was acceptable or questionable."
+                      />
+                    </label>
+                    <label>
+                      Management notes
+                      <textarea
+                        rows={3}
+                        value={draft.management_notes}
+                        onChange={(event) => updateJournalDraft(item.order_id, { management_notes: event.target.value })}
+                        placeholder="How the trade behaved after entry."
+                      />
+                    </label>
+                    <label>
+                      Mistakes / lesson
+                      <textarea
+                        rows={3}
+                        value={draft.mistake_notes}
+                        onChange={(event) => updateJournalDraft(item.order_id, { mistake_notes: event.target.value })}
+                        placeholder="What to improve in automation or rules."
+                      />
+                    </label>
+                    <label>
+                      Tags
+                      <input
+                        value={draft.tags_text}
+                        onChange={(event) => updateJournalDraft(item.order_id, { tags_text: event.target.value })}
+                        placeholder="late entry, clean reversal, weak volume"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="button-row journal-card-actions">
+                    <button
+                      type="button"
+                      onClick={() => void saveJournalNotes(item)}
+                      disabled={savingJournalOrderId === item.order_id}
+                    >
+                      <Save size={17} />
+                      Save notes
+                    </button>
+                    {item.notes_updated_at ? <span className="muted">Notes updated {formatDate(item.notes_updated_at)}</span> : null}
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
+
+        </>
+      ) : null}
+
       {activePage === "drishti" ? (
         <>
       <section className="panel instruments-panel">
@@ -2291,9 +2680,35 @@ function getSettingsStateMeta(
 function getPageMeta(page: AppPage) {
   if (page === "drishti") return { eyebrow: "Early Watch", title: "Drishti Radar" };
   if (page === "demo") return { eyebrow: "Paper Ledger", title: "Demo Trading" };
+  if (page === "journal") return { eyebrow: "Trade Review", title: "Trading Journal" };
   if (page === "data") return { eyebrow: "Operations", title: "Data Health" };
   if (page === "settings") return { eyebrow: "Admin", title: "Settings" };
   return { eyebrow: "Overview", title: "Command Dashboard" };
+}
+
+function buildJournalDrafts(items: DemoJournalItem[]) {
+  return Object.fromEntries(items.map((item) => [item.order_id, journalDraftFromItem(item)])) as Record<
+    number,
+    DemoJournalNotesDraft
+  >;
+}
+
+function journalDraftFromItem(item: DemoJournalItem): DemoJournalNotesDraft {
+  return {
+    setup_notes: item.setup_notes,
+    management_notes: item.management_notes,
+    mistake_notes: item.mistake_notes,
+    tags_text: item.tags.join(", "),
+  };
+}
+
+function emptyJournalDraft(): DemoJournalNotesDraft {
+  return {
+    setup_notes: "",
+    management_notes: "",
+    mistake_notes: "",
+    tags_text: "",
+  };
 }
 
 function formatDate(value?: string | null) {
@@ -2332,6 +2747,11 @@ function formatPercent(value?: number | null) {
 function formatMultiplier(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}x`;
+}
+
+function formatR(value?: number | null) {
+  if (value === null || value === undefined) return "-";
+  return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}R`;
 }
 
 function formatIssues(value: string[]) {

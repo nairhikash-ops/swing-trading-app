@@ -746,3 +746,105 @@ class LearningTradeOutcomeItem(BaseModel):
     outcome_label: str
     created_at: datetime
     updated_at: datetime
+
+
+class DemoJournalSummary(BaseModel):
+    total_trades: int
+    pending_orders: int
+    rejected_orders: int
+    open_positions: int
+    closed_positions: int
+    winners: int
+    failures: int
+    neutral: int
+    realized_pnl: float
+    unrealized_pnl: float
+    average_r: float
+    win_rate_percent: float
+
+
+class DemoJournalItem(BaseModel):
+    order_id: int
+    position_id: int | None = None
+    source_signal_hit_id: int | None = None
+    decision_snapshot_id: int | None = None
+    ai_review_id: int | None = None
+    source_signal_id: str
+    source_run_id: int | None = None
+    instrument_id: int
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    side: str
+    quantity: float
+    status: str
+    order_status: str
+    position_status: str | None = None
+    trigger_date: str
+    requested_price: float
+    fill_after_date: str
+    filled_date: str | None = None
+    filled_price: float | None = None
+    entry_date: str | None = None
+    entry_price: float | None = None
+    entry_low: float | None = None
+    entry_high: float | None = None
+    stop_loss: float
+    target_price: float | None = None
+    trailing_stop_loss: float | None = None
+    risk_amount: float | None = None
+    risk_reward: float
+    latest_candle_date: str | None = None
+    latest_close: float | None = None
+    holding_sessions: int
+    exit_date: str | None = None
+    exit_price: float | None = None
+    exit_reason: str
+    rejection_reason: str
+    realized_pnl: float
+    realized_pnl_percent: float
+    unrealized_pnl: float
+    unrealized_pnl_percent: float
+    pnl: float
+    pnl_percent: float
+    r_multiple: float | None = None
+    outcome_label: str
+    max_favorable_price: float | None = None
+    max_favorable_percent: float | None = None
+    max_adverse_price: float | None = None
+    max_adverse_percent: float | None = None
+    target_hit: bool
+    stop_hit: bool
+    time_exit: bool
+    review_provider: str | None = None
+    review_model: str | None = None
+    review_decision: str | None = None
+    review_confidence: float | None = None
+    review_summary: str
+    review_wait_until: str
+    review_invalidation: str
+    watchlist_status: str | None = None
+    watchlist_decision: str | None = None
+    watchlist_entry_rule: str | None = None
+    watchlist_summary: str
+    setup_notes: str
+    management_notes: str
+    mistake_notes: str
+    tags: list[str]
+    notes_updated_at: datetime | None = None
+    order_created_at: datetime
+    order_updated_at: datetime
+
+
+class DemoJournalResponse(BaseModel):
+    summary: DemoJournalSummary
+    items: list[DemoJournalItem]
+
+
+class DemoJournalNotesUpdateRequest(BaseModel):
+    setup_notes: str = ""
+    management_notes: str = ""
+    mistake_notes: str = ""
+    tags: list[str] = []
