@@ -520,6 +520,48 @@ class Nifty500NearSupportItem(BaseModel):
     reclaimed_support_on_latest_close: bool
 
 
+class ReversalOpportunityItem(BaseModel):
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    latest_date: str
+    latest_close: float
+    regime: Literal["DOWNTREND"]
+    regime_confidence: float
+    opportunity_stage: Literal[
+        "downtrend_only",
+        "near_support",
+        "indecision_near_support",
+        "support_reclaim",
+        "bullish_reversal_watch",
+        "confirmed_reversal",
+        "entry_watch",
+        "ignore",
+    ]
+    opportunity_score: float
+    reasons: list[str]
+    near_support: bool
+    inside_support_zone: bool
+    support_reclaim: bool
+    support_distance_percent: float | None = None
+    nearest_support: SupportResistanceLevelItem | None = None
+    latest_patterns: list[str]
+    latest_reversal_patterns: list[str]
+    indecision_score: float
+    reversal_score: float
+    reversal_bias: Literal["bullish", "bearish", "mixed", "none"]
+    suggested_next_action: Literal[
+        "watch_only",
+        "wait_for_confirmation",
+        "wait_for_breakout",
+        "wait_for_pullback",
+        "ready_for_drishti_review",
+        "ignore",
+    ]
+
+
 class CandlestickItem(BaseModel):
     trading_date: str
     open: float

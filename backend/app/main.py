@@ -18,6 +18,7 @@ from app.learning import LearningStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
+from app.reversal_opportunities import ReversalOpportunityService
 from app.support_resistance import SupportResistanceService
 from app.trading_journal import TradingJournalStore
 from app.schemas import (
@@ -50,6 +51,7 @@ from app.schemas import (
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
+    ReversalOpportunityItem,
     StockRegimeItem,
     StockRegimeReportResponse,
     SupportResistanceReportResponse,
@@ -151,6 +153,10 @@ def build_candlestick_service(settings: Settings) -> CandlestickService:
     return CandlestickService(TokenStore(settings.database_path))
 
 
+def build_reversal_opportunity_service(settings: Settings) -> ReversalOpportunityService:
+    return ReversalOpportunityService(TokenStore(settings.database_path))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -175,6 +181,7 @@ async def lifespan(app: FastAPI):
     regime_service = build_regime_service(settings)
     support_resistance_service = build_support_resistance_service(settings)
     candlestick_service = build_candlestick_service(settings)
+    reversal_opportunity_service = build_reversal_opportunity_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -201,6 +208,7 @@ async def lifespan(app: FastAPI):
     app.state.regime_service = regime_service
     app.state.support_resistance_service = support_resistance_service
     app.state.candlestick_service = candlestick_service
+    app.state.reversal_opportunity_service = reversal_opportunity_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -287,6 +295,10 @@ def get_support_resistance_service_dep() -> SupportResistanceService:
 
 def get_candlestick_service_dep() -> CandlestickService:
     return app.state.candlestick_service
+
+
+def get_reversal_opportunity_service_dep() -> ReversalOpportunityService:
+    return app.state.reversal_opportunity_service
 
 
 def get_settings_dep() -> Settings:
@@ -543,6 +555,23 @@ async def research_nifty_500_move_events_refresh(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/research/reversal-opportunities/nifty500", response_model=list[ReversalOpportunityItem])
+async def research_nifty_500_reversal_opportunities(
+    limit: int = Query(default=500, ge=1, le=500),
+    include_watch_only: bool = Query(default=True),
+    min_score: float = Query(default=0, ge=0, le=100),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> list[ReversalOpportunityItem]:
+    return [
+        ReversalOpportunityItem.model_validate(item)
+        for item in reversal_opportunity_service.scan_nifty_500(
+            limit=limit,
+            include_watch_only=include_watch_only,
+            min_score=min_score,
+        )
+    ]
 
 
 @app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)
