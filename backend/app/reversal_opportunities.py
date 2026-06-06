@@ -51,6 +51,7 @@ class ReversalOpportunityService:
         limit: int = 500,
         include_watch_only: bool = True,
         min_score: float = 0,
+        min_entry_quality_score: float = 0,
     ) -> list[dict[str, Any]]:
         response_limit = min(max(limit, 1), 500)
         items: list[dict[str, Any]] = []
@@ -62,6 +63,8 @@ class ReversalOpportunityService:
             if not include_watch_only and item["suggested_next_action"] == "watch_only":
                 continue
             if float(item["opportunity_score"]) < min_score:
+                continue
+            if float(item["entry_quality_score"]) < min_entry_quality_score:
                 continue
             items.append(item)
         return sorted(

@@ -361,19 +361,79 @@ def test_scan_sorts_by_entry_quality_before_opportunity_score(monkeypatch):
     assert [item["symbol"] for item in items] == ["HIGH"]
 
 
+def test_scan_filters_by_min_entry_quality_score(monkeypatch):
+    class FakeStore:
+        def nifty_500_instruments(self, limit: int = 500):
+            return [instrument("LOW"), instrument("HIGH")]
+
+        def candles_for_instrument(self, instrument_id: int, limit: int = 365):
+            return []
+
+    def fake_classify(candidate, candles):
+        is_high = candidate["underlying_symbol"] == "HIGH"
+        return {
+            **fake_response_item(candidate["underlying_symbol"]),
+            "opportunity_score": 80,
+            "entry_quality_score": 60 if is_high else 30,
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+
+    items = ReversalOpportunityService(None, store=FakeStore()).scan_nifty_500(
+        min_entry_quality_score=55,
+    )
+
+    assert [item["symbol"] for item in items] == ["HIGH"]
+
+
+def test_scan_min_score_still_filters_by_opportunity_score(monkeypatch):
+    class FakeStore:
+        def nifty_500_instruments(self, limit: int = 500):
+            return [instrument("LOWOPP"), instrument("HIGHOPP")]
+
+        def candles_for_instrument(self, instrument_id: int, limit: int = 365):
+            return []
+
+    def fake_classify(candidate, candles):
+        is_high = candidate["underlying_symbol"] == "HIGHOPP"
+        return {
+            **fake_response_item(candidate["underlying_symbol"]),
+            "opportunity_score": 70 if is_high else 30,
+            "entry_quality_score": 80,
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+
+    items = ReversalOpportunityService(None, store=FakeStore()).scan_nifty_500(min_score=50)
+
+    assert [item["symbol"] for item in items] == ["HIGHOPP"]
+
+
 def test_reversal_opportunity_endpoint_returns_typed_items():
     class FakeService:
-        def scan_nifty_500(self, limit: int, include_watch_only: bool, min_score: float):
+        def scan_nifty_500(
+            self,
+            limit: int,
+            include_watch_only: bool,
+            min_score: float,
+            min_entry_quality_score: float,
+        ):
             assert limit == 1
             assert include_watch_only is False
             assert min_score == 50
+            assert min_entry_quality_score == 55
             return [fake_response_item("BEML")]
 
     app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
     try:
         response = TestClient(app).get(
             "/api/research/reversal-opportunities/nifty500",
-            params={"limit": 1, "include_watch_only": "false", "min_score": 50},
+            params={
+                "limit": 1,
+                "include_watch_only": "false",
+                "min_score": 50,
+                "min_entry_quality_score": 55,
+            },
         )
     finally:
         app.dependency_overrides.clear()

@@ -562,6 +562,7 @@ async def research_nifty_500_reversal_opportunities(
     limit: int = Query(default=500, ge=1, le=500),
     include_watch_only: bool = Query(default=True),
     min_score: float = Query(default=0, ge=0, le=100),
+    min_entry_quality_score: float = Query(default=0, ge=0, le=100),
     reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
 ) -> list[ReversalOpportunityItem]:
     return [
@@ -570,6 +571,7 @@ async def research_nifty_500_reversal_opportunities(
             limit=limit,
             include_watch_only=include_watch_only,
             min_score=min_score,
+            min_entry_quality_score=min_entry_quality_score,
         )
     ]
 
