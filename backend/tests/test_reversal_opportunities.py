@@ -821,6 +821,68 @@ def test_backfill_endpoint_returns_typed_summary():
     assert response.json()["stage_summary"][0]["group"] == "confirmed_reversal"
 
 
+def test_backfill_run_get_endpoint_uses_safe_defaults():
+    class FakeService:
+        def backfill_reversal_opportunities(self, **kwargs):
+            assert kwargs == {
+                "start_date": None,
+                "end_date": None,
+                "sample_every_n_sessions": 5,
+                "limit_per_date": 50,
+                "min_score": 0,
+                "min_entry_quality_score": 55,
+                "include_watch_only": False,
+                "max_dates": 20,
+            }
+            return fake_backfill_response()
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get("/api/research/reversal-opportunities/backfill/run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["run_count"] == 1
+
+
+def test_backfill_run_get_endpoint_passes_query_params():
+    class FakeService:
+        def backfill_reversal_opportunities(self, **kwargs):
+            assert kwargs == {
+                "start_date": "2026-04-01",
+                "end_date": "2026-05-01",
+                "sample_every_n_sessions": 2,
+                "limit_per_date": 10,
+                "min_score": 25,
+                "min_entry_quality_score": 65,
+                "include_watch_only": True,
+                "max_dates": 3,
+            }
+            return fake_backfill_response()
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get(
+            "/api/research/reversal-opportunities/backfill/run",
+            params={
+                "start_date": "2026-04-01",
+                "end_date": "2026-05-01",
+                "sample_every_n_sessions": 2,
+                "limit_per_date": 10,
+                "min_score": 25,
+                "min_entry_quality_score": 65,
+                "include_watch_only": "true",
+                "max_dates": 3,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["entry_quality_summary"][0]["group"] == "75_plus"
+
+
 def test_backfill_summary_endpoint_returns_saved_summary():
     class FakeService:
         def backfill_summary(self, limit: int):
