@@ -541,14 +541,25 @@ class ReversalOpportunityItem(BaseModel):
         "ignore",
     ]
     opportunity_score: float
+    entry_quality_score: float
     reasons: list[str]
     near_support: bool
     inside_support_zone: bool
     support_reclaim: bool
+    quality_support_reclaim: bool
     support_distance_percent: float | None = None
     nearest_support: SupportResistanceLevelItem | None = None
+    support_strength: float | None = None
+    support_touch_count: int | None = None
+    support_recency_sessions: int | None = None
     latest_patterns: list[str]
     latest_reversal_patterns: list[str]
+    recent_patterns: list[str]
+    recent_reversal_patterns: list[str]
+    recent_indecision_date: str | None = None
+    recent_reversal_date: str | None = None
+    bullish_reversal_source_date: str | None = None
+    confirmation_source: str | None = None
     indecision_score: float
     reversal_score: float
     reversal_bias: Literal["bullish", "bearish", "mixed", "none"]

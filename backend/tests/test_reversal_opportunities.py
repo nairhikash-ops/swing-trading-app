@@ -68,6 +68,26 @@ def support_report(**overrides) -> dict:
     return data
 
 
+def nearest_support(strength: float = 80, touch_count: int = 3, recency_sessions: int = 10, mid_price: float = 95):
+    return {
+        "price": mid_price,
+        "mid_price": mid_price,
+        "zone_low": mid_price - 2,
+        "zone_high": mid_price + 2,
+        "zone_width": 2,
+        "role": "support",
+        "inside_zone": False,
+        "touch_count": touch_count,
+        "first_touch_date": "2025-12-01",
+        "last_touch_date": "2026-01-01",
+        "recency_sessions": recency_sessions,
+        "distance_percent": 1.0,
+        "strength": strength,
+        "sources": ["swing_low"],
+        "touches": [],
+    }
+
+
 def candle_item(
     *,
     patterns: list[str] | None = None,
@@ -102,6 +122,7 @@ def test_downtrend_without_support_or_candle_clue_is_downtrend_only():
     assert item["opportunity_stage"] == "downtrend_only"
     assert item["suggested_next_action"] == "watch_only"
     assert item["opportunity_score"] == 20
+    assert item["entry_quality_score"] == 10
 
 
 def test_downtrend_near_support_is_near_support():
@@ -139,6 +160,7 @@ def test_support_reclaim_stage_is_detected():
         support=support_report(
             near_support=True,
             support_reclaim=True,
+            nearest_support=nearest_support(),
             support_distance_percent=0.5,
         )
     )
@@ -180,11 +202,143 @@ def test_bullish_reversal_watch_and_confirmed_reversal_are_detected():
     assert confirmed_item["suggested_next_action"] == "ready_for_drishti_review"
 
 
+def test_bearish_latest_reversal_blocks_confirmed_and_reduces_entry_quality():
+    candles = base_candles()
+    candles[-1] = candle(4, 103, 108, 98, 107)
+    clean_item = opportunity(
+        candles=candles,
+        support=support_report(
+            near_support=True,
+            inside_support_zone=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(strength=85, touch_count=4, recency_sessions=4, mid_price=95),
+            support_distance_percent=0,
+        ),
+        candle_items=[candle_item() for _ in candles[:-1]]
+        + [
+            candle_item(
+                reversal_patterns=["bullish_engulfing"],
+                reversal_bias="bullish",
+                reversal_score=60,
+            )
+        ],
+    )
+    bearish_item = opportunity(
+        candles=candles,
+        support=support_report(
+            near_support=True,
+            inside_support_zone=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(strength=85, touch_count=4, recency_sessions=4, mid_price=95),
+            support_distance_percent=0,
+        ),
+        candle_items=[candle_item() for _ in candles[:-1]]
+        + [
+            candle_item(
+                reversal_patterns=["shooting_star"],
+                reversal_bias="bearish",
+                reversal_score=45,
+            )
+        ],
+    )
+
+    assert clean_item["opportunity_stage"] == "confirmed_reversal"
+    assert bearish_item["opportunity_stage"] != "confirmed_reversal"
+    assert bearish_item["opportunity_stage"] != "bullish_reversal_watch"
+    assert bearish_item["entry_quality_score"] < clean_item["entry_quality_score"]
+    assert bearish_item["entry_quality_score"] <= 30
+    assert bearish_item["suggested_next_action"] in ("wait_for_confirmation", "ignore")
+
+
+def test_weak_old_support_does_not_rank_too_high():
+    item = opportunity(
+        support=support_report(
+            near_support=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(strength=18, touch_count=1, recency_sessions=195),
+            support_distance_percent=1.0,
+        )
+    )
+
+    assert item["support_strength"] == 18
+    assert item["support_touch_count"] == 1
+    assert item["support_recency_sessions"] == 195
+    assert item["entry_quality_score"] <= 35
+    assert "weak_support_strength" in item["reasons"]
+    assert "single_touch_support" in item["reasons"]
+    assert "old_support_zone" in item["reasons"]
+
+
+def test_quality_support_reclaim_requires_clean_reclaim():
+    clean = opportunity(
+        support=support_report(
+            near_support=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(mid_price=95),
+            support_distance_percent=0.5,
+        )
+    )
+    bearish = opportunity(
+        support=support_report(
+            near_support=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(mid_price=95),
+            support_distance_percent=0.5,
+        ),
+        candle_items=[candle_item() for _ in base_candles()[:-1]]
+        + [
+            candle_item(
+                reversal_patterns=["bearish_harami"],
+                reversal_bias="bearish",
+                reversal_score=35,
+            )
+        ],
+    )
+    below_mid = opportunity(
+        candles=[*base_candles()[:-1], candle(4, 91, 92, 88, 92)],
+        support=support_report(
+            near_support=True,
+            support_reclaim=True,
+            nearest_support=nearest_support(mid_price=95),
+            support_distance_percent=0.5,
+        ),
+    )
+
+    assert clean["quality_support_reclaim"] is True
+    assert bearish["quality_support_reclaim"] is False
+    assert below_mid["quality_support_reclaim"] is False
+
+
+def test_recent_source_fields_show_non_latest_signal_date():
+    candles = base_candles()
+    item = opportunity(
+        candles=candles,
+        candle_items=[candle_item() for _ in candles[:-2]]
+        + [
+            candle_item(
+                patterns=["doji"],
+                reversal_patterns=["hammer"],
+                indecision_score=35,
+                reversal_bias="bullish",
+                reversal_score=45,
+            ),
+            candle_item(),
+        ],
+    )
+
+    assert item["latest_patterns"] == []
+    assert "doji" in item["recent_patterns"]
+    assert "hammer" in item["recent_reversal_patterns"]
+    assert item["recent_indecision_date"] == candles[-2]["trading_date"]
+    assert item["recent_reversal_date"] == candles[-2]["trading_date"]
+    assert item["bullish_reversal_source_date"] == candles[-2]["trading_date"]
+
+
 def test_non_downtrend_stock_is_excluded():
     assert classify_reversal_opportunity(instrument("UPSTOCK"), trend_candles("up")) is None
 
 
-def test_scan_sorts_by_score_before_limit(monkeypatch):
+def test_scan_sorts_by_entry_quality_before_opportunity_score(monkeypatch):
     class FakeStore:
         def nifty_500_instruments(self, limit: int = 500):
             return [instrument("LOW"), instrument("HIGH")]
@@ -193,12 +347,11 @@ def test_scan_sorts_by_score_before_limit(monkeypatch):
             return []
 
     def fake_classify(candidate, candles):
-        score = 90 if candidate["underlying_symbol"] == "HIGH" else 20
-        stage = "support_reclaim" if score == 90 else "downtrend_only"
+        is_high = candidate["underlying_symbol"] == "HIGH"
         return {
             **fake_response_item(candidate["underlying_symbol"]),
-            "opportunity_stage": stage,
-            "opportunity_score": score,
+            "opportunity_score": 20 if is_high else 100,
+            "entry_quality_score": 90 if is_high else 10,
         }
 
     monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
@@ -243,14 +396,25 @@ def fake_response_item(symbol: str) -> dict:
         "regime_confidence": 80.0,
         "opportunity_stage": "downtrend_only",
         "opportunity_score": 20.0,
+        "entry_quality_score": 10.0,
         "reasons": ["regime_downtrend"],
         "near_support": False,
         "inside_support_zone": False,
         "support_reclaim": False,
+        "quality_support_reclaim": False,
         "support_distance_percent": None,
         "nearest_support": None,
+        "support_strength": None,
+        "support_touch_count": None,
+        "support_recency_sessions": None,
         "latest_patterns": [],
         "latest_reversal_patterns": [],
+        "recent_patterns": [],
+        "recent_reversal_patterns": [],
+        "recent_indecision_date": None,
+        "recent_reversal_date": None,
+        "bullish_reversal_source_date": None,
+        "confirmation_source": None,
         "indecision_score": 0.0,
         "reversal_score": 0.0,
         "reversal_bias": "none",
