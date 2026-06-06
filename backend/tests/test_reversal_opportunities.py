@@ -2,12 +2,16 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
+from app.config import Settings
+from app.historical_data import HistoricalDataStore
 from app.main import app, get_reversal_opportunity_service_dep
 from app.reversal_opportunities import (
     ReversalOpportunityService,
+    ReversalOpportunityStore,
     build_opportunity_item,
     classify_reversal_opportunity,
 )
+from app.store import TokenStore
 
 
 def instrument(symbol: str = "BEML") -> dict:
@@ -443,8 +447,327 @@ def test_reversal_opportunity_endpoint_returns_typed_items():
     assert response.json()[0]["opportunity_stage"] == "downtrend_only"
 
 
+def test_refresh_creates_run_and_saves_items(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch)
+
+    snapshot = service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+
+    assert snapshot["item_count"] == 1
+    assert snapshot["items"][0]["symbol"] == "BEML"
+    assert snapshot["items"][0]["outcome_status"] == "pending"
+
+
+def test_latest_snapshot_reads_saved_items_without_recalculating(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch)
+    service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+
+    def fail_if_live_scan_runs(candidate, candles):
+        raise AssertionError("latest snapshot should not recalculate live scan")
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fail_if_live_scan_runs)
+
+    latest = service.latest_snapshot(limit=10, min_entry_quality_score=55)
+
+    assert latest is not None
+    assert latest["items"][0]["symbol"] == "BEML"
+
+
+def test_symbol_history_returns_previous_appearances(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch)
+    service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+    service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+
+    history = service.history_for_symbol("BEML")
+
+    assert len(history) == 2
+    assert {item["symbol"] for item in history} == {"BEML"}
+
+
+def test_outcome_refresh_calculates_forward_returns_and_excursions(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch, nearest=nearest_support(mid_price=100))
+    snapshot = service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+    token_store = service.persistence_store.token_store
+    seed_future_candles(token_store, closes=[102, 104, 106, 104, 105, 107, 109, 111, 113, 115])
+
+    result = service.update_outcomes()
+    item = result["items"][0]
+
+    assert result["complete_count"] == 1
+    assert item["outcome_status"] == "complete"
+    assert item["outcome_1d_return_percent"] == 2.0
+    assert item["outcome_3d_return_percent"] == 6.0
+    assert item["outcome_5d_return_percent"] == 5.0
+    assert item["outcome_10d_return_percent"] == 15.0
+    assert item["max_favorable_10d_percent"] == 20.0
+    assert item["max_adverse_10d_percent"] == -6.0
+    assert item["support_broken_10d"] is True
+    assert snapshot["items"][0]["outcome_status"] == "pending"
+
+
+def test_outcome_refresh_marks_partial_when_fewer_than_ten_future_candles(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch)
+    service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+    token_store = service.persistence_store.token_store
+    seed_future_candles(token_store, closes=[101, 102, 103])
+
+    result = service.update_outcomes()
+    item = result["items"][0]
+
+    assert result["partial_count"] == 1
+    assert item["outcome_status"] == "partial"
+    assert item["outcome_1d_return_percent"] == 1.0
+    assert item["outcome_3d_return_percent"] == 3.0
+    assert item["outcome_5d_return_percent"] is None
+    assert item["outcome_10d_return_percent"] is None
+
+
+def test_outcome_refresh_marks_not_enough_when_no_future_candles(tmp_path, monkeypatch):
+    service = persisted_service(tmp_path, monkeypatch)
+    service.refresh_nifty_500_snapshot(limit=10, min_entry_quality_score=55)
+
+    result = service.update_outcomes()
+    item = result["items"][0]
+
+    assert result["not_enough_future_candles_count"] == 1
+    assert item["outcome_status"] == "not_enough_future_candles"
+    assert item["outcome_1d_return_percent"] is None
+    assert item["max_favorable_10d_percent"] is None
+    assert item["support_broken_10d"] is False
+
+
+def test_latest_snapshot_endpoint_returns_saved_items():
+    class FakeService:
+        def latest_snapshot(self, limit: int, min_entry_quality_score: float, stage: str | None):
+            assert limit == 1
+            assert min_entry_quality_score == 55
+            assert stage == "confirmed_reversal"
+            return fake_run_response(items=[fake_snapshot_item("BEML")])
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get(
+            "/api/research/reversal-opportunities/nifty500/latest",
+            params={"limit": 1, "min_entry_quality_score": 55, "stage": "confirmed_reversal"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["symbol"] == "BEML"
+
+
+def test_refresh_endpoint_returns_typed_saved_snapshot():
+    class FakeService:
+        def refresh_nifty_500_snapshot(
+            self,
+            limit: int,
+            include_watch_only: bool,
+            min_score: float,
+            min_entry_quality_score: float,
+        ):
+            assert limit == 1
+            assert include_watch_only is False
+            assert min_score == 0
+            assert min_entry_quality_score == 55
+            return fake_run_response(items=[fake_snapshot_item("BEML")])
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).post(
+            "/api/research/reversal-opportunities/nifty500/refresh",
+            params={
+                "limit": 1,
+                "include_watch_only": "false",
+                "min_score": 0,
+                "min_entry_quality_score": 55,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["item_count"] == 1
+    assert response.json()["items"][0]["outcome_status"] == "pending"
+
+
+def test_symbol_history_endpoint_returns_typed_items():
+    class FakeService:
+        def history_for_symbol(self, symbol: str, limit: int):
+            assert symbol == "BEML"
+            assert limit == 1
+            return [fake_snapshot_item("BEML")]
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get(
+            "/api/research/reversal-opportunities/symbol/BEML/history",
+            params={"limit": 1},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "BEML"
+
+
+def test_outcome_refresh_endpoint_returns_typed_response():
+    class FakeService:
+        def update_outcomes(self, limit: int):
+            assert limit == 1
+            return {
+                "checked_count": 1,
+                "updated_count": 1,
+                "complete_count": 0,
+                "partial_count": 1,
+                "not_enough_future_candles_count": 0,
+                "generated_at": "2026-01-10T00:00:00+00:00",
+                "items": [{**fake_snapshot_item("BEML"), "outcome_status": "partial"}],
+            }
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).post(
+            "/api/research/reversal-opportunities/outcomes/refresh",
+            params={"limit": 1},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["partial_count"] == 1
+
+
+class FakePersistenceStoreScanStore:
+    def __init__(self, symbol: str = "BEML") -> None:
+        self._symbol = symbol
+
+    def nifty_500_instruments(self, limit: int = 500):
+        return [instrument(self._symbol)]
+
+    def candles_for_instrument(self, instrument_id: int, limit: int = 365):
+        return []
+
+
+def persisted_service(tmp_path, monkeypatch, nearest: dict | None = None) -> ReversalOpportunityService:
+    settings = Settings(app_secret_key="test-secret", data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    HistoricalDataStore(token_store)
+    persistence_store = ReversalOpportunityStore(token_store)
+
+    def fake_classify(candidate, candles):
+        return {
+            **fake_response_item(candidate["underlying_symbol"]),
+            "instrument_id": candidate["id"],
+            "latest_date": "2026-01-05",
+            "latest_close": 100.0,
+            "opportunity_score": 80.0,
+            "entry_quality_score": 60.0,
+            "suggested_next_action": "wait_for_confirmation",
+            "nearest_support": nearest,
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+    return ReversalOpportunityService(
+        token_store,
+        store=FakePersistenceStoreScanStore(),
+        persistence_store=persistence_store,
+    )
+
+
+def seed_future_candles(token_store: TokenStore, closes: list[float]) -> None:
+    historical_store = HistoricalDataStore(token_store)
+    candles = []
+    for index, close in enumerate(closes, start=1):
+        low = 94 if index == 6 else close - 1
+        high = 120 if index == 8 else close + 1
+        candles.append(
+            {
+                "timestamp": index,
+                "trading_date": date.fromordinal(date(2026, 1, 5).toordinal() + index).isoformat(),
+                "open": close - 0.5,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 1000 + index,
+            }
+        )
+    historical_store.upsert_candles(
+        {"instrument_id": 1, "security_id": "395"},
+        candles,
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+
+def fake_run_response(items: list[dict]) -> dict:
+    return {
+        "id": 1,
+        "universe_name": "NIFTY_500",
+        "run_date": "2026-01-05",
+        "generated_at": "2026-01-05T00:00:00+00:00",
+        "min_score": 0.0,
+        "min_entry_quality_score": 55.0,
+        "include_watch_only": False,
+        "limit": 500,
+        "item_count": len(items),
+        "items": items,
+    }
+
+
+def fake_snapshot_item(symbol: str) -> dict:
+    return {
+        "id": 1,
+        "run_id": 1,
+        "instrument_id": 1,
+        "symbol": symbol,
+        "company_name": f"{symbol} Ltd.",
+        "industry": "Capital Goods",
+        "isin": "INE000000001",
+        "security_id": "395",
+        "signal_date": "2026-01-05",
+        "latest_close": 100.0,
+        "regime": "DOWNTREND",
+        "regime_confidence": 80.0,
+        "opportunity_stage": "downtrend_only",
+        "opportunity_score": 20.0,
+        "entry_quality_score": 60.0,
+        "suggested_next_action": "watch_only",
+        "near_support": False,
+        "inside_support_zone": False,
+        "support_reclaim": False,
+        "quality_support_reclaim": False,
+        "support_distance_percent": None,
+        "support_strength": None,
+        "support_touch_count": None,
+        "support_recency_sessions": None,
+        "indecision_score": 0.0,
+        "reversal_score": 0.0,
+        "reversal_bias": "none",
+        "recent_indecision_date": None,
+        "recent_reversal_date": None,
+        "bullish_reversal_source_date": None,
+        "confirmation_source": None,
+        "reasons": ["regime_downtrend"],
+        "latest_patterns": [],
+        "latest_reversal_patterns": [],
+        "recent_patterns": [],
+        "recent_reversal_patterns": [],
+        "nearest_support": None,
+        "outcome_1d_return_percent": None,
+        "outcome_3d_return_percent": None,
+        "outcome_5d_return_percent": None,
+        "outcome_10d_return_percent": None,
+        "max_favorable_10d_percent": None,
+        "max_adverse_10d_percent": None,
+        "support_broken_10d": None,
+        "outcome_status": "pending",
+        "outcome_checked_at": None,
+    }
+
+
 def fake_response_item(symbol: str) -> dict:
     return {
+        "instrument_id": 1,
         "symbol": symbol,
         "company_name": f"{symbol} Ltd.",
         "industry": "Capital Goods",

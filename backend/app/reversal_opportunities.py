@@ -1,6 +1,8 @@
+import json
 from typing import Any, Literal
 
 from app.candlesticks import classify_candles
+from app.index_universe import NIFTY_500_INDEX_NAME
 from app.regime import classify_regime_series
 from app.store import TokenStore
 from app.support_resistance import (
@@ -9,6 +11,7 @@ from app.support_resistance import (
     SupportResistanceStore,
     detect_support_resistance,
 )
+from app.timezone import now_utc
 
 
 OpportunityStage = Literal[
@@ -43,8 +46,16 @@ BEARISH_REVERSAL_BLOCKERS = {
 
 
 class ReversalOpportunityService:
-    def __init__(self, token_store: TokenStore, store: SupportResistanceStore | None = None) -> None:
+    def __init__(
+        self,
+        token_store: TokenStore | None,
+        store: SupportResistanceStore | None = None,
+        persistence_store: "ReversalOpportunityStore | None" = None,
+    ) -> None:
         self.store = store or SupportResistanceStore(token_store)
+        self.persistence_store = persistence_store or (
+            ReversalOpportunityStore(token_store) if token_store is not None else None
+        )
 
     def scan_nifty_500(
         self,
@@ -76,6 +87,439 @@ class ReversalOpportunityService:
                 str(item["symbol"]),
             ),
         )[:response_limit]
+
+    def refresh_nifty_500_snapshot(
+        self,
+        limit: int = 500,
+        include_watch_only: bool = False,
+        min_score: float = 0,
+        min_entry_quality_score: float = 55,
+    ) -> dict[str, Any]:
+        items = self.scan_nifty_500(
+            limit=limit,
+            include_watch_only=include_watch_only,
+            min_score=min_score,
+            min_entry_quality_score=min_entry_quality_score,
+        )
+        run_date = latest_item_date(items)
+        store = self._persistence()
+        run_id = store.create_run(
+            universe_name=NIFTY_500_INDEX_NAME,
+            run_date=run_date,
+            min_score=min_score,
+            min_entry_quality_score=min_entry_quality_score,
+            include_watch_only=include_watch_only,
+            limit=limit,
+            item_count=len(items),
+        )
+        store.insert_items(run_id, items)
+        return store.snapshot_for_run(run_id, limit=max(limit, 1))
+
+    def latest_snapshot(
+        self,
+        limit: int = 100,
+        min_entry_quality_score: float = 0,
+        stage: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self._persistence().latest_snapshot(
+            universe_name=NIFTY_500_INDEX_NAME,
+            limit=limit,
+            min_entry_quality_score=min_entry_quality_score,
+            stage=stage,
+        )
+
+    def history_for_symbol(self, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
+        return self._persistence().history_for_symbol(symbol=symbol, limit=limit)
+
+    def update_outcomes(self, limit: int = 1000) -> dict[str, Any]:
+        store = self._persistence()
+        candidates = store.items_for_outcome_refresh(limit=limit)
+        updated_items: list[dict[str, Any]] = []
+        status_counts = {
+            "complete": 0,
+            "partial": 0,
+            "not_enough_future_candles": 0,
+        }
+        for item in candidates:
+            future_candles = store.future_candles(int(item["instrument_id"]), str(item["signal_date"]), limit=10)
+            outcome = calculate_outcome(item, future_candles)
+            store.update_item_outcome(int(item["id"]), outcome)
+            updated = store.item_by_id(int(item["id"]))
+            if updated is not None:
+                updated_items.append(updated)
+            status = str(outcome["outcome_status"])
+            if status in status_counts:
+                status_counts[status] += 1
+        return {
+            "checked_count": len(candidates),
+            "updated_count": len(updated_items),
+            "complete_count": status_counts["complete"],
+            "partial_count": status_counts["partial"],
+            "not_enough_future_candles_count": status_counts["not_enough_future_candles"],
+            "generated_at": now_utc(),
+            "items": updated_items,
+        }
+
+    def _persistence(self) -> "ReversalOpportunityStore":
+        if self.persistence_store is None:
+            raise RuntimeError("Reversal opportunity persistence requires a TokenStore-backed service.")
+        return self.persistence_store
+
+
+class ReversalOpportunityStore:
+    def __init__(self, token_store: TokenStore) -> None:
+        self.token_store = token_store
+        self._init_db()
+
+    def _connect(self):
+        return self.token_store._connect()
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reversal_opportunity_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    universe_name TEXT NOT NULL,
+                    run_date TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    min_score REAL NOT NULL,
+                    min_entry_quality_score REAL NOT NULL,
+                    include_watch_only INTEGER NOT NULL,
+                    limit_value INTEGER NOT NULL,
+                    item_count INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reversal_opportunity_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    instrument_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    company_name TEXT NOT NULL,
+                    industry TEXT NOT NULL,
+                    isin TEXT NOT NULL,
+                    security_id TEXT NOT NULL,
+                    signal_date TEXT NOT NULL,
+                    latest_close REAL NOT NULL,
+                    regime TEXT NOT NULL,
+                    regime_confidence REAL NOT NULL,
+                    opportunity_stage TEXT NOT NULL,
+                    opportunity_score REAL NOT NULL,
+                    entry_quality_score REAL NOT NULL,
+                    suggested_next_action TEXT NOT NULL,
+                    near_support INTEGER NOT NULL,
+                    inside_support_zone INTEGER NOT NULL,
+                    support_reclaim INTEGER NOT NULL,
+                    quality_support_reclaim INTEGER NOT NULL,
+                    support_distance_percent REAL,
+                    support_strength REAL,
+                    support_touch_count INTEGER,
+                    support_recency_sessions INTEGER,
+                    indecision_score REAL NOT NULL,
+                    reversal_score REAL NOT NULL,
+                    reversal_bias TEXT NOT NULL,
+                    recent_indecision_date TEXT,
+                    recent_reversal_date TEXT,
+                    bullish_reversal_source_date TEXT,
+                    confirmation_source TEXT,
+                    reasons_json TEXT NOT NULL,
+                    latest_patterns_json TEXT NOT NULL,
+                    latest_reversal_patterns_json TEXT NOT NULL,
+                    recent_patterns_json TEXT NOT NULL,
+                    recent_reversal_patterns_json TEXT NOT NULL,
+                    nearest_support_json TEXT,
+                    outcome_1d_return_percent REAL,
+                    outcome_3d_return_percent REAL,
+                    outcome_5d_return_percent REAL,
+                    outcome_10d_return_percent REAL,
+                    max_favorable_10d_percent REAL,
+                    max_adverse_10d_percent REAL,
+                    support_broken_10d INTEGER,
+                    outcome_status TEXT NOT NULL DEFAULT 'pending',
+                    outcome_checked_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_runs_universe
+                ON reversal_opportunity_runs(universe_name, id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_items_run
+                ON reversal_opportunity_items(run_id, entry_quality_score)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_items_symbol
+                ON reversal_opportunity_items(symbol, signal_date)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_items_outcome
+                ON reversal_opportunity_items(outcome_status, signal_date)
+                """
+            )
+
+    def create_run(
+        self,
+        *,
+        universe_name: str,
+        run_date: str,
+        min_score: float,
+        min_entry_quality_score: float,
+        include_watch_only: bool,
+        limit: int,
+        item_count: int,
+    ) -> int:
+        generated_at = now_utc().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO reversal_opportunity_runs (
+                    universe_name, run_date, generated_at, min_score,
+                    min_entry_quality_score, include_watch_only, limit_value, item_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    universe_name,
+                    run_date,
+                    generated_at,
+                    float(min_score),
+                    float(min_entry_quality_score),
+                    1 if include_watch_only else 0,
+                    int(limit),
+                    int(item_count),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def insert_items(self, run_id: int, items: list[dict[str, Any]]) -> None:
+        with self._connect() as conn:
+            for item in items:
+                nearest_support = item.get("nearest_support")
+                conn.execute(
+                    """
+                    INSERT INTO reversal_opportunity_items (
+                        run_id, instrument_id, symbol, company_name, industry, isin,
+                        security_id, signal_date, latest_close, regime, regime_confidence,
+                        opportunity_stage, opportunity_score, entry_quality_score,
+                        suggested_next_action, near_support, inside_support_zone,
+                        support_reclaim, quality_support_reclaim, support_distance_percent,
+                        support_strength, support_touch_count, support_recency_sessions,
+                        indecision_score, reversal_score, reversal_bias,
+                        recent_indecision_date, recent_reversal_date,
+                        bullish_reversal_source_date, confirmation_source, reasons_json,
+                        latest_patterns_json, latest_reversal_patterns_json,
+                        recent_patterns_json, recent_reversal_patterns_json,
+                        nearest_support_json, outcome_status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    """,
+                    (
+                        run_id,
+                        int(item["instrument_id"]),
+                        item["symbol"],
+                        item["company_name"],
+                        item["industry"],
+                        item["isin"],
+                        item["security_id"],
+                        item["latest_date"],
+                        float(item["latest_close"]),
+                        item["regime"],
+                        float(item["regime_confidence"]),
+                        item["opportunity_stage"],
+                        float(item["opportunity_score"]),
+                        float(item["entry_quality_score"]),
+                        item["suggested_next_action"],
+                        bool_to_int(item["near_support"]),
+                        bool_to_int(item["inside_support_zone"]),
+                        bool_to_int(item["support_reclaim"]),
+                        bool_to_int(item["quality_support_reclaim"]),
+                        item.get("support_distance_percent"),
+                        item.get("support_strength"),
+                        item.get("support_touch_count"),
+                        item.get("support_recency_sessions"),
+                        float(item["indecision_score"]),
+                        float(item["reversal_score"]),
+                        item["reversal_bias"],
+                        item.get("recent_indecision_date"),
+                        item.get("recent_reversal_date"),
+                        item.get("bullish_reversal_source_date"),
+                        item.get("confirmation_source"),
+                        json_dumps(item.get("reasons") or []),
+                        json_dumps(item.get("latest_patterns") or []),
+                        json_dumps(item.get("latest_reversal_patterns") or []),
+                        json_dumps(item.get("recent_patterns") or []),
+                        json_dumps(item.get("recent_reversal_patterns") or []),
+                        json_dumps(nearest_support) if nearest_support is not None else None,
+                    ),
+                )
+
+    def snapshot_for_run(
+        self,
+        run_id: int,
+        *,
+        limit: int = 100,
+        min_entry_quality_score: float = 0,
+        stage: str | None = None,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            run = conn.execute("SELECT * FROM reversal_opportunity_runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                raise ValueError(f"Reversal opportunity run {run_id} was not found.")
+            rows = self._item_rows_for_run(
+                conn,
+                run_id=run_id,
+                limit=limit,
+                min_entry_quality_score=min_entry_quality_score,
+                stage=stage,
+            )
+        return {**run_response(dict(run)), "items": [snapshot_item_response(dict(row)) for row in rows]}
+
+    def latest_snapshot(
+        self,
+        *,
+        universe_name: str,
+        limit: int = 100,
+        min_entry_quality_score: float = 0,
+        stage: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            run = conn.execute(
+                """
+                SELECT * FROM reversal_opportunity_runs
+                WHERE universe_name = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (universe_name,),
+            ).fetchone()
+            if run is None:
+                return None
+            rows = self._item_rows_for_run(
+                conn,
+                run_id=int(run["id"]),
+                limit=limit,
+                min_entry_quality_score=min_entry_quality_score,
+                stage=stage,
+            )
+        return {**run_response(dict(run)), "items": [snapshot_item_response(dict(row)) for row in rows]}
+
+    def history_for_symbol(self, *, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT i.*, r.universe_name, r.run_date, r.generated_at
+                FROM reversal_opportunity_items i
+                JOIN reversal_opportunity_runs r ON r.id = i.run_id
+                WHERE UPPER(i.symbol) = UPPER(?)
+                ORDER BY i.signal_date DESC, i.id DESC
+                LIMIT ?
+                """,
+                (symbol, min(max(limit, 1), 200)),
+            ).fetchall()
+        return [snapshot_item_response(dict(row)) for row in rows]
+
+    def items_for_outcome_refresh(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM reversal_opportunity_items
+                WHERE outcome_status IN ('pending', 'partial', 'not_enough_future_candles')
+                ORDER BY signal_date, id
+                LIMIT ?
+                """,
+                (min(max(limit, 1), 5000),),
+            ).fetchall()
+        return [snapshot_item_response(dict(row)) for row in rows]
+
+    def future_candles(self, instrument_id: int, signal_date: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT trading_date, open, high, low, close, volume
+                FROM daily_candles
+                WHERE instrument_id = ? AND trading_date > ?
+                ORDER BY trading_date
+                LIMIT ?
+                """,
+                (instrument_id, signal_date, min(max(limit, 1), 10)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_item_outcome(self, item_id: int, outcome: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE reversal_opportunity_items
+                SET outcome_1d_return_percent = ?,
+                    outcome_3d_return_percent = ?,
+                    outcome_5d_return_percent = ?,
+                    outcome_10d_return_percent = ?,
+                    max_favorable_10d_percent = ?,
+                    max_adverse_10d_percent = ?,
+                    support_broken_10d = ?,
+                    outcome_status = ?,
+                    outcome_checked_at = ?
+                WHERE id = ?
+                """,
+                (
+                    outcome.get("outcome_1d_return_percent"),
+                    outcome.get("outcome_3d_return_percent"),
+                    outcome.get("outcome_5d_return_percent"),
+                    outcome.get("outcome_10d_return_percent"),
+                    outcome.get("max_favorable_10d_percent"),
+                    outcome.get("max_adverse_10d_percent"),
+                    bool_to_int(outcome.get("support_broken_10d")),
+                    outcome["outcome_status"],
+                    outcome["outcome_checked_at"],
+                    item_id,
+                ),
+            )
+
+    def item_by_id(self, item_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM reversal_opportunity_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+        return snapshot_item_response(dict(row)) if row else None
+
+    def _item_rows_for_run(
+        self,
+        conn,
+        *,
+        run_id: int,
+        limit: int,
+        min_entry_quality_score: float,
+        stage: str | None,
+    ):
+        clauses = ["run_id = ?", "entry_quality_score >= ?"]
+        params: list[Any] = [run_id, float(min_entry_quality_score)]
+        if stage:
+            clauses.append("opportunity_stage = ?")
+            params.append(stage)
+        params.append(min(max(limit, 1), 500))
+        return conn.execute(
+            f"""
+            SELECT *
+            FROM reversal_opportunity_items
+            WHERE {" AND ".join(clauses)}
+            ORDER BY entry_quality_score DESC, opportunity_score DESC, symbol
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
 
 
 def classify_reversal_opportunity(
@@ -161,6 +605,7 @@ def build_opportunity_item(
         support_recency_sessions=support_quality["support_recency_sessions"],
     )
     return {
+        "instrument_id": instrument.get("id") or instrument.get("instrument_id"),
         "symbol": instrument.get("underlying_symbol") or instrument.get("symbol") or "",
         "company_name": instrument.get("company_name") or instrument.get("display_name") or "",
         "industry": instrument.get("industry") or "",
@@ -557,3 +1002,146 @@ def optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def latest_item_date(items: list[dict[str, Any]]) -> str:
+    dates = [str(item.get("latest_date") or "") for item in items if item.get("latest_date")]
+    if dates:
+        return max(dates)
+    return now_utc().date().isoformat()
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def json_loads(value: str | None, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def bool_to_int(value: Any) -> int:
+    return 1 if bool(value) else 0
+
+
+def optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def run_response(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "universe_name": row["universe_name"],
+        "run_date": row["run_date"],
+        "generated_at": row["generated_at"],
+        "min_score": float(row["min_score"]),
+        "min_entry_quality_score": float(row["min_entry_quality_score"]),
+        "include_watch_only": bool(row["include_watch_only"]),
+        "limit": int(row["limit_value"]),
+        "item_count": int(row["item_count"]),
+    }
+
+
+def snapshot_item_response(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "run_id": int(row["run_id"]),
+        "instrument_id": int(row["instrument_id"]),
+        "symbol": row["symbol"],
+        "company_name": row["company_name"],
+        "industry": row["industry"],
+        "isin": row["isin"],
+        "security_id": row["security_id"],
+        "signal_date": row["signal_date"],
+        "latest_close": float(row["latest_close"]),
+        "regime": row["regime"],
+        "regime_confidence": float(row["regime_confidence"]),
+        "opportunity_stage": row["opportunity_stage"],
+        "opportunity_score": float(row["opportunity_score"]),
+        "entry_quality_score": float(row["entry_quality_score"]),
+        "suggested_next_action": row["suggested_next_action"],
+        "near_support": bool(row["near_support"]),
+        "inside_support_zone": bool(row["inside_support_zone"]),
+        "support_reclaim": bool(row["support_reclaim"]),
+        "quality_support_reclaim": bool(row["quality_support_reclaim"]),
+        "support_distance_percent": optional_float(row.get("support_distance_percent")),
+        "support_strength": optional_float(row.get("support_strength")),
+        "support_touch_count": optional_int(row.get("support_touch_count")),
+        "support_recency_sessions": optional_int(row.get("support_recency_sessions")),
+        "indecision_score": float(row["indecision_score"]),
+        "reversal_score": float(row["reversal_score"]),
+        "reversal_bias": row["reversal_bias"],
+        "recent_indecision_date": row.get("recent_indecision_date"),
+        "recent_reversal_date": row.get("recent_reversal_date"),
+        "bullish_reversal_source_date": row.get("bullish_reversal_source_date"),
+        "confirmation_source": row.get("confirmation_source"),
+        "reasons": json_loads(row.get("reasons_json"), []),
+        "latest_patterns": json_loads(row.get("latest_patterns_json"), []),
+        "latest_reversal_patterns": json_loads(row.get("latest_reversal_patterns_json"), []),
+        "recent_patterns": json_loads(row.get("recent_patterns_json"), []),
+        "recent_reversal_patterns": json_loads(row.get("recent_reversal_patterns_json"), []),
+        "nearest_support": json_loads(row.get("nearest_support_json"), None),
+        "outcome_1d_return_percent": optional_float(row.get("outcome_1d_return_percent")),
+        "outcome_3d_return_percent": optional_float(row.get("outcome_3d_return_percent")),
+        "outcome_5d_return_percent": optional_float(row.get("outcome_5d_return_percent")),
+        "outcome_10d_return_percent": optional_float(row.get("outcome_10d_return_percent")),
+        "max_favorable_10d_percent": optional_float(row.get("max_favorable_10d_percent")),
+        "max_adverse_10d_percent": optional_float(row.get("max_adverse_10d_percent")),
+        "support_broken_10d": optional_bool(row.get("support_broken_10d")),
+        "outcome_status": row["outcome_status"],
+        "outcome_checked_at": row.get("outcome_checked_at"),
+    }
+
+
+def calculate_outcome(item: dict[str, Any], future_candles: list[dict[str, Any]]) -> dict[str, Any]:
+    signal_close = float(item["latest_close"])
+    support_zone_low = support_zone_low_from_item(item)
+    highs = [float(candle["high"]) for candle in future_candles]
+    lows = [float(candle["low"]) for candle in future_candles]
+    outcome = {
+        "outcome_1d_return_percent": nth_close_return(signal_close, future_candles, 1),
+        "outcome_3d_return_percent": nth_close_return(signal_close, future_candles, 3),
+        "outcome_5d_return_percent": nth_close_return(signal_close, future_candles, 5),
+        "outcome_10d_return_percent": nth_close_return(signal_close, future_candles, 10),
+        "max_favorable_10d_percent": round(percent_change(signal_close, max(highs)), 2) if highs else None,
+        "max_adverse_10d_percent": round(percent_change(signal_close, min(lows)), 2) if lows else None,
+        "support_broken_10d": (
+            any(low < support_zone_low for low in lows) if support_zone_low is not None and lows else False
+        ),
+        "outcome_status": outcome_status(len(future_candles)),
+        "outcome_checked_at": now_utc().isoformat(),
+    }
+    return outcome
+
+
+def support_zone_low_from_item(item: dict[str, Any]) -> float | None:
+    nearest_support = item.get("nearest_support")
+    if isinstance(nearest_support, dict):
+        return optional_float(nearest_support.get("zone_low"))
+    return None
+
+
+def nth_close_return(signal_close: float, future_candles: list[dict[str, Any]], sessions: int) -> float | None:
+    if len(future_candles) < sessions:
+        return None
+    return round(percent_change(signal_close, float(future_candles[sessions - 1]["close"])), 2)
+
+
+def percent_change(base: float, value: float) -> float:
+    if base == 0:
+        return 0.0
+    return ((value - base) / base) * 100
+
+
+def outcome_status(future_count: int) -> str:
+    if future_count >= 10:
+        return "complete"
+    if future_count > 0:
+        return "partial"
+    return "not_enough_future_candles"

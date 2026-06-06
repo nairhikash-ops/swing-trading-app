@@ -52,6 +52,9 @@ from app.schemas import (
     RangeMoverReportResponse,
     RenewResponse,
     ReversalOpportunityItem,
+    ReversalOpportunityOutcomeRefreshResponse,
+    ReversalOpportunityRunResponse,
+    ReversalOpportunitySnapshotItem,
     StockRegimeItem,
     StockRegimeReportResponse,
     SupportResistanceReportResponse,
@@ -574,6 +577,68 @@ async def research_nifty_500_reversal_opportunities(
             min_entry_quality_score=min_entry_quality_score,
         )
     ]
+
+
+@app.post("/api/research/reversal-opportunities/nifty500/refresh", response_model=ReversalOpportunityRunResponse)
+async def research_nifty_500_reversal_opportunities_refresh(
+    limit: int = Query(default=500, ge=1, le=500),
+    include_watch_only: bool = Query(default=False),
+    min_score: float = Query(default=0, ge=0, le=100),
+    min_entry_quality_score: float = Query(default=55, ge=0, le=100),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityRunResponse:
+    try:
+        return ReversalOpportunityRunResponse(
+            **reversal_opportunity_service.refresh_nifty_500_snapshot(
+                limit=limit,
+                include_watch_only=include_watch_only,
+                min_score=min_score,
+                min_entry_quality_score=min_entry_quality_score,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/research/reversal-opportunities/nifty500/latest", response_model=ReversalOpportunityRunResponse | None)
+async def research_nifty_500_reversal_opportunities_latest(
+    limit: int = Query(default=100, ge=1, le=500),
+    min_entry_quality_score: float = Query(default=0, ge=0, le=100),
+    stage: str | None = Query(default=None, max_length=32),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityRunResponse | None:
+    snapshot = reversal_opportunity_service.latest_snapshot(
+        limit=limit,
+        min_entry_quality_score=min_entry_quality_score,
+        stage=stage,
+    )
+    return ReversalOpportunityRunResponse(**snapshot) if snapshot else None
+
+
+@app.get(
+    "/api/research/reversal-opportunities/symbol/{symbol}/history",
+    response_model=list[ReversalOpportunitySnapshotItem],
+)
+async def research_reversal_opportunity_symbol_history(
+    symbol: str,
+    limit: int = Query(default=20, ge=1, le=200),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> list[ReversalOpportunitySnapshotItem]:
+    return [
+        ReversalOpportunitySnapshotItem.model_validate(item)
+        for item in reversal_opportunity_service.history_for_symbol(symbol=symbol, limit=limit)
+    ]
+
+
+@app.post(
+    "/api/research/reversal-opportunities/outcomes/refresh",
+    response_model=ReversalOpportunityOutcomeRefreshResponse,
+)
+async def research_reversal_opportunity_outcomes_refresh(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityOutcomeRefreshResponse:
+    return ReversalOpportunityOutcomeRefreshResponse(**reversal_opportunity_service.update_outcomes(limit=limit))
 
 
 @app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)

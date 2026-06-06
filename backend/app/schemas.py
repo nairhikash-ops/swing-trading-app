@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -571,6 +571,94 @@ class ReversalOpportunityItem(BaseModel):
         "ready_for_drishti_review",
         "ignore",
     ]
+
+
+class ReversalOpportunitySnapshotItem(BaseModel):
+    id: int
+    run_id: int
+    instrument_id: int
+    symbol: str
+    company_name: str
+    industry: str
+    isin: str
+    security_id: str
+    signal_date: str
+    latest_close: float
+    regime: Literal["DOWNTREND"]
+    regime_confidence: float
+    opportunity_stage: Literal[
+        "downtrend_only",
+        "near_support",
+        "indecision_near_support",
+        "support_reclaim",
+        "bullish_reversal_watch",
+        "confirmed_reversal",
+        "entry_watch",
+        "ignore",
+    ]
+    opportunity_score: float
+    entry_quality_score: float
+    suggested_next_action: Literal[
+        "watch_only",
+        "wait_for_confirmation",
+        "wait_for_breakout",
+        "wait_for_pullback",
+        "ready_for_drishti_review",
+        "ignore",
+    ]
+    near_support: bool
+    inside_support_zone: bool
+    support_reclaim: bool
+    quality_support_reclaim: bool
+    support_distance_percent: float | None = None
+    support_strength: float | None = None
+    support_touch_count: int | None = None
+    support_recency_sessions: int | None = None
+    indecision_score: float
+    reversal_score: float
+    reversal_bias: Literal["bullish", "bearish", "mixed", "none"]
+    recent_indecision_date: str | None = None
+    recent_reversal_date: str | None = None
+    bullish_reversal_source_date: str | None = None
+    confirmation_source: str | None = None
+    reasons: list[str]
+    latest_patterns: list[str]
+    latest_reversal_patterns: list[str]
+    recent_patterns: list[str]
+    recent_reversal_patterns: list[str]
+    nearest_support: dict[str, Any] | None = None
+    outcome_1d_return_percent: float | None = None
+    outcome_3d_return_percent: float | None = None
+    outcome_5d_return_percent: float | None = None
+    outcome_10d_return_percent: float | None = None
+    max_favorable_10d_percent: float | None = None
+    max_adverse_10d_percent: float | None = None
+    support_broken_10d: bool | None = None
+    outcome_status: Literal["pending", "partial", "complete", "not_enough_future_candles"]
+    outcome_checked_at: datetime | None = None
+
+
+class ReversalOpportunityRunResponse(BaseModel):
+    id: int
+    universe_name: str
+    run_date: str
+    generated_at: datetime
+    min_score: float
+    min_entry_quality_score: float
+    include_watch_only: bool
+    limit: int
+    item_count: int
+    items: list[ReversalOpportunitySnapshotItem]
+
+
+class ReversalOpportunityOutcomeRefreshResponse(BaseModel):
+    checked_count: int
+    updated_count: int
+    complete_count: int
+    partial_count: int
+    not_enough_future_candles_count: int
+    generated_at: datetime
+    items: list[ReversalOpportunitySnapshotItem]
 
 
 class CandlestickItem(BaseModel):
