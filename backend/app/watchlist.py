@@ -279,6 +279,22 @@ class WatchlistStore:
             row = conn.execute("SELECT * FROM watchlist_candidates WHERE id = ?", (candidate_id,)).fetchone()
         return candidate_row_to_dict(row)
 
+    def update_chase_guard(self, candidate: dict[str, Any], candle_date: str, guard_details: dict[str, Any]) -> dict[str, Any]:
+        timestamp = now_utc().isoformat()
+        features = (candidate.get("features") or {}).copy()
+        features.update(guard_details)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE watchlist_candidates
+                SET last_checked_date = ?, features_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (candle_date, json.dumps(features, sort_keys=True), timestamp, candidate["id"]),
+            )
+            row = conn.execute("SELECT * FROM watchlist_candidates WHERE id = ?", (candidate["id"],)).fetchone()
+        return candidate_row_to_dict(row)
+
     def _close_candidate(
         self,
         candidate_id: int,
@@ -339,6 +355,7 @@ class WatchlistService:
         expired: list[dict[str, Any]] = []
         invalidated: list[dict[str, Any]] = []
         waiting: list[dict[str, Any]] = []
+        skipped_entry: list[dict[str, Any]] = []
 
         for candidate in self.store.active_candidates():
             candle = self.store.first_candle_after(
@@ -359,6 +376,16 @@ class WatchlistService:
                 continue
 
             if self._entry_triggered(candidate, candle):
+                guard_result = self._entry_chase_guard(candidate, candle)
+                if guard_result["blocked"]:
+                    skipped_entry.append(
+                        self.store.update_chase_guard(
+                            candidate,
+                            str(candle["trading_date"]),
+                            guard_result["details"],
+                        )
+                    )
+                    continue
                 entry_low, entry_high, target_price = self._order_plan_for_entry(candidate, candle)
                 order_result = self.demo_trading_service.place_order_from_drishti_hit(
                     int(candidate["source_signal_hit_id"]),
@@ -388,7 +415,64 @@ class WatchlistService:
             "expired": expired,
             "invalidated": invalidated,
             "waiting": waiting,
+            "skipped_entry": skipped_entry,
         }
+
+    def _entry_chase_guard(self, candidate: dict[str, Any], candle: dict[str, Any]) -> dict[str, Any]:
+        expected_entry_price, expected_entry_date, price_source = self._expected_entry_price(candidate, candle)
+        entry_base_price = self._entry_base_price(candidate)
+        stop_loss = optional_float(candidate.get("stop_loss"))
+        support_price = support_reference_price(candidate)
+
+        entry_extension_percent = percent_distance(expected_entry_price, entry_base_price)
+        risk_percent_at_entry = percent_risk(expected_entry_price, stop_loss)
+        distance_from_support_percent = percent_risk(expected_entry_price, support_price)
+
+        reasons: list[str] = []
+        if (
+            entry_extension_percent is not None
+            and entry_extension_percent > self.settings.watchlist_max_entry_extension_percent
+        ):
+            reasons.append(
+                f"entry_extension_percent {entry_extension_percent:.2f} exceeds "
+                f"{self.settings.watchlist_max_entry_extension_percent:.2f}"
+            )
+        if (
+            risk_percent_at_entry is not None
+            and risk_percent_at_entry > self.settings.watchlist_max_risk_percent_at_entry
+        ):
+            reasons.append(
+                f"risk_percent_at_entry {risk_percent_at_entry:.2f} exceeds "
+                f"{self.settings.watchlist_max_risk_percent_at_entry:.2f}"
+            )
+
+        details = {
+            "chase_guard_checked_date": str(candle["trading_date"]),
+            "chase_guard_expected_entry_date": expected_entry_date,
+            "chase_guard_expected_entry_price": expected_entry_price,
+            "chase_guard_expected_entry_price_source": price_source,
+            "entry_extension_percent": entry_extension_percent,
+            "risk_percent_at_entry": risk_percent_at_entry,
+            "distance_from_support_percent": distance_from_support_percent,
+            "chase_guard_reason": "; ".join(reasons),
+            "chase_guard_blocked": bool(reasons),
+            "chase_guard_max_entry_extension_percent": self.settings.watchlist_max_entry_extension_percent,
+            "chase_guard_max_risk_percent_at_entry": self.settings.watchlist_max_risk_percent_at_entry,
+        }
+        return {"blocked": bool(reasons), "details": details}
+
+    def _expected_entry_price(self, candidate: dict[str, Any], candle: dict[str, Any]) -> tuple[float, str, str]:
+        next_candle = self.store.first_candle_after(int(candidate["instrument_id"]), str(candle["trading_date"]))
+        if next_candle is not None:
+            return float(next_candle["open"]), str(next_candle["trading_date"]), "next_session_open"
+        return float(candle["close"]), str(candle["trading_date"]), "trigger_candle_close"
+
+    def _entry_base_price(self, candidate: dict[str, Any]) -> float | None:
+        if candidate.get("entry_rule") == ENTRY_WAIT_BREAKOUT:
+            return optional_float(candidate.get("breakout_price"))
+        if candidate.get("entry_rule") == ENTRY_WAIT_PULLBACK:
+            return optional_float(candidate.get("entry_high"))
+        return optional_float(candidate.get("entry_high")) or optional_float(candidate.get("breakout_price"))
 
     def _order_plan_for_entry(
         self,
@@ -499,6 +583,7 @@ def watchlist_status_item(
     breakout_min_close_strength: float,
     linked_order: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    features = candidate.get("features") or {}
     return {
         "watchlist_candidate_id": int(candidate["id"]),
         "symbol": candidate["symbol"],
@@ -525,7 +610,12 @@ def watchlist_status_item(
         "invalidate_if": invalidate_if_text(candidate),
         "expiry_date": candidate["expires_after_date"],
         "summary": candidate["summary"],
-        "features": candidate.get("features") or {},
+        "features": features,
+        "entry_extension_percent": features.get("entry_extension_percent"),
+        "risk_percent_at_entry": features.get("risk_percent_at_entry"),
+        "chase_guard_reason": features.get("chase_guard_reason"),
+        "chase_guard_checked_date": features.get("chase_guard_checked_date"),
+        "chase_guard_expected_entry_price": features.get("chase_guard_expected_entry_price"),
     }
 
 
@@ -572,3 +662,25 @@ def candle_close_strength(candle: dict[str, Any]) -> float:
     if candle_range <= 0:
         return 0.5
     return (float(candle["close"]) - low) / candle_range
+
+
+def percent_distance(value: float | None, base: float | None) -> float | None:
+    if value is None or base is None or base <= 0:
+        return None
+    return ((value - base) / base) * 100
+
+
+def percent_risk(entry_price: float | None, lower_price: float | None) -> float | None:
+    if entry_price is None or lower_price is None or entry_price <= 0:
+        return None
+    return ((entry_price - lower_price) / entry_price) * 100
+
+
+def support_reference_price(candidate: dict[str, Any]) -> float | None:
+    features = candidate.get("features") or {}
+    nearest_support = features.get("nearest_support") or {}
+    for key in ("mid_price", "price", "zone_low"):
+        value = optional_float(nearest_support.get(key))
+        if value is not None:
+            return value
+    return optional_float(candidate.get("invalidation_price"))

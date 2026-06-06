@@ -974,6 +974,11 @@ class WatchlistActiveItem(BaseModel):
     expiry_date: str
     summary: str
     features: dict
+    entry_extension_percent: float | None = None
+    risk_percent_at_entry: float | None = None
+    chase_guard_reason: str | None = None
+    chase_guard_checked_date: str | None = None
+    chase_guard_expected_entry_price: float | None = None
 
 
 class WatchlistMonitorResponse(BaseModel):
@@ -981,6 +986,7 @@ class WatchlistMonitorResponse(BaseModel):
     expired: list[WatchlistCandidateItem]
     invalidated: list[WatchlistCandidateItem]
     waiting: list[WatchlistCandidateItem]
+    skipped_entry: list[WatchlistCandidateItem] = Field(default_factory=list)
 
 
 class LearningStatusResponse(BaseModel):

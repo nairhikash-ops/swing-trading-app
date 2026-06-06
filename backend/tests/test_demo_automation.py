@@ -63,6 +63,7 @@ def test_demo_ledger_reset_clears_orders_positions_and_cash(tmp_path):
 @pytest.mark.asyncio
 async def test_demo_automation_tracks_recent_algo_signal_until_confirmation(tmp_path):
     settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    settings.watchlist_max_risk_percent_at_entry = 50
     automation, demo_service = build_automation(settings, token_store)
     confirmation_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
     with token_store._connect() as conn:

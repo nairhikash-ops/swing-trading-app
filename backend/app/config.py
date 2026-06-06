@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     algo_discipline_candle_limit: int = Field(default=260, ge=60, le=365)
     watchlist_entry_expiry_sessions: int = Field(default=8, ge=1, le=30)
     watchlist_breakout_min_close_strength: float = Field(default=0.60, ge=0.0, le=1.0)
+    watchlist_max_entry_extension_percent: float = Field(default=5.0, ge=0.0, le=100.0)
+    watchlist_max_risk_percent_at_entry: float = Field(default=8.0, ge=0.0, le=100.0)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-2.5-pro"
     gemini_grounding_enabled: bool = False

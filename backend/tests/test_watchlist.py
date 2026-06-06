@@ -59,7 +59,7 @@ def test_watchlist_wait_candidate_enters_when_pullback_range_trades(tmp_path):
     settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=True)
     demo_service = DemoTradingService(settings, token_store)
     watchlist = WatchlistService(settings, token_store, demo_service)
-    review = insert_local_wait_review(token_store, hit)
+    review = insert_local_wait_review(token_store, hit, stop_loss=96)
     candidate = watchlist.upsert_from_review(int(hit["id"]), review)
 
     result = watchlist.monitor_entries()
@@ -101,6 +101,7 @@ def test_watchlist_candidate_invalidates_before_entry(tmp_path):
 
 def test_watchlist_breakout_entry_requires_strong_confirming_close(tmp_path):
     settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    settings.watchlist_max_risk_percent_at_entry = 50
     demo_service = DemoTradingService(settings, token_store)
     watchlist = WatchlistService(settings, token_store, demo_service)
     review = insert_local_wait_review(
@@ -141,6 +142,131 @@ def test_watchlist_breakout_entry_requires_strong_confirming_close(tmp_path):
     assert order["entry_low"] == hit["trigger_high"]
     assert order["entry_high"] == 132.0 * 1.02
     assert order["target_price"] is None
+
+
+def test_watchlist_breakout_enters_when_execution_quality_is_clean(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    watchlist = WatchlistService(settings, token_store, demo_service)
+    review = insert_local_wait_review(
+        token_store,
+        hit,
+        entry_low=hit["trigger_high"],
+        entry_high=hit["trigger_close"] * 1.01,
+        stop_loss=120,
+        recent_return_5d_percent=0,
+    )
+    watchlist.upsert_from_review(int(hit["id"]), review)
+    first_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
+    with token_store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_candles (
+                instrument_id, security_id, exchange_segment, instrument, trading_date,
+                source_timestamp, open, high, low, close, volume, open_interest, source, raw_json, fetched_at, updated_at
+            )
+            VALUES (?, ?, 'NSE_EQ', 'EQUITY', ?, 1714526100, 124, 130, 123, 128, 1000, NULL, 'test', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            """,
+            (hit["instrument_id"], hit["security_id"], first_date),
+        )
+
+    result = watchlist.monitor_entries()
+
+    assert result["skipped_entry"] == []
+    assert result["entered"][0]["status"] == "entered"
+    assert demo_service.orders()[0]["source_signal_hit_id"] == hit["id"]
+
+
+def test_watchlist_chase_guard_blocks_extended_breakout_gap(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    watchlist = WatchlistService(settings, token_store, demo_service)
+    review = insert_local_wait_review(
+        token_store,
+        hit,
+        entry_low=442.70,
+        entry_high=451.554,
+        stop_loss=424.68,
+        recent_return_5d_percent=0,
+    )
+    candidate = watchlist.upsert_from_review(int(hit["id"]), review)
+    first_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
+    second_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 2).isoformat()
+    with token_store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE watchlist_candidates
+            SET breakout_price = 442.70, entry_low = 442.70, entry_high = 451.554,
+                stop_loss = 424.68, invalidation_price = 424.68
+            WHERE id = ?
+            """,
+            (candidate["id"],),
+        )
+        for trading_date, open_price, high, low, close in [
+            (first_date, 439.10, 529.80, 435.00, 518.10),
+            (second_date, 528.00, 538.00, 504.10, 518.20),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO daily_candles (
+                    instrument_id, security_id, exchange_segment, instrument, trading_date,
+                    source_timestamp, open, high, low, close, volume, open_interest, source, raw_json, fetched_at, updated_at
+                )
+                VALUES (?, ?, 'NSE_EQ', 'EQUITY', ?, 1714526100, ?, ?, ?, ?, 1000, NULL, 'test', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                """,
+                (hit["instrument_id"], hit["security_id"], trading_date, open_price, high, low, close),
+            )
+
+    result = watchlist.monitor_entries()
+
+    assert result["entered"] == []
+    assert result["skipped_entry"][0]["status"] == "active"
+    assert result["skipped_entry"][0]["last_checked_date"] == first_date
+    assert result["skipped_entry"][0]["features"]["chase_guard_blocked"] is True
+    assert result["skipped_entry"][0]["features"]["chase_guard_expected_entry_price"] == 528.0
+    assert round(result["skipped_entry"][0]["features"]["entry_extension_percent"], 2) == 19.27
+    assert "entry_extension_percent" in result["skipped_entry"][0]["features"]["chase_guard_reason"]
+    assert demo_service.orders() == []
+    assert demo_service.positions() == []
+
+    active_report = watchlist.active_report()
+    assert active_report[0]["entry_extension_percent"] == result["skipped_entry"][0]["features"]["entry_extension_percent"]
+    assert active_report[0]["chase_guard_expected_entry_price"] == 528.0
+
+
+def test_watchlist_chase_guard_blocks_overly_wide_risk(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    demo_service = DemoTradingService(settings, token_store)
+    watchlist = WatchlistService(settings, token_store, demo_service)
+    review = insert_local_wait_review(
+        token_store,
+        hit,
+        entry_low=hit["trigger_high"],
+        entry_high=hit["trigger_close"] * 1.01,
+        stop_loss=100,
+        recent_return_5d_percent=0,
+    )
+    watchlist.upsert_from_review(int(hit["id"]), review)
+    first_date = date.fromordinal(date.fromisoformat(hit["trigger_date"]).toordinal() + 1).isoformat()
+    with token_store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_candles (
+                instrument_id, security_id, exchange_segment, instrument, trading_date,
+                source_timestamp, open, high, low, close, volume, open_interest, source, raw_json, fetched_at, updated_at
+            )
+            VALUES (?, ?, 'NSE_EQ', 'EQUITY', ?, 1714526100, 124, 130, 123, 128, 1000, NULL, 'test', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            """,
+            (hit["instrument_id"], hit["security_id"], first_date),
+        )
+
+    result = watchlist.monitor_entries()
+
+    assert result["entered"] == []
+    assert result["skipped_entry"][0]["features"]["risk_percent_at_entry"] > settings.watchlist_max_risk_percent_at_entry
+    assert "risk_percent_at_entry" in result["skipped_entry"][0]["features"]["chase_guard_reason"]
+    assert demo_service.orders() == []
+    assert demo_service.positions() == []
 
 
 def test_active_watchlist_report_returns_active_candidates(tmp_path):
