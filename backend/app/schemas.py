@@ -648,6 +648,8 @@ class ReversalOpportunityRunResponse(BaseModel):
     include_watch_only: bool
     limit: int
     item_count: int
+    run_type: str = "live"
+    source: str = "manual"
     items: list[ReversalOpportunitySnapshotItem]
 
 
@@ -659,6 +661,32 @@ class ReversalOpportunityOutcomeRefreshResponse(BaseModel):
     not_enough_future_candles_count: int
     generated_at: datetime
     items: list[ReversalOpportunitySnapshotItem]
+
+
+class ReversalOpportunityBackfillGroupSummary(BaseModel):
+    group: str
+    count: int
+    average_1d_return_percent: float | None = None
+    average_3d_return_percent: float | None = None
+    average_5d_return_percent: float | None = None
+    average_10d_return_percent: float | None = None
+    average_max_favorable_10d_percent: float | None = None
+    average_max_adverse_10d_percent: float | None = None
+    support_broken_rate: float
+
+
+class ReversalOpportunityBackfillResponse(BaseModel):
+    run_count: int
+    run_ids: list[int]
+    item_count: int
+    complete_count: int
+    partial_count: int
+    not_enough_future_candles_count: int
+    date_range: dict[str, str | None]
+    sample_every_n_sessions: int
+    min_entry_quality_score: float
+    stage_summary: list[ReversalOpportunityBackfillGroupSummary]
+    entry_quality_summary: list[ReversalOpportunityBackfillGroupSummary]
 
 
 class CandlestickItem(BaseModel):

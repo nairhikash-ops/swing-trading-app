@@ -64,29 +64,43 @@ class ReversalOpportunityService:
         min_score: float = 0,
         min_entry_quality_score: float = 0,
     ) -> list[dict[str, Any]]:
-        response_limit = min(max(limit, 1), 500)
         items: list[dict[str, Any]] = []
         for instrument in self.store.nifty_500_instruments(limit=500):
             candles = self.store.candles_for_instrument(int(instrument["id"]), limit=365)
             item = classify_reversal_opportunity(instrument, candles)
             if item is None:
                 continue
-            if not include_watch_only and item["suggested_next_action"] == "watch_only":
-                continue
-            if float(item["opportunity_score"]) < min_score:
-                continue
-            if float(item["entry_quality_score"]) < min_entry_quality_score:
+            items.append(item)
+        return filter_and_sort_items(
+            items,
+            limit=limit,
+            include_watch_only=include_watch_only,
+            min_score=min_score,
+            min_entry_quality_score=min_entry_quality_score,
+        )
+
+    def scan_nifty_500_as_of(
+        self,
+        replay_date: str,
+        limit: int = 500,
+        include_watch_only: bool = False,
+        min_score: float = 0,
+        min_entry_quality_score: float = 55,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for instrument in self.store.nifty_500_instruments(limit=500):
+            candles = self._candles_for_instrument_as_of(int(instrument["id"]), replay_date, limit=365)
+            item = classify_reversal_opportunity(instrument, candles)
+            if item is None:
                 continue
             items.append(item)
-        return sorted(
+        return filter_and_sort_items(
             items,
-            key=lambda item: (
-                -float(item["entry_quality_score"]),
-                -float(item["opportunity_score"]),
-                stage_rank(str(item["opportunity_stage"])),
-                str(item["symbol"]),
-            ),
-        )[:response_limit]
+            limit=limit,
+            include_watch_only=include_watch_only,
+            min_score=min_score,
+            min_entry_quality_score=min_entry_quality_score,
+        )
 
     def refresh_nifty_500_snapshot(
         self,
@@ -114,6 +128,76 @@ class ReversalOpportunityService:
         )
         store.insert_items(run_id, items)
         return store.snapshot_for_run(run_id, limit=max(limit, 1))
+
+    def backfill_reversal_opportunities(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_every_n_sessions: int = 5,
+        limit_per_date: int = 500,
+        min_score: float = 0,
+        min_entry_quality_score: float = 55,
+        include_watch_only: bool = False,
+        max_dates: int = 60,
+    ) -> dict[str, Any]:
+        store = self._persistence()
+        replay_dates = select_replay_dates(
+            store.trading_sessions(),
+            start_date=start_date,
+            end_date=end_date,
+            sample_every_n_sessions=sample_every_n_sessions,
+            max_dates=max_dates,
+        )
+        run_ids: list[int] = []
+        saved_items: list[dict[str, Any]] = []
+        for replay_date in replay_dates:
+            items = self.scan_nifty_500_as_of(
+                replay_date,
+                limit=limit_per_date,
+                include_watch_only=include_watch_only,
+                min_score=min_score,
+                min_entry_quality_score=min_entry_quality_score,
+            )
+            run_id = store.create_run(
+                universe_name=NIFTY_500_INDEX_NAME,
+                run_date=replay_date,
+                min_score=min_score,
+                min_entry_quality_score=min_entry_quality_score,
+                include_watch_only=include_watch_only,
+                limit=limit_per_date,
+                item_count=len(items),
+                run_type="backfill",
+                source="backfill",
+            )
+            run_ids.append(run_id)
+            store.insert_items(run_id, items)
+            for item in store.items_for_run(run_id, limit=max(limit_per_date, len(items), 1)):
+                outcome = calculate_outcome(
+                    item,
+                    store.future_candles(int(item["instrument_id"]), str(item["signal_date"]), limit=10),
+                )
+                store.update_item_outcome(int(item["id"]), outcome)
+                updated = store.item_by_id(int(item["id"]))
+                if updated is not None:
+                    saved_items.append(updated)
+        return build_backfill_response(
+            items=saved_items,
+            run_ids=run_ids,
+            replay_dates=replay_dates,
+            sample_every_n_sessions=sample_every_n_sessions,
+            min_entry_quality_score=min_entry_quality_score,
+        )
+
+    def backfill_summary(self, limit: int = 10000) -> dict[str, Any]:
+        items = self._persistence().backfill_items(limit=limit)
+        replay_dates = sorted({str(item["signal_date"]) for item in items})
+        return build_backfill_response(
+            items=items,
+            run_ids=[],
+            replay_dates=replay_dates,
+            sample_every_n_sessions=0,
+            min_entry_quality_score=0,
+        )
 
     def latest_snapshot(
         self,
@@ -165,6 +249,27 @@ class ReversalOpportunityService:
             raise RuntimeError("Reversal opportunity persistence requires a TokenStore-backed service.")
         return self.persistence_store
 
+    def _candles_for_instrument_as_of(
+        self,
+        instrument_id: int,
+        replay_date: str,
+        limit: int = 365,
+    ) -> list[dict[str, Any]]:
+        if hasattr(self.store, "candles_for_instrument_as_of"):
+            return self.store.candles_for_instrument_as_of(instrument_id, replay_date, limit=limit)
+        with self.store._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT trading_date, open, high, low, close, volume
+                FROM daily_candles
+                WHERE instrument_id = ? AND trading_date <= ?
+                ORDER BY trading_date DESC
+                LIMIT ?
+                """,
+                (instrument_id, replay_date, min(max(limit, 20), 365)),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
 
 class ReversalOpportunityStore:
     def __init__(self, token_store: TokenStore) -> None:
@@ -187,7 +292,9 @@ class ReversalOpportunityStore:
                     min_entry_quality_score REAL NOT NULL,
                     include_watch_only INTEGER NOT NULL,
                     limit_value INTEGER NOT NULL,
-                    item_count INTEGER NOT NULL DEFAULT 0
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    run_type TEXT NOT NULL DEFAULT 'live',
+                    source TEXT NOT NULL DEFAULT 'manual'
                 )
                 """
             )
@@ -243,10 +350,24 @@ class ReversalOpportunityStore:
                 )
                 """
             )
+            ensure_columns(
+                conn,
+                "reversal_opportunity_runs",
+                {
+                    "run_type": "TEXT NOT NULL DEFAULT 'live'",
+                    "source": "TEXT NOT NULL DEFAULT 'manual'",
+                },
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_runs_universe
                 ON reversal_opportunity_runs(universe_name, id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_reversal_opportunity_runs_type
+                ON reversal_opportunity_runs(run_type, universe_name, id)
                 """
             )
             conn.execute(
@@ -278,6 +399,8 @@ class ReversalOpportunityStore:
         include_watch_only: bool,
         limit: int,
         item_count: int,
+        run_type: str = "live",
+        source: str = "manual",
     ) -> int:
         generated_at = now_utc().isoformat()
         with self._connect() as conn:
@@ -285,9 +408,10 @@ class ReversalOpportunityStore:
                 """
                 INSERT INTO reversal_opportunity_runs (
                     universe_name, run_date, generated_at, min_score,
-                    min_entry_quality_score, include_watch_only, limit_value, item_count
+                    min_entry_quality_score, include_watch_only, limit_value, item_count,
+                    run_type, source
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     universe_name,
@@ -298,6 +422,8 @@ class ReversalOpportunityStore:
                     1 if include_watch_only else 0,
                     int(limit),
                     int(item_count),
+                    run_type,
+                    source,
                 ),
             )
             return int(cursor.lastrowid)
@@ -398,6 +524,7 @@ class ReversalOpportunityStore:
                 """
                 SELECT * FROM reversal_opportunity_runs
                 WHERE universe_name = ?
+                  AND run_type = 'live'
                 ORDER BY id DESC
                 LIMIT 1
                 """,
@@ -429,6 +556,20 @@ class ReversalOpportunityStore:
             ).fetchall()
         return [snapshot_item_response(dict(row)) for row in rows]
 
+    def items_for_run(self, run_id: int, *, limit: int = 500) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM reversal_opportunity_items
+                WHERE run_id = ?
+                ORDER BY entry_quality_score DESC, opportunity_score DESC, symbol
+                LIMIT ?
+                """,
+                (run_id, min(max(limit, 1), 1000)),
+            ).fetchall()
+        return [snapshot_item_response(dict(row)) for row in rows]
+
     def items_for_outcome_refresh(self, *, limit: int = 1000) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -456,6 +597,17 @@ class ReversalOpportunityStore:
                 (instrument_id, signal_date, min(max(limit, 1), 10)),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def trading_sessions(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT trading_date
+                FROM daily_candles
+                ORDER BY trading_date
+                """
+            ).fetchall()
+        return [str(row["trading_date"]) for row in rows]
 
     def update_item_outcome(self, item_id: int, outcome: dict[str, Any]) -> None:
         with self._connect() as conn:
@@ -494,6 +646,21 @@ class ReversalOpportunityStore:
                 (item_id,),
             ).fetchone()
         return snapshot_item_response(dict(row)) if row else None
+
+    def backfill_items(self, *, limit: int = 10000) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT i.*
+                FROM reversal_opportunity_items i
+                JOIN reversal_opportunity_runs r ON r.id = i.run_id
+                WHERE r.run_type = 'backfill'
+                ORDER BY i.signal_date DESC, i.entry_quality_score DESC, i.symbol
+                LIMIT ?
+                """,
+                (min(max(limit, 1), 50000),),
+            ).fetchall()
+        return [snapshot_item_response(dict(row)) for row in rows]
 
     def _item_rows_for_run(
         self,
@@ -1004,11 +1171,144 @@ def optional_int(value: Any) -> int | None:
         return None
 
 
+def filter_and_sort_items(
+    items: list[dict[str, Any]],
+    *,
+    limit: int,
+    include_watch_only: bool,
+    min_score: float,
+    min_entry_quality_score: float,
+) -> list[dict[str, Any]]:
+    filtered = []
+    for item in items:
+        if not include_watch_only and item["suggested_next_action"] == "watch_only":
+            continue
+        if float(item["opportunity_score"]) < min_score:
+            continue
+        if float(item["entry_quality_score"]) < min_entry_quality_score:
+            continue
+        filtered.append(item)
+    return sorted(
+        filtered,
+        key=lambda item: (
+            -float(item["entry_quality_score"]),
+            -float(item["opportunity_score"]),
+            stage_rank(str(item["opportunity_stage"])),
+            str(item["symbol"]),
+        ),
+    )[: min(max(limit, 1), 500)]
+
+
 def latest_item_date(items: list[dict[str, Any]]) -> str:
     dates = [str(item.get("latest_date") or "") for item in items if item.get("latest_date")]
     if dates:
         return max(dates)
     return now_utc().date().isoformat()
+
+
+def select_replay_dates(
+    trading_sessions: list[str],
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    sample_every_n_sessions: int,
+    max_dates: int,
+) -> list[str]:
+    if len(trading_sessions) <= 10:
+        return []
+    safe_sessions = sorted(set(trading_sessions))[:-10]
+    if start_date:
+        safe_sessions = [session for session in safe_sessions if session >= start_date]
+    if end_date:
+        safe_sessions = [session for session in safe_sessions if session <= end_date]
+    sample_step = max(int(sample_every_n_sessions), 1)
+    max_count = min(max(int(max_dates), 1), 500)
+    if start_date is None and end_date is None:
+        safe_sessions = safe_sessions[-(max_count * sample_step) :]
+    sampled = safe_sessions[::sample_step]
+    return sampled[-max_count:]
+
+
+def build_backfill_response(
+    *,
+    items: list[dict[str, Any]],
+    run_ids: list[int],
+    replay_dates: list[str],
+    sample_every_n_sessions: int,
+    min_entry_quality_score: float,
+) -> dict[str, Any]:
+    status_counts = {
+        "complete": 0,
+        "partial": 0,
+        "not_enough_future_candles": 0,
+    }
+    for item in items:
+        status = str(item.get("outcome_status") or "")
+        if status in status_counts:
+            status_counts[status] += 1
+    return {
+        "run_count": len(run_ids),
+        "run_ids": run_ids,
+        "item_count": len(items),
+        "complete_count": status_counts["complete"],
+        "partial_count": status_counts["partial"],
+        "not_enough_future_candles_count": status_counts["not_enough_future_candles"],
+        "date_range": {
+            "start_date": replay_dates[0] if replay_dates else None,
+            "end_date": replay_dates[-1] if replay_dates else None,
+        },
+        "sample_every_n_sessions": sample_every_n_sessions,
+        "min_entry_quality_score": float(min_entry_quality_score),
+        "stage_summary": group_backfill_items(items, lambda item: str(item["opportunity_stage"])),
+        "entry_quality_summary": group_backfill_items(
+            items,
+            lambda item: entry_quality_bucket(float(item["entry_quality_score"])),
+        ),
+    }
+
+
+def group_backfill_items(items: list[dict[str, Any]], key_fn) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        groups.setdefault(key_fn(item), []).append(item)
+    return [
+        {
+            "group": key,
+            "count": len(group_items),
+            "average_1d_return_percent": average_metric(group_items, "outcome_1d_return_percent"),
+            "average_3d_return_percent": average_metric(group_items, "outcome_3d_return_percent"),
+            "average_5d_return_percent": average_metric(group_items, "outcome_5d_return_percent"),
+            "average_10d_return_percent": average_metric(group_items, "outcome_10d_return_percent"),
+            "average_max_favorable_10d_percent": average_metric(group_items, "max_favorable_10d_percent"),
+            "average_max_adverse_10d_percent": average_metric(group_items, "max_adverse_10d_percent"),
+            "support_broken_rate": support_broken_rate(group_items),
+        }
+        for key, group_items in sorted(groups.items())
+    ]
+
+
+def average_metric(items: list[dict[str, Any]], field: str) -> float | None:
+    values = [float(item[field]) for item in items if item.get(field) is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def support_broken_rate(items: list[dict[str, Any]]) -> float:
+    values = [item.get("support_broken_10d") for item in items if item.get("support_broken_10d") is not None]
+    if not values:
+        return 0.0
+    return round(sum(1 for value in values if value) / len(values), 4)
+
+
+def entry_quality_bucket(score: float) -> str:
+    if score >= 75:
+        return "75_plus"
+    if score >= 65:
+        return "65_74"
+    if score >= 55:
+        return "55_64"
+    return "under_55"
 
 
 def json_dumps(value: Any) -> str:
@@ -1034,6 +1334,13 @@ def optional_bool(value: Any) -> bool | None:
     return bool(value)
 
 
+def ensure_columns(conn, table_name: str, columns: dict[str, str]) -> None:
+    existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+
+
 def run_response(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(row["id"]),
@@ -1045,6 +1352,8 @@ def run_response(row: dict[str, Any]) -> dict[str, Any]:
         "include_watch_only": bool(row["include_watch_only"]),
         "limit": int(row["limit_value"]),
         "item_count": int(row["item_count"]),
+        "run_type": row.get("run_type") or "live",
+        "source": row.get("source") or "manual",
     }
 
 

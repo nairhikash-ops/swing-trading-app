@@ -637,6 +637,209 @@ def test_outcome_refresh_endpoint_returns_typed_response():
     assert response.json()["partial_count"] == 1
 
 
+def test_as_of_scan_uses_only_candles_on_or_before_replay_date(monkeypatch):
+    candles = [candle(index, 100 - index, 101 - index, 99 - index, 100 - index) for index in range(12)]
+    captured_dates = []
+
+    class FakeAsOfStore:
+        def nifty_500_instruments(self, limit: int = 500):
+            return [instrument("BEML")]
+
+        def candles_for_instrument_as_of(self, instrument_id: int, replay_date: str, limit: int = 365):
+            return [row for row in candles if row["trading_date"] <= replay_date]
+
+    def fake_classify(candidate, passed_candles):
+        captured_dates.extend(row["trading_date"] for row in passed_candles)
+        return {
+            **fake_response_item(candidate["underlying_symbol"]),
+            "instrument_id": candidate["id"],
+            "latest_date": passed_candles[-1]["trading_date"],
+            "entry_quality_score": 60,
+            "suggested_next_action": "wait_for_confirmation",
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+    replay_date = candles[6]["trading_date"]
+
+    items = ReversalOpportunityService(None, store=FakeAsOfStore()).scan_nifty_500_as_of(
+        replay_date,
+        min_entry_quality_score=55,
+    )
+
+    assert items[0]["latest_date"] == replay_date
+    assert captured_dates
+    assert all(item_date <= replay_date for item_date in captured_dates)
+    assert candles[7]["trading_date"] not in captured_dates
+
+
+def test_as_of_scan_does_not_call_live_candle_loader(monkeypatch):
+    candles = [candle(index, 100 - index, 101 - index, 99 - index, 100 - index) for index in range(8)]
+
+    class FakeAsOfOnlyStore:
+        def nifty_500_instruments(self, limit: int = 500):
+            return [instrument("BEML")]
+
+        def candles_for_instrument(self, instrument_id: int, limit: int = 365):
+            raise AssertionError("as-of scan must not use the live candle loader")
+
+        def candles_for_instrument_as_of(self, instrument_id: int, replay_date: str, limit: int = 365):
+            return [row for row in candles if row["trading_date"] <= replay_date]
+
+    def fake_classify(candidate, passed_candles):
+        return {
+            **fake_response_item(candidate["underlying_symbol"]),
+            "instrument_id": candidate["id"],
+            "latest_date": passed_candles[-1]["trading_date"],
+            "entry_quality_score": 60,
+            "suggested_next_action": "wait_for_confirmation",
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+
+    items = ReversalOpportunityService(None, store=FakeAsOfOnlyStore()).scan_nifty_500_as_of(
+        candles[5]["trading_date"],
+        min_entry_quality_score=55,
+    )
+
+    assert items[0]["latest_date"] == candles[5]["trading_date"]
+
+
+def test_backfill_excludes_latest_ten_sessions_by_default(tmp_path, monkeypatch):
+    service, token_store, session_candles = backfill_service(tmp_path, monkeypatch)
+    seed_candles_for_instrument(token_store, 1, session_candles)
+
+    result = service.backfill_reversal_opportunities(sample_every_n_sessions=1, max_dates=30)
+
+    assert result["run_count"] == 15
+    assert result["item_count"] == 15
+    latest_signal_date = max(item["signal_date"] for item in service._persistence().backfill_items())
+    assert latest_signal_date == session_candles[-11]["trading_date"]
+    assert session_candles[-10]["trading_date"] not in {item["signal_date"] for item in service._persistence().backfill_items()}
+
+
+def test_backfill_creates_runs_items_and_complete_outcomes(tmp_path, monkeypatch):
+    service, token_store, session_candles = backfill_service(tmp_path, monkeypatch)
+    seed_candles_for_instrument(token_store, 1, session_candles)
+    replay_date = session_candles[5]["trading_date"]
+
+    result = service.backfill_reversal_opportunities(
+        start_date=replay_date,
+        end_date=replay_date,
+        sample_every_n_sessions=1,
+        max_dates=1,
+    )
+
+    assert result["run_count"] == 1
+    assert result["item_count"] == 1
+    assert result["complete_count"] == 1
+    item = service._persistence().backfill_items()[0]
+    assert item["outcome_status"] == "complete"
+    assert item["outcome_10d_return_percent"] is not None
+
+
+def test_backfill_marks_partial_when_stock_has_limited_future_candles(tmp_path, monkeypatch):
+    service, token_store, session_candles = backfill_service(tmp_path, monkeypatch)
+    seed_candles_for_instrument(token_store, 2, session_candles)
+    seed_candles_for_instrument(token_store, 1, session_candles[:9])
+    replay_date = session_candles[5]["trading_date"]
+
+    result = service.backfill_reversal_opportunities(
+        start_date=replay_date,
+        end_date=replay_date,
+        sample_every_n_sessions=1,
+        max_dates=1,
+    )
+
+    assert result["partial_count"] == 1
+    item = service._persistence().backfill_items()[0]
+    assert item["outcome_status"] == "partial"
+    assert item["outcome_1d_return_percent"] is not None
+    assert item["outcome_10d_return_percent"] is None
+
+
+def test_backfill_marks_not_enough_when_stock_has_no_future_candles(tmp_path, monkeypatch):
+    service, token_store, session_candles = backfill_service(tmp_path, monkeypatch)
+    seed_candles_for_instrument(token_store, 2, session_candles)
+    seed_candles_for_instrument(token_store, 1, session_candles[:6])
+    replay_date = session_candles[5]["trading_date"]
+
+    result = service.backfill_reversal_opportunities(
+        start_date=replay_date,
+        end_date=replay_date,
+        sample_every_n_sessions=1,
+        max_dates=1,
+    )
+
+    assert result["not_enough_future_candles_count"] == 1
+    item = service._persistence().backfill_items()[0]
+    assert item["outcome_status"] == "not_enough_future_candles"
+
+
+def test_backfill_summary_groups_by_stage_and_entry_quality_bucket(tmp_path, monkeypatch):
+    service, token_store, session_candles = backfill_service(
+        tmp_path,
+        monkeypatch,
+        symbols=("BEML", "HFCL"),
+    )
+    seed_candles_for_instrument(token_store, 1, session_candles)
+    seed_candles_for_instrument(token_store, 2, session_candles)
+    replay_date = session_candles[5]["trading_date"]
+
+    result = service.backfill_reversal_opportunities(
+        start_date=replay_date,
+        end_date=replay_date,
+        sample_every_n_sessions=1,
+        max_dates=1,
+    )
+
+    stage_groups = {item["group"]: item for item in result["stage_summary"]}
+    bucket_groups = {item["group"]: item for item in result["entry_quality_summary"]}
+    assert stage_groups["confirmed_reversal"]["count"] == 1
+    assert stage_groups["support_reclaim"]["count"] == 1
+    assert bucket_groups["75_plus"]["count"] == 1
+    assert bucket_groups["55_64"]["count"] == 1
+
+
+def test_backfill_endpoint_returns_typed_summary():
+    class FakeService:
+        def backfill_reversal_opportunities(self, **kwargs):
+            assert kwargs["sample_every_n_sessions"] == 1
+            assert kwargs["max_dates"] == 1
+            return fake_backfill_response()
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).post(
+            "/api/research/reversal-opportunities/backfill",
+            params={"sample_every_n_sessions": 1, "max_dates": 1},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["run_count"] == 1
+    assert response.json()["stage_summary"][0]["group"] == "confirmed_reversal"
+
+
+def test_backfill_summary_endpoint_returns_saved_summary():
+    class FakeService:
+        def backfill_summary(self, limit: int):
+            assert limit == 10
+            return fake_backfill_response()
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get(
+            "/api/research/reversal-opportunities/backfill/summary",
+            params={"limit": 10},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["entry_quality_summary"][0]["group"] == "75_plus"
+
+
 class FakePersistenceStoreScanStore:
     def __init__(self, symbol: str = "BEML") -> None:
         self._symbol = symbol
@@ -699,6 +902,86 @@ def seed_future_candles(token_store: TokenStore, closes: list[float]) -> None:
     )
 
 
+class FakeBackfillScanStore:
+    def __init__(self, candles: list[dict], symbols: tuple[str, ...] = ("BEML",)) -> None:
+        self.candles = candles
+        self.symbols = symbols
+
+    def nifty_500_instruments(self, limit: int = 500):
+        return [instrument_with_id(symbol, index + 1) for index, symbol in enumerate(self.symbols)]
+
+    def candles_for_instrument_as_of(self, instrument_id: int, replay_date: str, limit: int = 365):
+        return [row for row in self.candles if row["trading_date"] <= replay_date][-limit:]
+
+
+def instrument_with_id(symbol: str, instrument_id: int) -> dict:
+    item = instrument(symbol)
+    item["id"] = instrument_id
+    item["isin"] = f"INE00000000{instrument_id}"
+    item["security_id"] = str(394 + instrument_id)
+    return item
+
+
+def backfill_service(
+    tmp_path,
+    monkeypatch,
+    symbols: tuple[str, ...] = ("BEML",),
+) -> tuple[ReversalOpportunityService, TokenStore, list[dict]]:
+    settings = Settings(app_secret_key="test-secret", data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    HistoricalDataStore(token_store)
+    persistence_store = ReversalOpportunityStore(token_store)
+    session_candles = [candle(index, 100 + index, 102 + index, 99 + index, 100 + index) for index in range(25)]
+
+    def fake_classify(candidate, passed_candles):
+        symbol = candidate["underlying_symbol"]
+        high_quality = symbol == "HFCL"
+        return {
+            **fake_response_item(symbol),
+            "instrument_id": candidate["id"],
+            "latest_date": passed_candles[-1]["trading_date"],
+            "latest_close": float(passed_candles[-1]["close"]),
+            "opportunity_stage": "confirmed_reversal" if high_quality else "support_reclaim",
+            "opportunity_score": 90.0 if high_quality else 75.0,
+            "entry_quality_score": 80.0 if high_quality else 60.0,
+            "suggested_next_action": "ready_for_drishti_review" if high_quality else "wait_for_confirmation",
+            "nearest_support": nearest_support(mid_price=95),
+            "support_reclaim": not high_quality,
+            "quality_support_reclaim": not high_quality,
+        }
+
+    monkeypatch.setattr("app.reversal_opportunities.classify_reversal_opportunity", fake_classify)
+    return (
+        ReversalOpportunityService(
+            token_store,
+            store=FakeBackfillScanStore(session_candles, symbols=symbols),
+            persistence_store=persistence_store,
+        ),
+        token_store,
+        session_candles,
+    )
+
+
+def seed_candles_for_instrument(token_store: TokenStore, instrument_id: int, candles: list[dict]) -> None:
+    HistoricalDataStore(token_store).upsert_candles(
+        {"instrument_id": instrument_id, "security_id": str(394 + instrument_id)},
+        [
+            {
+                "timestamp": index,
+                "trading_date": item["trading_date"],
+                "open": item["open"],
+                "high": item["high"],
+                "low": item["low"],
+                "close": item["close"],
+                "volume": item["volume"],
+            }
+            for index, item in enumerate(candles, start=1)
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+
 def fake_run_response(items: list[dict]) -> dict:
     return {
         "id": 1,
@@ -710,7 +993,49 @@ def fake_run_response(items: list[dict]) -> dict:
         "include_watch_only": False,
         "limit": 500,
         "item_count": len(items),
+        "run_type": "live",
+        "source": "manual",
         "items": items,
+    }
+
+
+def fake_backfill_response() -> dict:
+    return {
+        "run_count": 1,
+        "run_ids": [1],
+        "item_count": 1,
+        "complete_count": 1,
+        "partial_count": 0,
+        "not_enough_future_candles_count": 0,
+        "date_range": {"start_date": "2026-01-05", "end_date": "2026-01-05"},
+        "sample_every_n_sessions": 1,
+        "min_entry_quality_score": 55.0,
+        "stage_summary": [
+            {
+                "group": "confirmed_reversal",
+                "count": 1,
+                "average_1d_return_percent": 1.0,
+                "average_3d_return_percent": 2.0,
+                "average_5d_return_percent": 3.0,
+                "average_10d_return_percent": 4.0,
+                "average_max_favorable_10d_percent": 5.0,
+                "average_max_adverse_10d_percent": -1.0,
+                "support_broken_rate": 0.0,
+            }
+        ],
+        "entry_quality_summary": [
+            {
+                "group": "75_plus",
+                "count": 1,
+                "average_1d_return_percent": 1.0,
+                "average_3d_return_percent": 2.0,
+                "average_5d_return_percent": 3.0,
+                "average_10d_return_percent": 4.0,
+                "average_max_favorable_10d_percent": 5.0,
+                "average_max_adverse_10d_percent": -1.0,
+                "support_broken_rate": 0.0,
+            }
+        ],
     }
 
 

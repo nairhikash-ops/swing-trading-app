@@ -51,6 +51,7 @@ from app.schemas import (
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
+    ReversalOpportunityBackfillResponse,
     ReversalOpportunityItem,
     ReversalOpportunityOutcomeRefreshResponse,
     ReversalOpportunityRunResponse,
@@ -640,6 +641,43 @@ async def research_reversal_opportunity_outcomes_refresh(
     reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
 ) -> ReversalOpportunityOutcomeRefreshResponse:
     return ReversalOpportunityOutcomeRefreshResponse(**reversal_opportunity_service.update_outcomes(limit=limit))
+
+
+@app.post("/api/research/reversal-opportunities/backfill", response_model=ReversalOpportunityBackfillResponse)
+async def research_reversal_opportunity_backfill(
+    start_date: str | None = Query(default=None, max_length=10),
+    end_date: str | None = Query(default=None, max_length=10),
+    sample_every_n_sessions: int = Query(default=5, ge=1, le=60),
+    limit_per_date: int = Query(default=500, ge=1, le=500),
+    min_score: float = Query(default=0, ge=0, le=100),
+    min_entry_quality_score: float = Query(default=55, ge=0, le=100),
+    include_watch_only: bool = Query(default=False),
+    max_dates: int = Query(default=60, ge=1, le=500),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityBackfillResponse:
+    try:
+        return ReversalOpportunityBackfillResponse(
+            **reversal_opportunity_service.backfill_reversal_opportunities(
+                start_date=start_date,
+                end_date=end_date,
+                sample_every_n_sessions=sample_every_n_sessions,
+                limit_per_date=limit_per_date,
+                min_score=min_score,
+                min_entry_quality_score=min_entry_quality_score,
+                include_watch_only=include_watch_only,
+                max_dates=max_dates,
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/research/reversal-opportunities/backfill/summary", response_model=ReversalOpportunityBackfillResponse)
+async def research_reversal_opportunity_backfill_summary(
+    limit: int = Query(default=10000, ge=1, le=50000),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityBackfillResponse:
+    return ReversalOpportunityBackfillResponse(**reversal_opportunity_service.backfill_summary(limit=limit))
 
 
 @app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)
