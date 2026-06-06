@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     data_maintenance_enabled: bool = True
     data_maintenance_check_interval_seconds: int = Field(default=3600, ge=300, le=24 * 3600)
     data_retention_calendar_days: int = Field(default=365, ge=1, le=3650)
+    reversal_opportunity_automation_enabled: bool = True
+    reversal_opportunity_min_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    reversal_opportunity_min_entry_quality_score: float = Field(default=55.0, ge=0.0, le=100.0)
+    reversal_opportunity_include_watch_only: bool = False
+    reversal_opportunity_limit: int = Field(default=500, ge=1, le=500)
+    reversal_opportunity_outcome_refresh_limit: int = Field(default=1000, ge=1, le=5000)
     demo_initial_cash: float = Field(default=1_000_000.0, gt=0)
     demo_default_quantity: float = Field(default=1.0, gt=0)
     demo_default_risk_reward: float = Field(default=2.0, ge=1.0, le=10.0)

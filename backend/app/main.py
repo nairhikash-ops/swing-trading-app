@@ -192,6 +192,7 @@ async def lifespan(app: FastAPI):
         historical_service,
         regime_service,
         demo_automation_service,
+        reversal_opportunity_service=reversal_opportunity_service,
     )
     app.state.settings = settings
     app.state.token_service = token_service
