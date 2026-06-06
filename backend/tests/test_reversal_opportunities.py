@@ -902,6 +902,151 @@ def test_backfill_summary_endpoint_returns_saved_summary():
     assert response.json()["entry_quality_summary"][0]["group"] == "75_plus"
 
 
+def test_promotion_marks_confirmed_reversal_candidate_eligible(tmp_path):
+    service, run_id, _ = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("BEML", stage="confirmed_reversal", entry_quality_score=75)],
+    )
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=True)
+
+    assert result["eligible_count"] == 1
+    assert result["items"][0]["status"] == "eligible"
+
+
+def test_promotion_marks_support_reclaim_candidate_eligible(tmp_path):
+    service, run_id, _ = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("HFCL", instrument_id=2, stage="support_reclaim", entry_quality_score=70)],
+    )
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=True)
+
+    assert result["eligible_count"] == 1
+    assert result["items"][0]["symbol"] == "HFCL"
+    assert result["items"][0]["status"] == "eligible"
+
+
+def test_promotion_rejects_low_score_and_bullish_watch(tmp_path):
+    service, run_id, _ = promotion_service_with_items(
+        tmp_path,
+        [
+            promotion_source_item("LOW", stage="confirmed_reversal", entry_quality_score=60),
+            promotion_source_item("WATCH", instrument_id=2, stage="bullish_reversal_watch", entry_quality_score=82),
+        ],
+    )
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=True)
+    statuses = {item["symbol"]: item["status"] for item in result["items"]}
+
+    assert result["eligible_count"] == 0
+    assert statuses == {"LOW": "ineligible_low_score", "WATCH": "ineligible_stage"}
+
+
+def test_promotion_rejects_bearish_latest_evidence(tmp_path):
+    item = promotion_source_item("BEAR", stage="confirmed_reversal", entry_quality_score=82)
+    item["latest_reversal_patterns"] = ["shooting_star"]
+    item["reasons"] = ["regime_downtrend", "latest_bearish_reversal_evidence"]
+    service, run_id, _ = promotion_service_with_items(tmp_path, [item])
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=True)
+
+    assert result["eligible_count"] == 0
+    assert result["items"][0]["status"] == "ineligible_stage"
+    assert result["items"][0]["reason"] == "bearish_latest_evidence"
+
+
+def test_promotion_dry_run_does_not_write_watchlist_items(tmp_path):
+    service, run_id, token_store = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("BEML", stage="confirmed_reversal", entry_quality_score=75)],
+    )
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=True)
+
+    with token_store._connect() as conn:
+        count = conn.execute("SELECT COUNT(*) AS count FROM watchlist_candidates").fetchone()["count"]
+    assert result["promoted_count"] == 0
+    assert count == 0
+
+
+def test_promotion_creates_watchlist_review_candidate(tmp_path):
+    service, run_id, token_store = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("BEML", stage="confirmed_reversal", entry_quality_score=75)],
+    )
+
+    result = service.promote_to_watchlist(run_id=run_id, dry_run=False)
+
+    with token_store._connect() as conn:
+        candidate = conn.execute("SELECT * FROM watchlist_candidates").fetchone()
+        hit = conn.execute("SELECT * FROM drishti_signal_hits").fetchone()
+    assert result["promoted_count"] == 1
+    assert candidate["source_signal_id"] == "reversal_radar"
+    assert candidate["status"] == "active"
+    assert candidate["decision"] == "WAIT"
+    assert candidate["source_signal_hit_id"] == hit["id"]
+    assert hit["signal_id"] == "reversal_radar"
+
+
+def test_duplicate_promotion_is_skipped(tmp_path):
+    service, run_id, _ = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("BEML", stage="confirmed_reversal", entry_quality_score=75)],
+    )
+
+    first = service.promote_to_watchlist(run_id=run_id, dry_run=False)
+    second = service.promote_to_watchlist(run_id=run_id, dry_run=False)
+
+    assert first["promoted_count"] == 1
+    assert second["promoted_count"] == 0
+    assert second["skipped_duplicate_count"] == 1
+    assert second["items"][0]["status"] == "duplicate"
+
+
+def test_promotion_uses_latest_live_snapshot_when_run_id_omitted(tmp_path):
+    service, _, _ = promotion_service_with_items(
+        tmp_path,
+        [promotion_source_item("OLD", stage="confirmed_reversal", entry_quality_score=75)],
+    )
+    second_run_id = insert_promotion_run(
+        service,
+        [promotion_source_item("NEW", instrument_id=2, stage="support_reclaim", entry_quality_score=70)],
+    )
+
+    result = service.promote_to_watchlist(dry_run=True)
+
+    assert result["run_id"] == second_run_id
+    assert [item["symbol"] for item in result["items"]] == ["NEW"]
+
+
+def test_promotion_endpoint_returns_typed_response():
+    class FakeService:
+        def promote_to_watchlist(self, run_id, min_entry_quality_score: float, limit: int, dry_run: bool):
+            assert run_id == 10
+            assert min_entry_quality_score == 65
+            assert limit == 5
+            assert dry_run is False
+            return fake_promotion_response()
+
+    app.dependency_overrides[get_reversal_opportunity_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).post(
+            "/api/research/reversal-opportunities/promote-to-watchlist",
+            params={
+                "run_id": 10,
+                "min_entry_quality_score": 65,
+                "limit": 5,
+                "dry_run": "false",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["status"] == "eligible"
+
+
 class FakePersistenceStoreScanStore:
     def __init__(self, symbol: str = "BEML") -> None:
         self._symbol = symbol
@@ -1042,6 +1187,137 @@ def seed_candles_for_instrument(token_store: TokenStore, instrument_id: int, can
         "NSE_EQ",
         "EQUITY",
     )
+
+
+def promotion_source_item(
+    symbol: str,
+    *,
+    instrument_id: int = 1,
+    stage: str = "confirmed_reversal",
+    entry_quality_score: float = 75,
+    action: str | None = None,
+) -> dict:
+    item = fake_response_item(symbol)
+    item.update(
+        {
+            "instrument_id": instrument_id,
+            "isin": f"INE00000000{instrument_id}",
+            "security_id": str(394 + instrument_id),
+            "latest_date": "2026-01-05",
+            "latest_close": 100.0,
+            "opportunity_stage": stage,
+            "opportunity_score": 85.0,
+            "entry_quality_score": entry_quality_score,
+            "suggested_next_action": action
+            or ("ready_for_drishti_review" if stage == "confirmed_reversal" else "wait_for_confirmation"),
+            "support_reclaim": stage == "support_reclaim",
+            "quality_support_reclaim": stage == "support_reclaim",
+            "near_support": True,
+            "inside_support_zone": stage == "support_reclaim",
+            "support_distance_percent": 0.8,
+            "support_strength": 82.0,
+            "support_touch_count": 4,
+            "support_recency_sessions": 6,
+            "nearest_support": nearest_support(strength=82, touch_count=4, recency_sessions=6, mid_price=95),
+            "reversal_bias": "bullish",
+            "reversal_score": 55.0,
+            "recent_reversal_patterns": ["bullish_engulfing"],
+            "latest_reversal_patterns": ["bullish_engulfing"] if stage == "confirmed_reversal" else [],
+            "confirmation_source": "latest_close_above_prior_high" if stage == "confirmed_reversal" else None,
+            "reasons": ["regime_downtrend", stage],
+        }
+    )
+    return item
+
+
+def promotion_service_with_items(
+    tmp_path,
+    items: list[dict],
+) -> tuple[ReversalOpportunityService, int, TokenStore]:
+    settings = Settings(app_secret_key="test-secret", data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    HistoricalDataStore(token_store)
+    persistence_store = ReversalOpportunityStore(token_store)
+    service = ReversalOpportunityService(
+        token_store,
+        store=FakePersistenceStoreScanStore(),
+        persistence_store=persistence_store,
+        settings=settings,
+    )
+    run_id = insert_promotion_run(service, items)
+    for item in items:
+        seed_promotion_candles(token_store, int(item["instrument_id"]), str(item["security_id"]))
+    return service, run_id, token_store
+
+
+def insert_promotion_run(service: ReversalOpportunityService, items: list[dict]) -> int:
+    run_id = service._persistence().create_run(
+        universe_name="NIFTY_500",
+        run_date="2026-01-05",
+        min_score=0,
+        min_entry_quality_score=55,
+        include_watch_only=False,
+        limit=50,
+        item_count=len(items),
+    )
+    service._persistence().insert_items(run_id, items)
+    return run_id
+
+
+def seed_promotion_candles(token_store: TokenStore, instrument_id: int, security_id: str) -> None:
+    HistoricalDataStore(token_store).upsert_candles(
+        {"instrument_id": instrument_id, "security_id": security_id},
+        [
+            {
+                "timestamp": 1,
+                "trading_date": "2026-01-04",
+                "open": 96,
+                "high": 99,
+                "low": 93,
+                "close": 95,
+                "volume": 1000,
+            },
+            {
+                "timestamp": 2,
+                "trading_date": "2026-01-05",
+                "open": 98,
+                "high": 102,
+                "low": 96,
+                "close": 100,
+                "volume": 1400,
+            },
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+
+
+def fake_promotion_response() -> dict:
+    return {
+        "run_id": 10,
+        "dry_run": False,
+        "min_entry_quality_score": 65,
+        "scanned_count": 1,
+        "eligible_count": 1,
+        "promoted_count": 0,
+        "skipped_duplicate_count": 0,
+        "skipped_ineligible_count": 0,
+        "items": [
+            {
+                "radar_item_id": 1,
+                "run_id": 10,
+                "symbol": "BEML",
+                "opportunity_stage": "confirmed_reversal",
+                "entry_quality_score": 75,
+                "opportunity_score": 85,
+                "suggested_next_action": "ready_for_drishti_review",
+                "status": "eligible",
+                "reason": "qualified_for_watchlist_review",
+                "watchlist_candidate_id": None,
+                "source_signal_hit_id": None,
+            }
+        ],
+    }
 
 
 def fake_run_response(items: list[dict]) -> dict:

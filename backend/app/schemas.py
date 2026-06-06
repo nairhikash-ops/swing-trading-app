@@ -689,6 +689,56 @@ class ReversalOpportunityBackfillResponse(BaseModel):
     entry_quality_summary: list[ReversalOpportunityBackfillGroupSummary]
 
 
+class ReversalOpportunityPromotionItem(BaseModel):
+    radar_item_id: int
+    run_id: int
+    symbol: str
+    opportunity_stage: Literal[
+        "confirmed_reversal",
+        "support_reclaim",
+        "bullish_reversal_watch",
+        "indecision_near_support",
+        "downtrend_only",
+        "near_support",
+        "entry_watch",
+        "ignore",
+    ]
+    entry_quality_score: float
+    opportunity_score: float
+    suggested_next_action: Literal[
+        "watch_only",
+        "wait_for_confirmation",
+        "wait_for_breakout",
+        "wait_for_pullback",
+        "ready_for_drishti_review",
+        "ignore",
+    ]
+    status: Literal[
+        "eligible",
+        "promoted",
+        "duplicate",
+        "ineligible_low_score",
+        "ineligible_stage",
+        "ineligible_action",
+        "error",
+    ]
+    reason: str
+    watchlist_candidate_id: int | None = None
+    source_signal_hit_id: int | None = None
+
+
+class ReversalOpportunityPromotionResponse(BaseModel):
+    run_id: int | None = None
+    dry_run: bool
+    min_entry_quality_score: float
+    scanned_count: int
+    eligible_count: int
+    promoted_count: int
+    skipped_duplicate_count: int
+    skipped_ineligible_count: int
+    items: list[ReversalOpportunityPromotionItem]
+
+
 class CandlestickItem(BaseModel):
     trading_date: str
     open: float

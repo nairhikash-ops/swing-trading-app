@@ -2,6 +2,7 @@ import json
 from typing import Any, Literal
 
 from app.candlesticks import classify_candles
+from app.config import Settings
 from app.index_universe import NIFTY_500_INDEX_NAME
 from app.regime import classify_regime_series
 from app.store import TokenStore
@@ -12,6 +13,7 @@ from app.support_resistance import (
     detect_support_resistance,
 )
 from app.timezone import now_utc
+from app.watchlist import WatchlistStore
 
 
 OpportunityStage = Literal[
@@ -34,6 +36,9 @@ SuggestedNextAction = Literal[
 ]
 
 STRONG_BULLISH_REVERSAL_SCORE = 45.0
+REVERSAL_RADAR_SIGNAL_ID = "reversal_radar"
+PROMOTABLE_STAGES = {"confirmed_reversal", "support_reclaim"}
+BLOCKED_PROMOTION_ACTIONS = {"watch_only", "ignore"}
 BEARISH_REVERSAL_BLOCKERS = {
     "shooting_star",
     "dark_cloud_cover",
@@ -51,10 +56,17 @@ class ReversalOpportunityService:
         token_store: TokenStore | None,
         store: SupportResistanceStore | None = None,
         persistence_store: "ReversalOpportunityStore | None" = None,
+        settings: Settings | None = None,
+        watchlist_store: WatchlistStore | None = None,
     ) -> None:
+        self.token_store = token_store
+        self.settings = settings
         self.store = store or SupportResistanceStore(token_store)
         self.persistence_store = persistence_store or (
             ReversalOpportunityStore(token_store) if token_store is not None else None
+        )
+        self.watchlist_store = watchlist_store or (
+            WatchlistStore(token_store, settings) if token_store is not None and settings is not None else None
         )
 
     def scan_nifty_500(
@@ -244,10 +256,99 @@ class ReversalOpportunityService:
             "items": updated_items,
         }
 
+    def promote_to_watchlist(
+        self,
+        run_id: int | None = None,
+        min_entry_quality_score: float = 65,
+        limit: int = 50,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        store = self._persistence()
+        source_run_id = run_id
+        if source_run_id is None:
+            source_run_id = store.latest_live_run_id(NIFTY_500_INDEX_NAME)
+        if source_run_id is None:
+            return empty_promotion_response(
+                run_id=None,
+                min_entry_quality_score=min_entry_quality_score,
+                dry_run=dry_run,
+            )
+
+        items = store.items_for_run(source_run_id, limit=limit)
+        result_items: list[dict[str, Any]] = []
+        eligible_count = 0
+        promoted_count = 0
+        skipped_duplicate_count = 0
+        skipped_ineligible_count = 0
+
+        for item in items:
+            eligibility = promotion_eligibility(item, min_entry_quality_score=min_entry_quality_score)
+            if eligibility["status"] != "eligible":
+                skipped_ineligible_count += 1
+                result_items.append(promotion_item_response(item, eligibility["status"], eligibility["reason"]))
+                continue
+
+            eligible_count += 1
+            existing = self._watchlist().candidate_for_signal_identity(
+                REVERSAL_RADAR_SIGNAL_ID,
+                int(item["instrument_id"]),
+                str(item["signal_date"]),
+            )
+            if existing:
+                skipped_duplicate_count += 1
+                result_items.append(
+                    promotion_item_response(
+                        item,
+                        "duplicate",
+                        "active_or_existing_watchlist_candidate",
+                        watchlist_candidate_id=int(existing["id"]),
+                        source_signal_hit_id=int(existing["source_signal_hit_id"]),
+                    )
+                )
+                continue
+
+            if dry_run:
+                result_items.append(promotion_item_response(item, "eligible", eligibility["reason"]))
+                continue
+
+            try:
+                hit = store.ensure_reversal_radar_signal_hit(item)
+                review = build_watchlist_review_for_radar_item(item)
+                candidate = self._watchlist().upsert_from_review(hit, review, review["raw_response"]["features"])
+                promoted_count += 1
+                result_items.append(
+                    promotion_item_response(
+                        item,
+                        "promoted",
+                        eligibility["reason"],
+                        watchlist_candidate_id=int(candidate["id"]),
+                        source_signal_hit_id=int(hit["id"]),
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive, surfaced in API response.
+                result_items.append(promotion_item_response(item, "error", str(exc)))
+
+        return {
+            "run_id": source_run_id,
+            "dry_run": dry_run,
+            "min_entry_quality_score": float(min_entry_quality_score),
+            "scanned_count": len(items),
+            "eligible_count": eligible_count,
+            "promoted_count": promoted_count,
+            "skipped_duplicate_count": skipped_duplicate_count,
+            "skipped_ineligible_count": skipped_ineligible_count,
+            "items": result_items,
+        }
+
     def _persistence(self) -> "ReversalOpportunityStore":
         if self.persistence_store is None:
             raise RuntimeError("Reversal opportunity persistence requires a TokenStore-backed service.")
         return self.persistence_store
+
+    def _watchlist(self) -> WatchlistStore:
+        if self.watchlist_store is None:
+            raise RuntimeError("Reversal promotion requires a Settings-backed watchlist store.")
+        return self.watchlist_store
 
     def _candles_for_instrument_as_of(
         self,
@@ -541,6 +642,21 @@ class ReversalOpportunityStore:
             )
         return {**run_response(dict(run)), "items": [snapshot_item_response(dict(row)) for row in rows]}
 
+    def latest_live_run_id(self, universe_name: str) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM reversal_opportunity_runs
+                WHERE universe_name = ?
+                  AND run_type = 'live'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (universe_name,),
+            ).fetchone()
+        return int(row["id"]) if row else None
+
     def history_for_symbol(self, *, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -687,6 +803,300 @@ class ReversalOpportunityStore:
             """,
             tuple(params),
         ).fetchall()
+
+    def ensure_reversal_radar_signal_hit(self, item: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_drishti_hit_table()
+        existing = self.reversal_radar_signal_hit(
+            int(item["instrument_id"]),
+            str(item["signal_date"]),
+        )
+        if existing:
+            return existing
+
+        signal_candle = self.candle_on_or_before(int(item["instrument_id"]), str(item["signal_date"]))
+        previous_candle = self.previous_candle(int(item["instrument_id"]), str(item["signal_date"]))
+        trigger = signal_candle or fallback_candle_for_item(item)
+        anchor = previous_candle or trigger
+        volume_ratio = (
+            float(trigger["volume"]) / float(anchor["volume"])
+            if float(anchor.get("volume") or 0) > 0
+            else 1.0
+        )
+        close_to_anchor_high_ratio = (
+            float(trigger["close"]) / float(anchor["high"])
+            if float(anchor.get("high") or 0) > 0
+            else 1.0
+        )
+        timestamp = now_utc().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO drishti_signal_hits (
+                    run_id, signal_id, index_constituent_id, instrument_id,
+                    company_name, industry, symbol, isin, security_id,
+                    anchor_date, trigger_date, anchor_open, anchor_high, anchor_low,
+                    anchor_close, anchor_volume, anchor_regime, anchor_regime_confidence,
+                    anchor_sma_50, anchor_sma_50_slope_10d_percent, anchor_range_position,
+                    trigger_open, trigger_high, trigger_low, trigger_close, trigger_volume,
+                    volume_ratio_1d, volume_vs_sma, close_to_anchor_high_ratio,
+                    future_high, future_high_date, outcome_from_trigger_percent,
+                    outcome_from_anchor_percent, created_at
+                )
+                VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+                """,
+                (
+                    int(item["run_id"]),
+                    REVERSAL_RADAR_SIGNAL_ID,
+                    int(item["instrument_id"]),
+                    item["company_name"],
+                    item["industry"],
+                    item["symbol"],
+                    item["isin"],
+                    item["security_id"],
+                    str(anchor["trading_date"]),
+                    str(trigger["trading_date"]),
+                    float(anchor["open"]),
+                    float(anchor["high"]),
+                    float(anchor["low"]),
+                    float(anchor["close"]),
+                    float(anchor["volume"]),
+                    item["regime"],
+                    float(item["regime_confidence"]),
+                    float(trigger["open"]),
+                    float(trigger["high"]),
+                    float(trigger["low"]),
+                    float(trigger["close"]),
+                    float(trigger["volume"]),
+                    volume_ratio,
+                    1.0,
+                    close_to_anchor_high_ratio,
+                    float(trigger["high"]),
+                    str(trigger["trading_date"]),
+                    timestamp,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM drishti_signal_hits WHERE id = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        return dict(row)
+
+    def reversal_radar_signal_hit(self, instrument_id: int, trigger_date: str) -> dict[str, Any] | None:
+        self._ensure_drishti_hit_table()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM drishti_signal_hits
+                WHERE signal_id = ?
+                  AND instrument_id = ?
+                  AND trigger_date = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (REVERSAL_RADAR_SIGNAL_ID, instrument_id, trigger_date),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def candle_on_or_before(self, instrument_id: int, signal_date: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT trading_date, open, high, low, close, volume
+                FROM daily_candles
+                WHERE instrument_id = ? AND trading_date <= ?
+                ORDER BY trading_date DESC
+                LIMIT 1
+                """,
+                (instrument_id, signal_date),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def previous_candle(self, instrument_id: int, signal_date: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT trading_date, open, high, low, close, volume
+                FROM daily_candles
+                WHERE instrument_id = ? AND trading_date < ?
+                ORDER BY trading_date DESC
+                LIMIT 1
+                """,
+                (instrument_id, signal_date),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def _ensure_drishti_hit_table(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS drishti_signal_hits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    signal_id TEXT NOT NULL,
+                    index_constituent_id INTEGER NOT NULL,
+                    instrument_id INTEGER NOT NULL,
+                    company_name TEXT NOT NULL,
+                    industry TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    isin TEXT NOT NULL,
+                    security_id TEXT NOT NULL,
+                    anchor_date TEXT NOT NULL,
+                    trigger_date TEXT NOT NULL,
+                    anchor_open REAL NOT NULL,
+                    anchor_high REAL NOT NULL,
+                    anchor_low REAL NOT NULL,
+                    anchor_close REAL NOT NULL,
+                    anchor_volume REAL NOT NULL,
+                    anchor_regime TEXT NOT NULL DEFAULT '',
+                    anchor_regime_confidence REAL NOT NULL DEFAULT 0,
+                    anchor_sma_50 REAL NOT NULL DEFAULT 0,
+                    anchor_sma_50_slope_10d_percent REAL NOT NULL DEFAULT 0,
+                    anchor_range_position REAL NOT NULL DEFAULT 0,
+                    trigger_open REAL NOT NULL,
+                    trigger_high REAL NOT NULL,
+                    trigger_low REAL NOT NULL,
+                    trigger_close REAL NOT NULL,
+                    trigger_volume REAL NOT NULL,
+                    volume_ratio_1d REAL NOT NULL,
+                    volume_vs_sma REAL NOT NULL,
+                    close_to_anchor_high_ratio REAL NOT NULL,
+                    future_high REAL NOT NULL,
+                    future_high_date TEXT NOT NULL,
+                    outcome_from_trigger_percent REAL NOT NULL,
+                    outcome_from_anchor_percent REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, instrument_id, trigger_date)
+                )
+                """
+            )
+
+
+def promotion_eligibility(item: dict[str, Any], *, min_entry_quality_score: float) -> dict[str, str]:
+    if float(item.get("entry_quality_score") or 0) < float(min_entry_quality_score):
+        return {"status": "ineligible_low_score", "reason": "entry_quality_score_below_threshold"}
+    if str(item.get("opportunity_stage") or "") not in PROMOTABLE_STAGES:
+        return {"status": "ineligible_stage", "reason": "stage_not_promotable"}
+    if str(item.get("suggested_next_action") or "") in BLOCKED_PROMOTION_ACTIONS:
+        return {"status": "ineligible_action", "reason": "suggested_action_not_reviewable"}
+    if has_bearish_snapshot_evidence(item):
+        return {"status": "ineligible_stage", "reason": "bearish_latest_evidence"}
+    return {"status": "eligible", "reason": "qualified_for_watchlist_review"}
+
+
+def has_bearish_snapshot_evidence(item: dict[str, Any]) -> bool:
+    if str(item.get("reversal_bias") or "") == "bearish":
+        return True
+    latest_reversal_patterns = set(item.get("latest_reversal_patterns") or [])
+    if latest_reversal_patterns & BEARISH_REVERSAL_BLOCKERS:
+        return True
+    return "latest_bearish_reversal_evidence" in set(item.get("reasons") or [])
+
+
+def promotion_item_response(
+    item: dict[str, Any],
+    status: str,
+    reason: str,
+    *,
+    watchlist_candidate_id: int | None = None,
+    source_signal_hit_id: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "radar_item_id": int(item["id"]),
+        "run_id": int(item["run_id"]),
+        "symbol": item["symbol"],
+        "opportunity_stage": item["opportunity_stage"],
+        "entry_quality_score": float(item["entry_quality_score"]),
+        "opportunity_score": float(item["opportunity_score"]),
+        "suggested_next_action": item["suggested_next_action"],
+        "status": status,
+        "reason": reason,
+        "watchlist_candidate_id": watchlist_candidate_id,
+        "source_signal_hit_id": source_signal_hit_id,
+    }
+
+
+def empty_promotion_response(
+    *,
+    run_id: int | None,
+    min_entry_quality_score: float,
+    dry_run: bool,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "dry_run": dry_run,
+        "min_entry_quality_score": float(min_entry_quality_score),
+        "scanned_count": 0,
+        "eligible_count": 0,
+        "promoted_count": 0,
+        "skipped_duplicate_count": 0,
+        "skipped_ineligible_count": 0,
+        "items": [],
+    }
+
+
+def build_watchlist_review_for_radar_item(item: dict[str, Any]) -> dict[str, Any]:
+    latest_close = float(item["latest_close"])
+    nearest_support = item.get("nearest_support") or {}
+    support_low = optional_float(nearest_support.get("zone_low"))
+    support_high = optional_float(nearest_support.get("zone_high"))
+    stop_loss = support_low if support_low is not None and support_low < latest_close else latest_close * 0.95
+    risk = max(latest_close - stop_loss, latest_close * 0.01)
+    target_1 = latest_close + (risk * 2)
+    target_2 = latest_close + (risk * 3)
+    trailing_stop = max(stop_loss, latest_close - risk)
+    risk_percent = ((latest_close - stop_loss) / latest_close) * 100 if latest_close > 0 else 0
+    breakout_price = latest_close
+    summary = (
+        f"Reversal radar watch candidate: {item['opportunity_stage']} "
+        f"with entry quality {float(item['entry_quality_score']):.1f}."
+    )
+    features = {
+        "source": REVERSAL_RADAR_SIGNAL_ID,
+        "radar_item_id": int(item["id"]),
+        "radar_run_id": int(item["run_id"]),
+        "opportunity_stage": item["opportunity_stage"],
+        "entry_quality_score": float(item["entry_quality_score"]),
+        "opportunity_score": float(item["opportunity_score"]),
+        "confirmation_source": item.get("confirmation_source"),
+        "recent_patterns": item.get("recent_patterns") or [],
+        "recent_reversal_patterns": item.get("recent_reversal_patterns") or [],
+        "nearest_support": nearest_support,
+        "breakout_price": breakout_price,
+        "recent_return_5d_percent": 0,
+        "risk_percent": round(risk_percent, 2),
+    }
+    return {
+        "id": None,
+        "decision_snapshot_id": None,
+        "decision": "WAIT",
+        "confidence": float(item["entry_quality_score"]),
+        "summary": summary,
+        "support_price": support_low,
+        "resistance_price": None,
+        "entry_low": support_low if item["opportunity_stage"] == "support_reclaim" else latest_close,
+        "entry_high": support_high if item["opportunity_stage"] == "support_reclaim" else latest_close * 1.02,
+        "stop_loss": stop_loss,
+        "target_1": target_1,
+        "target_2": target_2,
+        "trailing_stop_loss": trailing_stop,
+        "risk_reward": 2.0,
+        "wait_until": "Wait for existing watchlist breakout or pullback confirmation.",
+        "invalidation": "Invalidate if price loses the relevant support zone.",
+        "raw_response": {"features": features},
+    }
+
+
+def fallback_candle_for_item(item: dict[str, Any]) -> dict[str, Any]:
+    close = float(item["latest_close"])
+    return {
+        "trading_date": item["signal_date"],
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": 0.0,
+    }
 
 
 def classify_reversal_opportunity(

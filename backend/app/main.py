@@ -54,6 +54,7 @@ from app.schemas import (
     ReversalOpportunityBackfillResponse,
     ReversalOpportunityItem,
     ReversalOpportunityOutcomeRefreshResponse,
+    ReversalOpportunityPromotionResponse,
     ReversalOpportunityRunResponse,
     ReversalOpportunitySnapshotItem,
     StockRegimeItem,
@@ -158,7 +159,7 @@ def build_candlestick_service(settings: Settings) -> CandlestickService:
 
 
 def build_reversal_opportunity_service(settings: Settings) -> ReversalOpportunityService:
-    return ReversalOpportunityService(TokenStore(settings.database_path))
+    return ReversalOpportunityService(TokenStore(settings.database_path), settings=settings)
 
 
 @asynccontextmanager
@@ -708,6 +709,27 @@ async def research_reversal_opportunity_backfill_summary(
     reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
 ) -> ReversalOpportunityBackfillResponse:
     return ReversalOpportunityBackfillResponse(**reversal_opportunity_service.backfill_summary(limit=limit))
+
+
+@app.post(
+    "/api/research/reversal-opportunities/promote-to-watchlist",
+    response_model=ReversalOpportunityPromotionResponse,
+)
+async def research_reversal_opportunity_promote_to_watchlist(
+    run_id: int | None = Query(default=None, ge=1),
+    min_entry_quality_score: float = Query(default=65, ge=0, le=100),
+    limit: int = Query(default=50, ge=1, le=500),
+    dry_run: bool = Query(default=True),
+    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
+) -> ReversalOpportunityPromotionResponse:
+    return ReversalOpportunityPromotionResponse(
+        **reversal_opportunity_service.promote_to_watchlist(
+            run_id=run_id,
+            min_entry_quality_score=min_entry_quality_score,
+            limit=limit,
+            dry_run=dry_run,
+        )
+    )
 
 
 @app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)
