@@ -65,6 +65,7 @@ from app.schemas import (
     UniverseConstituentItem,
     UniverseImportSummary,
     UniverseStatusResponse,
+    WatchlistActiveItem,
     WatchlistCandidateItem,
     WatchlistMonitorResponse,
 )
@@ -907,6 +908,18 @@ async def demo_order_from_drishti_hit(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/watchlist/active", response_model=list[WatchlistActiveItem])
+async def watchlist_active(
+    source: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=100, ge=1, le=500),
+    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
+) -> list[WatchlistActiveItem]:
+    return [
+        WatchlistActiveItem.model_validate(item)
+        for item in watchlist_service.active_report(source=source, limit=limit)
+    ]
 
 
 @app.get("/api/watchlist/candidates", response_model=list[WatchlistCandidateItem])

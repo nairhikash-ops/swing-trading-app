@@ -158,16 +158,23 @@ class WatchlistStore:
             )
         return self.candidate_for_hit(int(hit["id"])) or {}
 
-    def active_candidates(self, limit: int = 500) -> list[dict[str, Any]]:
+    def active_candidates(self, limit: int = 500, source: str | None = None) -> list[dict[str, Any]]:
+        params: list[Any] = [CANDIDATE_ACTIVE]
+        source_clause = ""
+        if source:
+            source_clause = "AND source_signal_id = ?"
+            params.append(source)
+        params.append(min(max(limit, 1), 1000))
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM watchlist_candidates
                 WHERE status = ?
+                {source_clause}
                 ORDER BY trigger_date, id
                 LIMIT ?
                 """,
-                (CANDIDATE_ACTIVE, min(max(limit, 1), 1000)),
+                tuple(params),
             ).fetchall()
         return [candidate_row_to_dict(row) for row in rows]
 
@@ -196,6 +203,19 @@ class WatchlistStore:
                 (hit_id,),
             ).fetchone()
         return candidate_row_to_dict(row) if row else None
+
+    def order_for_signal_hit(self, hit_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM demo_orders
+                WHERE source_signal_hit_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (hit_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def candidate_for_signal_identity(
         self,
@@ -290,6 +310,16 @@ class WatchlistService:
 
     def latest(self, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         return self.store.latest_candidates(status=status, limit=limit)
+
+    def active_report(self, source: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        return [
+            watchlist_status_item(
+                candidate,
+                breakout_min_close_strength=self.settings.watchlist_breakout_min_close_strength,
+                linked_order=self.store.order_for_signal_hit(int(candidate["source_signal_hit_id"])),
+            )
+            for candidate in self.store.active_candidates(limit=limit, source=source)
+        ]
 
     def upsert_from_review(self, hit_id: int, review: dict[str, Any]) -> dict[str, Any]:
         hit = self.store.signal_hit(hit_id)
@@ -461,6 +491,69 @@ def candidate_row_to_dict(row) -> dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def watchlist_status_item(
+    candidate: dict[str, Any],
+    *,
+    breakout_min_close_strength: float,
+    linked_order: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "watchlist_candidate_id": int(candidate["id"]),
+        "symbol": candidate["symbol"],
+        "status": candidate["status"],
+        "decision": candidate["decision"],
+        "source_signal_id": candidate["source_signal_id"],
+        "source_type": candidate["source_signal_id"],
+        "source_signal_hit_id": int(candidate["source_signal_hit_id"]),
+        "source_run_id": candidate.get("source_run_id"),
+        "trigger_date": candidate["trigger_date"],
+        "last_checked_date": candidate.get("last_checked_date"),
+        "entry_rule": candidate["entry_rule"],
+        "entry_low": candidate.get("entry_low"),
+        "entry_high": candidate.get("entry_high"),
+        "breakout_price": candidate.get("breakout_price"),
+        "stop_loss": candidate.get("stop_loss"),
+        "target_1": candidate.get("target_1"),
+        "target_2": candidate.get("target_2"),
+        "trailing_stop_loss": candidate.get("trailing_stop_loss"),
+        "invalidation_price": candidate.get("invalidation_price"),
+        "entered_order_id": candidate.get("entered_order_id"),
+        "demo_order_created": bool(candidate.get("entered_order_id") is not None or linked_order is not None),
+        "waiting_for": waiting_for_text(candidate, breakout_min_close_strength),
+        "invalidate_if": invalidate_if_text(candidate),
+        "expiry_date": candidate["expires_after_date"],
+        "summary": candidate["summary"],
+        "features": candidate.get("features") or {},
+    }
+
+
+def waiting_for_text(candidate: dict[str, Any], breakout_min_close_strength: float) -> str:
+    entry_rule = candidate.get("entry_rule")
+    if entry_rule == ENTRY_WAIT_BREAKOUT:
+        breakout_price = candidate.get("breakout_price")
+        if breakout_price is None:
+            return f"close > breakout_price and close_strength >= {breakout_min_close_strength:g}"
+        return f"close > {float(breakout_price):g} and close_strength >= {breakout_min_close_strength:g}"
+    if entry_rule == ENTRY_WAIT_PULLBACK:
+        entry_low = candidate.get("entry_low")
+        entry_high = candidate.get("entry_high")
+        if entry_low is not None and entry_high is not None:
+            return f"price enters {float(entry_low):g}-{float(entry_high):g} zone"
+        return "price enters configured entry zone"
+    if entry_rule == ENTRY_ENTER_NOW:
+        return "ready for immediate entry when monitor runs"
+    if entry_rule == ENTRY_IGNORE:
+        return "not waiting for entry"
+    return f"waiting according to entry_rule {entry_rule}"
+
+
+def invalidate_if_text(candidate: dict[str, Any]) -> str:
+    invalidation_price = candidate.get("invalidation_price")
+    if invalidation_price is None:
+        return "no invalidation price configured"
+    return f"low <= {float(invalidation_price):g}"
 
 
 def optional_float(value: Any) -> float | None:

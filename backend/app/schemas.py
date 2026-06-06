@@ -947,6 +947,35 @@ class WatchlistCandidateItem(BaseModel):
     updated_at: datetime
 
 
+class WatchlistActiveItem(BaseModel):
+    watchlist_candidate_id: int
+    symbol: str
+    status: str
+    decision: str
+    source_signal_id: str
+    source_type: str
+    source_signal_hit_id: int
+    source_run_id: int | None = None
+    trigger_date: str
+    last_checked_date: str | None = None
+    entry_rule: str
+    entry_low: float | None = None
+    entry_high: float | None = None
+    breakout_price: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    trailing_stop_loss: float | None = None
+    invalidation_price: float | None = None
+    entered_order_id: int | None = None
+    demo_order_created: bool
+    waiting_for: str
+    invalidate_if: str
+    expiry_date: str
+    summary: str
+    features: dict
+
+
 class WatchlistMonitorResponse(BaseModel):
     entered: list[WatchlistCandidateItem]
     expired: list[WatchlistCandidateItem]

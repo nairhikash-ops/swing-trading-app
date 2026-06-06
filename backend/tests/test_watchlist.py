@@ -1,7 +1,10 @@
 from datetime import date
 
+from fastapi.testclient import TestClient
+
 from app.ai_reviews import AiReviewStore
 from app.demo_trading import DemoTradingService
+from app.main import app, get_watchlist_service_dep
 from app.watchlist import WatchlistService
 from test_demo_trading import seed_drishti_hit
 
@@ -138,3 +141,151 @@ def test_watchlist_breakout_entry_requires_strong_confirming_close(tmp_path):
     assert order["entry_low"] == hit["trigger_high"]
     assert order["entry_high"] == 132.0 * 1.02
     assert order["target_price"] is None
+
+
+def test_active_watchlist_report_returns_active_candidates(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit)
+    candidate = watchlist.upsert_from_review(int(hit["id"]), review)
+
+    report = watchlist.active_report()
+
+    assert report[0]["watchlist_candidate_id"] == candidate["id"]
+    assert report[0]["symbol"] == hit["symbol"]
+    assert report[0]["status"] == "active"
+    assert report[0]["source_signal_id"] == hit["signal_id"]
+
+
+def test_active_watchlist_report_filters_by_source(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit)
+    candidate = watchlist.upsert_from_review(int(hit["id"]), review)
+
+    assert watchlist.active_report(source="reversal_radar") == []
+    with token_store._connect() as conn:
+        conn.execute(
+            "UPDATE watchlist_candidates SET source_signal_id = 'reversal_radar' WHERE id = ?",
+            (candidate["id"],),
+        )
+
+    report = watchlist.active_report(source="reversal_radar")
+
+    assert len(report) == 1
+    assert report[0]["source_type"] == "reversal_radar"
+
+
+def test_active_watchlist_report_excludes_inactive_candidates(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit)
+    candidate = watchlist.upsert_from_review(int(hit["id"]), review)
+    with token_store._connect() as conn:
+        conn.execute(
+            "UPDATE watchlist_candidates SET status = 'expired' WHERE id = ?",
+            (candidate["id"],),
+        )
+
+    assert watchlist.active_report() == []
+
+
+def test_active_watchlist_report_waiting_for_breakout_text(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit, recent_return_5d_percent=0)
+    watchlist.upsert_from_review(int(hit["id"]), review)
+
+    report = watchlist.active_report()
+
+    assert report[0]["entry_rule"] == "wait_breakout"
+    assert report[0]["waiting_for"] == f"close > {hit['trigger_high']:g} and close_strength >= 0.6"
+
+
+def test_active_watchlist_report_waiting_for_pullback_text(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit, entry_low=100, entry_high=113, recent_return_5d_percent=12)
+    watchlist.upsert_from_review(int(hit["id"]), review)
+
+    report = watchlist.active_report()
+
+    assert report[0]["entry_rule"] == "wait_pullback"
+    assert report[0]["waiting_for"] == "price enters 100-113 zone"
+
+
+def test_active_watchlist_report_demo_order_created_false_without_order(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit)
+    watchlist.upsert_from_review(int(hit["id"]), review)
+
+    report = watchlist.active_report()
+
+    assert report[0]["demo_order_created"] is False
+
+
+def test_active_watchlist_report_demo_order_created_true_when_entered_order_exists(tmp_path):
+    settings, token_store, hit = seed_drishti_hit(tmp_path, include_next_session=False)
+    watchlist = WatchlistService(settings, token_store, DemoTradingService(settings, token_store))
+    review = insert_local_wait_review(token_store, hit)
+    candidate = watchlist.upsert_from_review(int(hit["id"]), review)
+    with token_store._connect() as conn:
+        conn.execute(
+            "UPDATE watchlist_candidates SET entered_order_id = 123 WHERE id = ?",
+            (candidate["id"],),
+        )
+
+    report = watchlist.active_report()
+
+    assert report[0]["demo_order_created"] is True
+
+
+def test_active_watchlist_endpoint_returns_typed_report():
+    class FakeService:
+        def active_report(self, source: str | None, limit: int):
+            assert source == "reversal_radar"
+            assert limit == 50
+            return [
+                {
+                    "watchlist_candidate_id": 3,
+                    "symbol": "NEWGEN",
+                    "status": "active",
+                    "decision": "WAIT",
+                    "source_signal_id": "reversal_radar",
+                    "source_type": "reversal_radar",
+                    "source_signal_hit_id": 13897,
+                    "source_run_id": 1,
+                    "trigger_date": "2026-05-29",
+                    "last_checked_date": None,
+                    "entry_rule": "wait_breakout",
+                    "entry_low": 442.7,
+                    "entry_high": 451.554,
+                    "breakout_price": 442.7,
+                    "stop_loss": 424.68,
+                    "target_1": 478.74,
+                    "target_2": 496.76,
+                    "trailing_stop_loss": 424.68,
+                    "invalidation_price": 424.68,
+                    "entered_order_id": None,
+                    "demo_order_created": False,
+                    "waiting_for": "close > 442.7 and close_strength >= 0.6",
+                    "invalidate_if": "low <= 424.68",
+                    "expiry_date": "2026-06-14",
+                    "summary": "Reversal radar watch candidate.",
+                    "features": {"source": "reversal_radar"},
+                }
+            ]
+
+    app.dependency_overrides[get_watchlist_service_dep] = lambda: FakeService()
+    try:
+        response = TestClient(app).get(
+            "/api/watchlist/active",
+            params={"source": "reversal_radar", "limit": 50},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["watchlist_candidate_id"] == 3
+    assert response.json()[0]["waiting_for"] == "close > 442.7 and close_strength >= 0.6"
