@@ -395,7 +395,7 @@ class WatchlistService:
                     entry_low=entry_low,
                     entry_high=entry_high,
                     trailing_stop_loss=optional_float(candidate.get("trailing_stop_loss")),
-                    ai_review_id=candidate.get("analysis_review_id"),
+                    legacy_review_id=candidate.get("analysis_review_id"),
                     fill_after_date=str(candle["trading_date"]),
                 )
                 order = order_result.get("order") or {}

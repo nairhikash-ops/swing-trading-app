@@ -757,7 +757,7 @@ class DemoOrderItem(BaseModel):
     id: int
     source_signal_hit_id: int | None = None
     decision_snapshot_id: int | None = None
-    ai_review_id: int | None = None
+    legacy_review_id: int | None = None
     source_signal_id: str
     source_run_id: int | None = None
     instrument_id: int
@@ -791,7 +791,7 @@ class DemoPositionItem(BaseModel):
     order_id: int
     source_signal_hit_id: int | None = None
     decision_snapshot_id: int | None = None
-    ai_review_id: int | None = None
+    legacy_review_id: int | None = None
     instrument_id: int
     company_name: str
     industry: str
@@ -854,7 +854,7 @@ class DemoAutomationRunResponse(BaseModel):
     latest_trading_date: str | None = None
     fresh_hit_count: int
     algo_analyzed_count: int = 0
-    ai_reviewed_count: int
+    reviewed_count: int
     enter_count: int
     orders_created_count: int
     skipped_count: int
@@ -972,7 +972,7 @@ class LearningTradeOutcomeItem(BaseModel):
     order_id: int
     source_signal_hit_id: int | None = None
     decision_snapshot_id: int | None = None
-    ai_review_id: int | None = None
+    legacy_review_id: int | None = None
     instrument_id: int
     symbol: str
     isin: str
@@ -1018,7 +1018,7 @@ class DemoJournalItem(BaseModel):
     position_id: int | None = None
     source_signal_hit_id: int | None = None
     decision_snapshot_id: int | None = None
-    ai_review_id: int | None = None
+    legacy_review_id: int | None = None
     source_signal_id: str
     source_run_id: int | None = None
     instrument_id: int

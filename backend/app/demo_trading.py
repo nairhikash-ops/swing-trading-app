@@ -44,7 +44,7 @@ class DemoTradingStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_signal_hit_id INTEGER,
                     decision_snapshot_id INTEGER,
-                    ai_review_id INTEGER,
+                    legacy_review_id INTEGER,
                     source_signal_id TEXT NOT NULL,
                     source_run_id INTEGER,
                     instrument_id INTEGER NOT NULL,
@@ -82,7 +82,7 @@ class DemoTradingStore:
                     order_id INTEGER NOT NULL UNIQUE,
                     source_signal_hit_id INTEGER,
                     decision_snapshot_id INTEGER,
-                    ai_review_id INTEGER,
+                    legacy_review_id INTEGER,
                     instrument_id INTEGER NOT NULL,
                     company_name TEXT NOT NULL,
                     industry TEXT NOT NULL,
@@ -121,7 +121,7 @@ class DemoTradingStore:
                 "demo_orders",
                 {
                     "decision_snapshot_id": "INTEGER",
-                    "ai_review_id": "INTEGER",
+                    "legacy_review_id": "INTEGER",
                     "entry_low": "REAL",
                     "entry_high": "REAL",
                     "trailing_stop_loss": "REAL",
@@ -132,7 +132,7 @@ class DemoTradingStore:
                 "demo_positions",
                 {
                     "decision_snapshot_id": "INTEGER",
-                    "ai_review_id": "INTEGER",
+                    "legacy_review_id": "INTEGER",
                     "entry_low": "REAL",
                     "entry_high": "REAL",
                     "trailing_stop_loss": "REAL",
@@ -214,7 +214,7 @@ class DemoTradingStore:
         entry_low: float | None = None,
         entry_high: float | None = None,
         trailing_stop_loss: float | None = None,
-        ai_review_id: int | None = None,
+        legacy_review_id: int | None = None,
         fill_after_date: str | None = None,
     ) -> int:
         timestamp = now_utc().isoformat()
@@ -225,7 +225,7 @@ class DemoTradingStore:
             cursor = conn.execute(
                 """
                 INSERT INTO demo_orders (
-                    source_signal_hit_id, decision_snapshot_id, ai_review_id,
+                    source_signal_hit_id, decision_snapshot_id, legacy_review_id,
                     source_signal_id, source_run_id, instrument_id,
                     company_name, industry, symbol, isin, security_id, side, quantity, order_type,
                     status, trigger_date, requested_price, fill_after_date, entry_low, entry_high,
@@ -237,7 +237,7 @@ class DemoTradingStore:
                 (
                     hit["id"],
                     snapshot.get("id"),
-                    ai_review_id,
+                    legacy_review_id,
                     hit["signal_id"],
                     hit["run_id"],
                     hit["instrument_id"],
@@ -392,7 +392,7 @@ class DemoTradingStore:
             conn.execute(
                 """
                 INSERT INTO demo_positions (
-                    order_id, source_signal_hit_id, decision_snapshot_id, ai_review_id, instrument_id, company_name, industry, symbol,
+                    order_id, source_signal_hit_id, decision_snapshot_id, legacy_review_id, instrument_id, company_name, industry, symbol,
                     isin, security_id, side, quantity, entry_date, entry_price, entry_low, entry_high,
                     stop_loss, target_price, trailing_stop_loss, risk_amount, risk_reward, status, created_at, updated_at
                 )
@@ -402,7 +402,7 @@ class DemoTradingStore:
                     order["id"],
                     order["source_signal_hit_id"],
                     order.get("decision_snapshot_id"),
-                    order.get("ai_review_id"),
+                    order.get("legacy_review_id"),
                     order["instrument_id"],
                     order["company_name"],
                     order["industry"],
@@ -601,7 +601,7 @@ class DemoTradingService:
         entry_low: float | None = None,
         entry_high: float | None = None,
         trailing_stop_loss: float | None = None,
-        ai_review_id: int | None = None,
+        legacy_review_id: int | None = None,
         fill_after_date: str | None = None,
     ) -> dict[str, Any]:
         hit = self.store.signal_hit(hit_id)
@@ -639,7 +639,7 @@ class DemoTradingService:
             entry_low=entry_low,
             entry_high=entry_high,
             trailing_stop_loss=trailing_stop_loss,
-            ai_review_id=ai_review_id,
+            legacy_review_id=legacy_review_id,
             fill_after_date=fill_after_date,
         )
         self.refresh()
@@ -761,7 +761,7 @@ def order_row_to_dict(row) -> dict[str, Any]:
         "id": row["id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
         "decision_snapshot_id": row["decision_snapshot_id"] if "decision_snapshot_id" in row.keys() else None,
-        "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
+        "legacy_review_id": row["legacy_review_id"] if "legacy_review_id" in row.keys() else None,
         "source_signal_id": row["source_signal_id"],
         "source_run_id": row["source_run_id"],
         "instrument_id": row["instrument_id"],
@@ -797,7 +797,7 @@ def position_row_to_dict(row) -> dict[str, Any]:
         "order_id": row["order_id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
         "decision_snapshot_id": row["decision_snapshot_id"] if "decision_snapshot_id" in row.keys() else None,
-        "ai_review_id": row["ai_review_id"] if "ai_review_id" in row.keys() else None,
+        "legacy_review_id": row["legacy_review_id"] if "legacy_review_id" in row.keys() else None,
         "instrument_id": row["instrument_id"],
         "company_name": row["company_name"],
         "industry": row["industry"],

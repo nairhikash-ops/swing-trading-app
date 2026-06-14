@@ -60,7 +60,7 @@ class TradingJournalStore:
                     o.id AS order_id,
                     o.source_signal_hit_id,
                     o.decision_snapshot_id,
-                    o.ai_review_id,
+                    o.legacy_review_id,
                     o.source_signal_id,
                     o.source_run_id,
                     o.instrument_id,
@@ -110,13 +110,13 @@ class TradingJournalStore:
                     l.target_hit,
                     l.stop_hit,
                     l.time_exit,
-                    r.provider AS review_provider,
-                    r.model AS review_model,
-                    r.decision AS review_decision,
-                    r.confidence AS review_confidence,
-                    r.summary AS review_summary,
-                    r.wait_until AS review_wait_until,
-                    r.invalidation AS review_invalidation,
+                    '' AS review_provider,
+                    '' AS review_model,
+                    '' AS review_decision,
+                    0 AS review_confidence,
+                    '' AS review_summary,
+                    '' AS review_wait_until,
+                    '' AS review_invalidation,
                     wc.status AS watchlist_status,
                     wc.decision AS watchlist_decision,
                     wc.entry_rule AS watchlist_entry_rule,
@@ -129,7 +129,6 @@ class TradingJournalStore:
                 FROM demo_orders o
                 LEFT JOIN demo_positions p ON p.order_id = o.id
                 LEFT JOIN learning_trade_outcomes l ON l.position_id = p.id
-                LEFT JOIN ai_signal_reviews r ON r.id = o.ai_review_id
                 LEFT JOIN watchlist_candidates wc ON wc.entered_order_id = o.id
                 LEFT JOIN demo_trade_journal_notes n ON n.order_id = o.id
                 {where_sql}
@@ -205,7 +204,7 @@ def journal_row_to_dict(row) -> dict[str, Any]:
         "position_id": row["position_id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
         "decision_snapshot_id": row["decision_snapshot_id"],
-        "ai_review_id": row["ai_review_id"],
+        "legacy_review_id": row["legacy_review_id"],
         "source_signal_id": row["source_signal_id"],
         "source_run_id": row["source_run_id"],
         "instrument_id": row["instrument_id"],

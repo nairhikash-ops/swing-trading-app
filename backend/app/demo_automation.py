@@ -28,7 +28,7 @@ class DemoAutomationStore:
                     drishti_run_id INTEGER,
                     latest_trading_date TEXT,
                     fresh_hit_count INTEGER NOT NULL DEFAULT 0,
-                    ai_reviewed_count INTEGER NOT NULL DEFAULT 0,
+                    reviewed_count INTEGER NOT NULL DEFAULT 0,
                     enter_count INTEGER NOT NULL DEFAULT 0,
                     orders_created_count INTEGER NOT NULL DEFAULT 0,
                     skipped_count INTEGER NOT NULL DEFAULT 0,
@@ -38,6 +38,9 @@ class DemoAutomationStore:
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(demo_automation_runs)").fetchall()}
+            if "reviewed_count" not in columns:
+                conn.execute("ALTER TABLE demo_automation_runs ADD COLUMN reviewed_count INTEGER NOT NULL DEFAULT 0")
 
     def latest_run(self) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -59,7 +62,7 @@ class DemoAutomationStore:
                 """
                 INSERT INTO demo_automation_runs (
                     status, reason, historical_status, historical_run_id,
-                    fresh_hit_count, ai_reviewed_count, enter_count,
+                    fresh_hit_count, reviewed_count, enter_count,
                     orders_created_count, skipped_count, started_at, completed_at
                 )
                 VALUES ('disabled', ?, ?, ?, 0, 0, 0, 0, 0, ?, ?)
@@ -116,8 +119,8 @@ def automation_run_row_to_dict(row) -> dict[str, Any]:
         "drishti_run_id": row["drishti_run_id"],
         "latest_trading_date": row["latest_trading_date"],
         "fresh_hit_count": row["fresh_hit_count"],
-        "algo_analyzed_count": row["ai_reviewed_count"],
-        "ai_reviewed_count": row["ai_reviewed_count"],
+        "algo_analyzed_count": row["reviewed_count"],
+        "reviewed_count": row["reviewed_count"],
         "enter_count": row["enter_count"],
         "orders_created_count": row["orders_created_count"],
         "skipped_count": row["skipped_count"],

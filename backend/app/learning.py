@@ -47,7 +47,7 @@ class LearningStore:
                     order_id INTEGER NOT NULL,
                     source_signal_hit_id INTEGER,
                     decision_snapshot_id INTEGER,
-                    ai_review_id INTEGER,
+                    legacy_review_id INTEGER,
                     instrument_id INTEGER NOT NULL,
                     symbol TEXT NOT NULL,
                     isin TEXT NOT NULL,
@@ -86,7 +86,6 @@ class LearningStore:
                 ON learning_trade_outcomes(source_signal_hit_id, id DESC)
                 """
             )
-            ensure_columns(conn, "ai_signal_reviews", {"decision_snapshot_id": "INTEGER"})
             ensure_columns(conn, "demo_orders", {"decision_snapshot_id": "INTEGER"})
             ensure_columns(conn, "demo_positions", {"decision_snapshot_id": "INTEGER"})
 
@@ -171,7 +170,7 @@ class LearningStore:
                 """
                 INSERT INTO learning_trade_outcomes (
                     position_id, order_id, source_signal_hit_id, decision_snapshot_id,
-                    ai_review_id, instrument_id, symbol, isin, security_id, status,
+                    legacy_review_id, instrument_id, symbol, isin, security_id, status,
                     entry_date, entry_price, exit_date, exit_price, exit_reason,
                     holding_sessions, max_favorable_price, max_favorable_percent,
                     max_adverse_price, max_adverse_percent, target_hit, stop_hit,
@@ -181,7 +180,7 @@ class LearningStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(position_id) DO UPDATE SET
                     decision_snapshot_id = excluded.decision_snapshot_id,
-                    ai_review_id = excluded.ai_review_id,
+                    legacy_review_id = excluded.legacy_review_id,
                     status = excluded.status,
                     exit_date = excluded.exit_date,
                     exit_price = excluded.exit_price,
@@ -204,7 +203,7 @@ class LearningStore:
                     position["order_id"],
                     position.get("source_signal_hit_id"),
                     snapshot_id,
-                    position.get("ai_review_id"),
+                    position.get("legacy_review_id"),
                     position["instrument_id"],
                     position["symbol"],
                     position["isin"],
@@ -440,7 +439,7 @@ def trade_outcome_row_to_dict(row) -> dict[str, Any]:
         "order_id": row["order_id"],
         "source_signal_hit_id": row["source_signal_hit_id"],
         "decision_snapshot_id": row["decision_snapshot_id"],
-        "ai_review_id": row["ai_review_id"],
+        "legacy_review_id": row["legacy_review_id"],
         "instrument_id": row["instrument_id"],
         "symbol": row["symbol"],
         "isin": row["isin"],
