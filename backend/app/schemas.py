@@ -144,6 +144,11 @@ class HistoricalFetchStatusResponse(BaseModel):
     skipped_count: int
     candles_received: int
     stored_candle_count: int
+    first_stored_candle_date: str | None = None
+    latest_stored_candle_date: str | None = None
+    source_floor_reached_count: int = 0
+    complete_available_history_count: int = 0
+    next_retry_after: str | None = None
     error: str
     started_at: datetime
     updated_at: datetime
@@ -163,6 +168,10 @@ class HistoricalFetchItem(BaseModel):
     status: str
     attempts: int
     candles_received: int
+    request_from_date: str | None = None
+    request_to_date: str | None = None
+    archive_status: str = ""
+    source_floor_reason: str = ""
     error: str
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -195,6 +204,15 @@ class QualityItem(BaseModel):
     quality_status: str
     issues: list[str]
     latest_candle_date: str | None = None
+    first_stored_candle_date: str | None = None
+    source_floor_reached: bool = False
+    source_floor_date: str | None = None
+    source_floor_reason: str = "unknown"
+    complete_available_history: bool = False
+    next_retry_after: str | None = None
+    archive_status: str = ""
+    archive_message: str = ""
+    effective_start_date: str | None = None
     expected_sessions: int
     candle_count: int
     missing_sessions: int

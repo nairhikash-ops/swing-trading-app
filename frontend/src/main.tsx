@@ -121,6 +121,11 @@ type HistoricalStatus = {
   skipped_count: number;
   candles_received: number;
   stored_candle_count: number;
+  first_stored_candle_date?: string | null;
+  latest_stored_candle_date?: string | null;
+  source_floor_reached_count?: number;
+  complete_available_history_count?: number;
+  next_retry_after?: string | null;
   error: string;
   started_at: string;
   updated_at: string;
@@ -138,6 +143,10 @@ type HistoricalItem = {
   status: string;
   attempts: number;
   candles_received: number;
+  request_from_date?: string | null;
+  request_to_date?: string | null;
+  archive_status?: string;
+  source_floor_reason?: string;
   error: string;
 };
 
@@ -159,6 +168,15 @@ type QualityItem = {
   quality_status: "healthy" | "warning" | "blocked";
   issues: string[];
   latest_candle_date?: string | null;
+  first_stored_candle_date?: string | null;
+  source_floor_reached: boolean;
+  source_floor_date?: string | null;
+  source_floor_reason: string;
+  complete_available_history: boolean;
+  next_retry_after?: string | null;
+  archive_status: string;
+  archive_message: string;
+  effective_start_date?: string | null;
   expected_sessions: number;
   candle_count: number;
   missing_sessions: number;
@@ -1038,6 +1056,11 @@ function HistoricalPanel({
         <StatusRow label="Done" value={formatNumber(historicalStatus?.done_count)} />
         <StatusRow label="Failed" value={formatNumber(historicalStatus?.failed_count)} />
         <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
+        <StatusRow label="First stored date" value={historicalStatus?.first_stored_candle_date ?? "-"} />
+        <StatusRow label="Latest stored date" value={historicalStatus?.latest_stored_candle_date ?? "-"} />
+        <StatusRow label="Source floor reached" value={formatNumber(historicalStatus?.source_floor_reached_count)} />
+        <StatusRow label="Complete available" value={formatNumber(historicalStatus?.complete_available_history_count)} />
+        <StatusRow label="Next retry" value={formatDate(historicalStatus?.next_retry_after)} />
         <StatusRow label="Window" value={`${historicalStatus?.from_date ?? "-"} to ${historicalStatus?.to_date_exclusive ?? "-"}`} />
       </dl>
       {historicalBlocked ? <p className="error-text">{dataApiWarning(tokenStatus)}</p> : null}
@@ -1067,6 +1090,8 @@ function HistoricalPanel({
                 <th>Status</th>
                 <th>Attempts</th>
                 <th>Candles</th>
+                <th>Request</th>
+                <th>Archive</th>
                 <th>Error</th>
               </tr>
             </thead>
@@ -1077,6 +1102,8 @@ function HistoricalPanel({
                   <td>{formatStatus(item.status)}</td>
                   <td>{formatNumber(item.attempts)}</td>
                   <td>{formatNumber(item.candles_received)}</td>
+                  <td>{item.request_from_date ? `${item.request_from_date} to ${item.request_to_date ?? "-"}` : "-"}</td>
+                  <td>{formatStatus(item.archive_status || item.source_floor_reason || "-")}</td>
                   <td>{item.error || "-"}</td>
                 </tr>
               ))}
@@ -1306,9 +1333,12 @@ function DataQualityPanel({ qualityReport }: { qualityReport: QualityReport | nu
             <tr>
               <th>Status</th>
               <th>Symbol</th>
+              <th>Archive</th>
+              <th>First</th>
               <th>Latest</th>
               <th>Candles</th>
               <th>Missing</th>
+              <th>Source floor</th>
               <th>Issues</th>
               <th>Fetch</th>
             </tr>
@@ -1316,16 +1346,19 @@ function DataQualityPanel({ qualityReport }: { qualityReport: QualityReport | nu
           <tbody>
             {!qualityReport || qualityReport.items.length === 0 ? (
               <tr>
-                <td colSpan={7}>No data quality exceptions.</td>
+                <td colSpan={10}>No data quality exceptions.</td>
               </tr>
             ) : (
               qualityReport.items.map((item) => (
                 <tr key={item.symbol}>
                   <td>{formatStatus(item.quality_status)}</td>
                   <td>{item.symbol}</td>
+                  <td>{item.archive_message || formatStatus(item.archive_status)}</td>
+                  <td>{item.first_stored_candle_date ?? "-"}</td>
                   <td>{item.latest_candle_date ?? "-"}</td>
                   <td>{formatNumber(item.candle_count)}</td>
                   <td>{formatNumber(item.missing_sessions)}</td>
+                  <td>{item.source_floor_reached ? formatStatus(item.source_floor_reason) : "-"}</td>
                   <td>{formatIssues(item.issues)}</td>
                   <td>{item.fetch_error || formatStatus(item.fetch_status)}</td>
                 </tr>

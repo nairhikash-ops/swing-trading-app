@@ -28,6 +28,8 @@ class FatalHistoricalError(Exception):
 START_COVERAGE_GRACE_DAYS = 10
 END_FRESHNESS_GRACE_DAYS = 3
 REUSABLE_TERMINAL_FETCH_STATUSES = {"completed", "completed_with_errors"}
+ARCHIVE_PROVIDER = "dhan"
+ARCHIVE_INTERVAL = "daily"
 
 
 def upward_movers_universe_name(threshold_percent: float) -> str:
@@ -110,9 +112,46 @@ class HistoricalDataStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS historical_instrument_archive (
+                    instrument_id INTEGER NOT NULL,
+                    security_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL DEFAULT '',
+                    source_provider TEXT NOT NULL,
+                    interval TEXT NOT NULL,
+                    first_stored_candle_date TEXT,
+                    latest_stored_candle_date TEXT,
+                    source_floor_reached INTEGER NOT NULL DEFAULT 0,
+                    source_floor_date TEXT,
+                    source_floor_reason TEXT NOT NULL DEFAULT 'unknown',
+                    complete_available_history INTEGER NOT NULL DEFAULT 0,
+                    last_successful_fetch_at TEXT,
+                    last_no_new_data_at TEXT,
+                    next_retry_after TEXT,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (instrument_id, source_provider, interval)
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_fetch_runs_status ON historical_fetch_runs(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_fetch_items_run_status ON historical_fetch_items(run_id, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_candles_security_date ON daily_candles(security_id, trading_date)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_historical_archive_latest ON historical_instrument_archive(latest_stored_candle_date)"
+            )
+            ensure_columns(
+                conn,
+                "historical_fetch_items",
+                {
+                    "request_from_date": "TEXT",
+                    "request_to_date": "TEXT",
+                    "archive_status": "TEXT NOT NULL DEFAULT ''",
+                    "source_floor_reason": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
 
     def active_run(self, universe_name: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -139,6 +178,31 @@ class HistoricalDataStore:
                 (universe_name,),
             ).fetchone()
         return dict(row) if row else None
+
+    def archive_metadata(self, instrument_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM historical_instrument_archive
+                WHERE instrument_id = ? AND source_provider = ? AND interval = ?
+                """,
+                (instrument_id, ARCHIVE_PROVIDER, ARCHIVE_INTERVAL),
+            ).fetchone()
+        return archive_row_to_dict(row) if row else None
+
+    def stored_candle_range(self, instrument_id: int) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MIN(trading_date) AS first_stored_candle_date,
+                       MAX(trading_date) AS latest_stored_candle_date,
+                       COUNT(*) AS stored_candle_count
+                FROM daily_candles
+                WHERE instrument_id = ?
+                """,
+                (instrument_id,),
+            ).fetchone()
+        return dict(row)
 
     def coverage_status(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> dict[str, Any]:
         timestamp = now_utc().isoformat()
@@ -398,23 +462,26 @@ class HistoricalDataStore:
                 ).fetchone()
                 if instrument:
                     mapped_symbols += 1
-                    status = "queued"
                     instrument_id = instrument["id"]
                     security_id = instrument["security_id"]
-                    error = ""
+                    plan = fetch_plan_for_instrument(conn, int(instrument_id), str(security_id), constituent["symbol"], window)
+                    status = plan["status"]
+                    error = plan["error"]
                 else:
                     skipped_symbols += 1
                     status = "skipped_unmapped"
                     instrument_id = None
                     security_id = ""
                     error = "No active Dhan NSE equity instrument matched this Nifty 500 ISIN."
+                    plan = {"request_from_date": None, "request_to_date": None, "archive_status": "", "source_floor_reason": ""}
                 conn.execute(
                     """
                     INSERT INTO historical_fetch_items (
                         run_id, index_constituent_id, instrument_id, company_name, industry,
-                        symbol, isin, security_id, status, error, updated_at
+                        symbol, isin, security_id, status, error, request_from_date, request_to_date,
+                        archive_status, source_floor_reason, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -427,6 +494,10 @@ class HistoricalDataStore:
                         security_id,
                         status,
                         error,
+                        plan["request_from_date"],
+                        plan["request_to_date"],
+                        plan["archive_status"],
+                        plan["source_floor_reason"],
                         timestamp,
                     ),
                 )
@@ -503,23 +574,26 @@ class HistoricalDataStore:
                 ).fetchone()
                 if instrument:
                     mapped_symbols += 1
-                    status = "queued"
                     instrument_id = instrument["id"]
                     security_id = instrument["security_id"]
-                    error = ""
+                    plan = fetch_plan_for_instrument(conn, int(instrument_id), str(security_id), constituent["symbol"], window)
+                    status = plan["status"]
+                    error = plan["error"]
                 else:
                     skipped_symbols += 1
                     status = "skipped_unmapped"
                     instrument_id = None
                     security_id = ""
                     error = "No active Dhan NSE equity instrument matched this Nifty 500 ISIN."
+                    plan = {"request_from_date": None, "request_to_date": None, "archive_status": "", "source_floor_reason": ""}
                 conn.execute(
                     """
                     INSERT INTO historical_fetch_items (
                         run_id, index_constituent_id, instrument_id, company_name, industry,
-                        symbol, isin, security_id, status, error, updated_at
+                        symbol, isin, security_id, status, error, request_from_date, request_to_date,
+                        archive_status, source_floor_reason, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -532,6 +606,10 @@ class HistoricalDataStore:
                         security_id,
                         status,
                         error,
+                        plan["request_from_date"],
+                        plan["request_to_date"],
+                        plan["archive_status"],
+                        plan["source_floor_reason"],
                         timestamp,
                     ),
                 )
@@ -603,6 +681,22 @@ class HistoricalDataStore:
                 WHERE id = ?
                 """,
                 (candles_received, timestamp, timestamp, item_id),
+            )
+            self._touch_run(conn, item_id, timestamp)
+
+    def mark_item_no_new_data(self, item_id: int, reason: str) -> None:
+        timestamp = now_utc().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE historical_fetch_items
+                SET status = 'skipped_no_new_data', candles_received = 0, error = ?,
+                    archive_status = 'waiting_for_next_session',
+                    source_floor_reason = ?,
+                    finished_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (reason[:1000], reason, timestamp, timestamp, item_id),
             )
             self._touch_run(conn, item_id, timestamp)
 
@@ -692,6 +786,117 @@ class HistoricalDataStore:
                     ),
                 )
 
+    def record_fetch_outcome(self, item: dict[str, Any], candles: list[dict[str, Any]], request_from: date, request_to: date) -> str:
+        timestamp = now_utc().isoformat()
+        retry_after = (now_utc() + timedelta(hours=12)).isoformat()
+        instrument_id = int(item["instrument_id"])
+        security_id = str(item["security_id"])
+        symbol = str(item["symbol"])
+        returned_first = min((candle["trading_date"] for candle in candles), default=None)
+        with self._connect() as conn:
+            stored = conn.execute(
+                """
+                SELECT MIN(trading_date) AS first_stored_candle_date,
+                       MAX(trading_date) AS latest_stored_candle_date
+                FROM daily_candles
+                WHERE instrument_id = ?
+                """,
+                (instrument_id,),
+            ).fetchone()
+            existing = conn.execute(
+                """
+                SELECT * FROM historical_instrument_archive
+                WHERE instrument_id = ? AND source_provider = ? AND interval = ?
+                """,
+                (instrument_id, ARCHIVE_PROVIDER, ARCHIVE_INTERVAL),
+            ).fetchone()
+            first_stored = stored["first_stored_candle_date"]
+            latest_stored = stored["latest_stored_candle_date"]
+            existing_floor_reached = bool(existing["source_floor_reached"]) if existing else False
+            existing_complete = bool(existing["complete_available_history"]) if existing else False
+            existing_floor_date = existing["source_floor_date"] if existing else None
+            existing_floor_reason = existing["source_floor_reason"] if existing else "unknown"
+
+            source_floor_reached = existing_floor_reached
+            complete_available_history = existing_complete
+            source_floor_date = existing_floor_date
+            source_floor_reason = existing_floor_reason
+            last_successful_fetch_at = existing["last_successful_fetch_at"] if existing else None
+            last_no_new_data_at = existing["last_no_new_data_at"] if existing else None
+            next_retry_after = existing["next_retry_after"] if existing else None
+            last_error = ""
+
+            if candles:
+                last_successful_fetch_at = timestamp
+                next_retry_after = None
+                if item.get("archive_status") == "initial_capture" and returned_first and returned_first > request_from.isoformat():
+                    source_floor_reached = True
+                    complete_available_history = True
+                    source_floor_date = returned_first
+                    source_floor_reason = "stock_listed_recently"
+                elif item.get("archive_status") == "initial_capture":
+                    source_floor_reached = True
+                    complete_available_history = True
+                    source_floor_date = request_from.isoformat()
+                    source_floor_reason = "dhan_5_year_limit"
+            else:
+                last_no_new_data_at = timestamp
+                next_retry_after = retry_after
+                if first_stored:
+                    source_floor_reason = "no_new_data_available_yet"
+                else:
+                    source_floor_reached = True
+                    complete_available_history = True
+                    source_floor_date = request_from.isoformat()
+                    source_floor_reason = "no_older_data_from_dhan"
+
+            conn.execute(
+                """
+                INSERT INTO historical_instrument_archive (
+                    instrument_id, security_id, symbol, source_provider, interval,
+                    first_stored_candle_date, latest_stored_candle_date,
+                    source_floor_reached, source_floor_date, source_floor_reason,
+                    complete_available_history, last_successful_fetch_at,
+                    last_no_new_data_at, next_retry_after, last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id, source_provider, interval) DO UPDATE SET
+                    security_id = excluded.security_id,
+                    symbol = excluded.symbol,
+                    first_stored_candle_date = excluded.first_stored_candle_date,
+                    latest_stored_candle_date = excluded.latest_stored_candle_date,
+                    source_floor_reached = excluded.source_floor_reached,
+                    source_floor_date = excluded.source_floor_date,
+                    source_floor_reason = excluded.source_floor_reason,
+                    complete_available_history = excluded.complete_available_history,
+                    last_successful_fetch_at = excluded.last_successful_fetch_at,
+                    last_no_new_data_at = excluded.last_no_new_data_at,
+                    next_retry_after = excluded.next_retry_after,
+                    last_error = excluded.last_error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    instrument_id,
+                    security_id,
+                    symbol,
+                    ARCHIVE_PROVIDER,
+                    ARCHIVE_INTERVAL,
+                    first_stored,
+                    latest_stored,
+                    1 if source_floor_reached else 0,
+                    source_floor_date,
+                    source_floor_reason,
+                    1 if complete_available_history else 0,
+                    last_successful_fetch_at,
+                    last_no_new_data_at,
+                    next_retry_after,
+                    last_error,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            return source_floor_reason
+
     def finish_run_if_complete(self, run_id: int) -> None:
         summary = self.status(run_id=run_id)
         if not summary:
@@ -737,7 +942,7 @@ class HistoricalDataStore:
                 SELECT
                     SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_count,
                     SUM(CASE WHEN status = 'fetching' THEN 1 ELSE 0 END) AS fetching_count,
-                    SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                    SUM(CASE WHEN status IN ('done', 'skipped_up_to_date', 'skipped_no_new_data', 'skipped_retry_later') THEN 1 ELSE 0 END) AS done_count,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
                     SUM(CASE WHEN status = 'skipped_unmapped' THEN 1 ELSE 0 END) AS skipped_count,
                     SUM(candles_received) AS candles_received
@@ -758,6 +963,23 @@ class HistoricalDataStore:
                 """,
                 (run["from_date"], run["to_date_exclusive"], run["id"]),
             ).fetchone()
+            archive = conn.execute(
+                """
+                SELECT
+                    MIN(first_stored_candle_date) AS first_stored_candle_date,
+                    MAX(latest_stored_candle_date) AS latest_stored_candle_date,
+                    SUM(CASE WHEN source_floor_reached = 1 THEN 1 ELSE 0 END) AS source_floor_reached_count,
+                    SUM(CASE WHEN complete_available_history = 1 THEN 1 ELSE 0 END) AS complete_available_history_count,
+                    MIN(next_retry_after) AS next_retry_after
+                FROM historical_instrument_archive
+                WHERE source_provider = ? AND interval = ?
+                  AND instrument_id IN (
+                    SELECT instrument_id FROM historical_fetch_items
+                    WHERE run_id = ? AND instrument_id IS NOT NULL
+                  )
+                """,
+                (ARCHIVE_PROVIDER, ARCHIVE_INTERVAL, run["id"]),
+            ).fetchone()
         data = dict(run)
         data.update(
             {
@@ -768,6 +990,11 @@ class HistoricalDataStore:
                 "skipped_count": int(counts["skipped_count"] or 0),
                 "candles_received": int(counts["candles_received"] or 0),
                 "stored_candle_count": int(candle_count["candle_count"] or 0),
+                "first_stored_candle_date": archive["first_stored_candle_date"],
+                "latest_stored_candle_date": archive["latest_stored_candle_date"],
+                "source_floor_reached_count": int(archive["source_floor_reached_count"] or 0),
+                "complete_available_history_count": int(archive["complete_available_history_count"] or 0),
+                "next_retry_after": archive["next_retry_after"],
             }
         )
         return data
@@ -859,7 +1086,7 @@ class HistoricalDataService:
                 if self._task is not None and not self._task.done():
                     raise ValueError("Another historical fetch is already running.")
                 self._access_token()
-                window = historical_window(self.settings)
+                window = clamp_window_to_dhan_floor(self.settings, historical_window(self.settings))
                 latest_run = self.store.latest_run(NIFTY_500_INDEX_NAME)
                 latest_status = self.store.status(int(latest_run["id"])) if latest_run else None
                 if reusable_current_window_run(
@@ -900,7 +1127,7 @@ class HistoricalDataService:
                 if self._task is not None and not self._task.done():
                     raise ValueError("Another historical fetch is already running.")
                 self._access_token()
-                window = historical_window(self.settings, lookback_calendar_days)
+                window = clamp_window_to_dhan_floor(self.settings, historical_window(self.settings, lookback_calendar_days))
                 coverage = self.store.coverage_status_for_constituent_ids(
                     universe_name,
                     lookback_calendar_days,
@@ -977,17 +1204,24 @@ class HistoricalDataService:
                         security_id=item["security_id"],
                         exchange_segment=self.settings.dhan_historical_exchange_segment,
                         instrument=self.settings.dhan_historical_instrument,
-                        from_date=run["from_date"],
-                        to_date=run["to_date_exclusive"],
+                        from_date=item.get("request_from_date") or run["from_date"],
+                        to_date=item.get("request_to_date") or run["to_date_exclusive"],
                     )
                     candles = parse_historical_payload(payload)
-                    self.store.upsert_candles(
-                        item,
-                        candles,
-                        self.settings.dhan_historical_exchange_segment,
-                        self.settings.dhan_historical_instrument,
-                    )
-                    self.store.mark_item_done(item["id"], len(candles))
+                    request_from = date.fromisoformat(item.get("request_from_date") or run["from_date"])
+                    request_to = date.fromisoformat(item.get("request_to_date") or run["to_date_exclusive"])
+                    if candles:
+                        self.store.upsert_candles(
+                            item,
+                            candles,
+                            self.settings.dhan_historical_exchange_segment,
+                            self.settings.dhan_historical_instrument,
+                        )
+                        self.store.record_fetch_outcome(item, candles, request_from, request_to)
+                        self.store.mark_item_done(item["id"], len(candles))
+                    else:
+                        reason = self.store.record_fetch_outcome(item, candles, request_from, request_to)
+                        self.store.mark_item_no_new_data(item["id"], reason)
                     break
                 except FatalHistoricalError as exc:
                     message = str(exc)
@@ -1034,6 +1268,16 @@ def historical_window(
     return HistoricalWindow(from_date=from_date, to_date_exclusive=end_date + timedelta(days=1))
 
 
+def dhan_earliest_supported_date(settings: Settings, as_of: datetime | None = None) -> date:
+    now_ist = as_of.astimezone(IST) if as_of else datetime.now(tz=IST)
+    return now_ist.date() - timedelta(days=settings.dhan_historical_daily_supported_years * 365)
+
+
+def clamp_window_to_dhan_floor(settings: Settings, window: HistoricalWindow, as_of: datetime | None = None) -> HistoricalWindow:
+    floor = dhan_earliest_supported_date(settings, as_of)
+    return HistoricalWindow(from_date=max(window.from_date, floor), to_date_exclusive=window.to_date_exclusive)
+
+
 def reusable_current_window_run(
     run: dict[str, Any] | None,
     lookback_days: int,
@@ -1052,6 +1296,111 @@ def reusable_current_window_run(
 
 def normalized_ids(values: list[int]) -> list[int]:
     return sorted({int(value) for value in values if int(value) > 0})
+
+
+def fetch_plan_for_instrument(conn, instrument_id: int, security_id: str, symbol: str, window: HistoricalWindow) -> dict[str, Any]:
+    stored = conn.execute(
+        """
+        SELECT MIN(trading_date) AS first_stored_candle_date,
+               MAX(trading_date) AS latest_stored_candle_date
+        FROM daily_candles
+        WHERE instrument_id = ?
+        """,
+        (instrument_id,),
+    ).fetchone()
+    archive = conn.execute(
+        """
+        SELECT * FROM historical_instrument_archive
+        WHERE instrument_id = ? AND source_provider = ? AND interval = ?
+        """,
+        (instrument_id, ARCHIVE_PROVIDER, ARCHIVE_INTERVAL),
+    ).fetchone()
+    now_text = now_utc().isoformat()
+    first_stored = stored["first_stored_candle_date"]
+    latest_stored = stored["latest_stored_candle_date"]
+    if archive is None:
+        conn.execute(
+            """
+            INSERT INTO historical_instrument_archive (
+                instrument_id, security_id, symbol, source_provider, interval,
+                first_stored_candle_date, latest_stored_candle_date, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                instrument_id,
+                security_id,
+                symbol,
+                ARCHIVE_PROVIDER,
+                ARCHIVE_INTERVAL,
+                first_stored,
+                latest_stored,
+                now_text,
+                now_text,
+            ),
+        )
+    else:
+        retry_after = archive["next_retry_after"]
+        if retry_after and retry_after > now_text:
+            return {
+                "status": "skipped_retry_later",
+                "error": "Waiting until next retry window for Dhan historical data.",
+                "request_from_date": None,
+                "request_to_date": None,
+                "archive_status": "waiting_for_next_session",
+                "source_floor_reason": archive["source_floor_reason"],
+            }
+
+    latest_expected = window.to_date_exclusive - timedelta(days=1)
+    if latest_stored and date.fromisoformat(latest_stored) >= latest_expected:
+        return {
+            "status": "skipped_up_to_date",
+            "error": "Already up to date.",
+            "request_from_date": None,
+            "request_to_date": None,
+            "archive_status": "up_to_date",
+            "source_floor_reason": archive["source_floor_reason"] if archive else "",
+        }
+
+    if latest_stored:
+        request_from = max(window.from_date, date.fromisoformat(latest_stored) + timedelta(days=1))
+        archive_status = "incremental_update"
+    else:
+        request_from = window.from_date
+        archive_status = "initial_capture"
+
+    if request_from >= window.to_date_exclusive:
+        return {
+            "status": "skipped_up_to_date",
+            "error": "Already up to date.",
+            "request_from_date": None,
+            "request_to_date": None,
+            "archive_status": "up_to_date",
+            "source_floor_reason": archive["source_floor_reason"] if archive else "",
+        }
+
+    return {
+        "status": "queued",
+        "error": "",
+        "request_from_date": request_from.isoformat(),
+        "request_to_date": latest_expected.isoformat(),
+        "archive_status": archive_status,
+        "source_floor_reason": archive["source_floor_reason"] if archive else "",
+    }
+
+
+def archive_row_to_dict(row) -> dict[str, Any]:
+    data = dict(row)
+    data["source_floor_reached"] = bool(data["source_floor_reached"])
+    data["complete_available_history"] = bool(data["complete_available_history"])
+    return data
+
+
+def ensure_columns(conn, table_name: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
 
 
 def empty_historical_status(
@@ -1079,6 +1428,11 @@ def empty_historical_status(
         "skipped_count": 0,
         "candles_received": 0,
         "stored_candle_count": 0,
+        "first_stored_candle_date": None,
+        "latest_stored_candle_date": None,
+        "source_floor_reached_count": 0,
+        "complete_available_history_count": 0,
+        "next_retry_after": None,
         "error": error,
         "started_at": timestamp,
         "updated_at": timestamp,
