@@ -12,6 +12,7 @@ from app.dhan_client import DhanClient
 from app.index_universe import NIFTY_500_INDEX_NAME
 from app.store import TokenStore
 from app.timezone import IST, now_utc
+from app.token_service import derive_data_api_status
 
 
 @dataclass(frozen=True)
@@ -1014,6 +1015,10 @@ class HistoricalDataService:
         token = self.token_store.get()
         if token is None:
             raise ValueError("No Dhan token has been stored.")
+        token_state = "expired" if token.expiry_time is not None and token.expiry_time <= now_utc() else "active"
+        _, allowed, reason = derive_data_api_status(token_state, token.profile.get("dataPlan"))
+        if not allowed:
+            raise ValueError(reason)
         return TokenCrypto(self.settings.app_secret_key).decrypt(token.encrypted_access_token)
 
 

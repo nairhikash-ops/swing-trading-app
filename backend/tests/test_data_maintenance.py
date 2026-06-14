@@ -39,6 +39,10 @@ def active_token_status() -> TokenStatusResponse:
         state="active",
         has_token=True,
         expiry_time=now_utc() + timedelta(hours=20),
+        data_plan="Active",
+        data_api_active=True,
+        historical_fetch_allowed=True,
+        historical_block_reason="",
     )
 
 
@@ -62,6 +66,36 @@ async def test_data_maintenance_skips_when_token_is_expired(tmp_path):
 
     assert result["status"] == "skipped"
     assert result["token_state"] == "expired"
+    assert historical.fetch_calls == 0
+    assert historical.prune_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_data_maintenance_skips_when_data_api_is_inactive(tmp_path):
+    historical = FakeHistoricalService({"status": "up_to_date", "id": 0})
+    scheduler = DataMaintenanceScheduler(
+        Settings(app_secret_key="a" * 44, data_dir=tmp_path),
+        FakeTokenService(
+            TokenStatusResponse(
+                state="active",
+                has_token=True,
+                expiry_time=now_utc() + timedelta(hours=20),
+                data_plan="Deactive",
+                data_api_active=False,
+                historical_fetch_allowed=False,
+                historical_block_reason="Dhan data API is inactive or pending renewal.",
+            )
+        ),
+        historical,
+    )
+
+    result = await scheduler.run_once()
+
+    assert result["status"] == "skipped"
+    assert result["token_state"] == "active"
+    assert result["data_api_active"] is False
+    assert result["historical_fetch_allowed"] is False
+    assert result["reason"] == "Dhan data API is inactive or pending renewal."
     assert historical.fetch_calls == 0
     assert historical.prune_calls == 0
 

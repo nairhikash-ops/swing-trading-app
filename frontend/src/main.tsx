@@ -38,6 +38,9 @@ type TokenStatus = {
   ddpi?: string | null;
   mtf?: string | null;
   data_plan?: string | null;
+  data_api_active: boolean;
+  historical_fetch_allowed: boolean;
+  historical_block_reason: string;
   data_validity?: string | null;
   last_status_check_at?: string | null;
   last_renew_attempt_at?: string | null;
@@ -307,6 +310,7 @@ function App() {
   });
 
   const stateMeta = useMemo(() => getStateMeta(status?.state ?? "unknown"), [status?.state]);
+  const dataApiBlocked = status ? !status.historical_fetch_allowed : false;
 
   async function loadStatus(refresh = false) {
     setBusy(true);
@@ -420,6 +424,10 @@ function App() {
   }
 
   async function startHistoricalFetch() {
+    if (status && !status.historical_fetch_allowed) {
+      setMessage(status.historical_block_reason || "Historical candle refresh is blocked.");
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
@@ -624,6 +632,7 @@ function App() {
       : 0;
   const systemStateMeta = getSystemStateMeta(
     status?.state ?? "unknown",
+    status?.historical_fetch_allowed ?? true,
     historicalStatus?.status,
     qualityReport?.blocked_count ?? 0,
   );
@@ -631,6 +640,7 @@ function App() {
   const pageMeta = getPageMeta(activePage);
   const actionCount =
     (status?.state && !["active", "expiring_soon"].includes(status.state) ? 1 : 0) +
+    (dataApiBlocked ? 1 : 0) +
     (historicalStatus?.failed_count ?? 0) +
     (qualityReport?.blocked_count ?? 0);
 
@@ -665,6 +675,7 @@ function App() {
               </div>
               <dl className="hero-metrics">
                 <StatusRow label="Dhan" value={formatStatus(status?.state)} />
+                <StatusRow label="Data API" value={formatDataApiStatus(status)} />
                 <StatusRow label="Nifty 500 active" value={formatNumber(universeStatus?.active_count)} />
                 <StatusRow label="Historical progress" value={`${historicalProgress}%`} />
                 <StatusRow label="Action items" value={formatNumber(actionCount)} />
@@ -686,10 +697,12 @@ function App() {
               <p className="eyebrow">Connection</p>
               <h2>Dhan Feed</h2>
               <dl className="mini-list">
-                <StatusRow label="State" value={formatStatus(status?.state)} />
+                <StatusRow label="Token" value={formatStatus(status?.state)} />
+                <StatusRow label="Data API" value={formatDataApiStatus(status)} />
                 <StatusRow label="Token expiry" value={formatDate(status?.expiry_time)} />
                 <StatusRow label="Data plan" value={status?.data_plan ?? "-"} />
               </dl>
+              {dataApiBlocked ? <p className="error-text">{dataApiWarning(status)}</p> : null}
               <button className="secondary" onClick={() => setActivePage("settings")}>
                 Open settings
               </button>
@@ -766,6 +779,7 @@ function App() {
           </section>
 
           <HistoricalPanel
+            tokenStatus={status}
             historicalStatus={historicalStatus}
             historicalItems={historicalItems}
             historicalProgress={historicalProgress}
@@ -868,6 +882,9 @@ function SettingsPanel({
         </div>
 
         <dl className="status-list">
+          <StatusRow label="Dhan token" value={formatStatus(status?.state)} />
+          <StatusRow label="Dhan data API" value={formatDataApiStatus(status)} />
+          <StatusRow label="Historical fetch" value={status?.historical_fetch_allowed ? "Allowed" : "Blocked"} />
           <StatusRow label="Client ID" value={status?.dhan_client_id ?? "-"} />
           <StatusRow label="Stored token" value={status?.masked_token ?? "-"} />
           <StatusRow label="Token source" value={status?.token_source ?? "-"} />
@@ -878,6 +895,7 @@ function SettingsPanel({
           <StatusRow label="Last renew" value={formatDate(status?.last_renew_success_at)} />
         </dl>
 
+        {status && !status.historical_fetch_allowed ? <p className="error-text">{dataApiWarning(status)}</p> : null}
         {status?.last_error ? <p className="error-text">{status.last_error}</p> : null}
 
         <div className="button-row">
@@ -982,6 +1000,7 @@ function StatusPanel({
 }
 
 function HistoricalPanel({
+  tokenStatus,
   historicalStatus,
   historicalItems,
   historicalProgress,
@@ -990,6 +1009,7 @@ function HistoricalPanel({
   loadHistoricalStatus,
   loadHistoricalItems,
 }: {
+  tokenStatus: TokenStatus | null;
   historicalStatus: HistoricalStatus | null;
   historicalItems: HistoricalItem[];
   historicalProgress: number;
@@ -998,6 +1018,7 @@ function HistoricalPanel({
   loadHistoricalStatus: () => void;
   loadHistoricalItems: (runId?: number, itemStatus?: string) => void;
 }) {
+  const historicalBlocked = tokenStatus ? !tokenStatus.historical_fetch_allowed : false;
   return (
     <section className="panel instruments-panel">
       <div className="panel-heading">
@@ -1008,6 +1029,8 @@ function HistoricalPanel({
         <Database size={22} />
       </div>
       <dl className="status-list compact">
+        <StatusRow label="Dhan data API" value={formatDataApiStatus(tokenStatus)} />
+        <StatusRow label="Historical fetch" value={historicalBlocked ? "Blocked" : "Allowed"} />
         <StatusRow label="Status" value={historicalStatus?.status ?? "-"} />
         <StatusRow label="Run ID" value={formatNumber(historicalStatus?.id)} />
         <StatusRow label="Progress" value={`${historicalProgress}%`} />
@@ -1017,9 +1040,10 @@ function HistoricalPanel({
         <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
         <StatusRow label="Window" value={`${historicalStatus?.from_date ?? "-"} to ${historicalStatus?.to_date_exclusive ?? "-"}`} />
       </dl>
+      {historicalBlocked ? <p className="error-text">{dataApiWarning(tokenStatus)}</p> : null}
       {historicalStatus?.error ? <p className="error-text">{historicalStatus.error}</p> : null}
       <div className="button-row">
-        <button onClick={startHistoricalFetch} disabled={busy}>
+        <button onClick={startHistoricalFetch} disabled={busy || historicalBlocked}>
           <RefreshCcw size={17} />
           Start/resume Nifty 500 fetch
         </button>
@@ -1583,9 +1607,12 @@ function getStateMeta(state: TokenState) {
   return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
 }
 
-function getSystemStateMeta(dhanState: TokenState, historicalState?: string, blockedCount = 0) {
+function getSystemStateMeta(dhanState: TokenState, historicalFetchAllowed: boolean, historicalState?: string, blockedCount = 0) {
   if (dhanState === "expired" || dhanState === "renew_failed" || dhanState === "config_error") {
     return { label: "Dhan needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
+  }
+  if (!historicalFetchAllowed) {
+    return { label: "Data API inactive", className: "warn", icon: <AlertTriangle size={18} /> };
   }
   if (blockedCount > 0 || historicalState === "failed") {
     return { label: "Data needs review", className: "warn", icon: <AlertTriangle size={18} /> };
@@ -1645,6 +1672,18 @@ function formatIssues(value: string[]) {
 function formatStatus(value?: string | null) {
   if (!value) return "-";
   return value.replaceAll("_", " ");
+}
+
+function formatDataApiStatus(status?: TokenStatus | null) {
+  if (!status) return "-";
+  if (status.data_api_active) return "Active";
+  if (status.state === "active") return "Inactive / Renewal pending";
+  return "Blocked";
+}
+
+function dataApiWarning(status?: TokenStatus | null) {
+  if (status?.historical_block_reason === "Dhan token is not active.") return status.historical_block_reason;
+  return "Dhan data API is inactive or pending renewal. Historical candle refresh is blocked until renewal is complete.";
 }
 
 async function readError(response: Response) {

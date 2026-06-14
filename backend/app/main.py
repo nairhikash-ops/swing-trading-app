@@ -270,8 +270,10 @@ async def historical_nifty_500_status(
 @app.post("/api/historical/nifty500/refresh", response_model=HistoricalFetchStatusResponse)
 async def historical_nifty_500_refresh(
     historical_service: HistoricalDataService = Depends(get_historical_service_dep),
+    token_service: TokenService = Depends(get_token_service_dep),
 ) -> HistoricalFetchStatusResponse:
     try:
+        ensure_historical_fetch_allowed(token_service)
         status = await historical_service.start_or_resume_nifty_500_fetch()
         return HistoricalFetchStatusResponse(**status)
     except Exception as exc:
@@ -295,9 +297,11 @@ async def historical_nifty_500_upward_movers_refresh(
     lookback_calendar_days: int | None = Query(default=None, ge=1, le=365),
     historical_service: HistoricalDataService = Depends(get_historical_service_dep),
     range_mover_service: RangeMoverService = Depends(get_range_mover_service_dep),
+    token_service: TokenService = Depends(get_token_service_dep),
     settings: Settings = Depends(get_settings_dep),
 ) -> HistoricalFetchStatusResponse:
     try:
+        ensure_historical_fetch_allowed(token_service)
         threshold = threshold_percent or settings.extended_history_upward_move_threshold_percent
         lookback_days = lookback_calendar_days or settings.extended_history_lookback_calendar_days
         report = range_mover_service.nifty_500_range_movers(threshold_percent=threshold, limit=500)
@@ -315,6 +319,15 @@ async def historical_nifty_500_upward_movers_refresh(
         return HistoricalFetchStatusResponse(**status)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def ensure_historical_fetch_allowed(token_service: TokenService) -> None:
+    status = token_service.status()
+    if not status.historical_fetch_allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=status.historical_block_reason or "Historical candle refresh is blocked.",
+        )
 
 
 @app.get("/api/historical/nifty500/items", response_model=list[HistoricalFetchItem])

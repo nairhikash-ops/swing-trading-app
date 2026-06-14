@@ -10,6 +10,23 @@ from app.store import StoredToken, TokenStore
 from app.timezone import now_utc, to_utc
 
 
+INACTIVE_DATA_PLAN_VALUES = {
+    "",
+    "inactive",
+    "in-active",
+    "deactive",
+    "de-active",
+    "disabled",
+    "disable",
+    "expired",
+    "pending",
+    "na",
+    "n/a",
+    "none",
+    "null",
+}
+
+
 class TokenService:
     def __init__(self, settings: Settings, store: TokenStore, dhan_client: DhanClient | None = None) -> None:
         self.settings = settings
@@ -122,6 +139,8 @@ class TokenService:
         else:
             state = "active"
 
+        data_plan = token.profile.get("dataPlan")
+        data_api_active, historical_fetch_allowed, historical_block_reason = derive_data_api_status(state, data_plan)
         return TokenStatusResponse(
             state=state,
             has_token=True,
@@ -132,7 +151,10 @@ class TokenService:
             active_segment=token.profile.get("activeSegment"),
             ddpi=token.profile.get("ddpi"),
             mtf=token.profile.get("mtf"),
-            data_plan=token.profile.get("dataPlan"),
+            data_plan=data_plan,
+            data_api_active=data_api_active,
+            historical_fetch_allowed=historical_fetch_allowed,
+            historical_block_reason=historical_block_reason,
             data_validity=token.profile.get("dataValidity"),
             last_status_check_at=token.last_status_check_at,
             last_renew_attempt_at=token.last_renew_attempt_at,
@@ -140,3 +162,12 @@ class TokenService:
             last_error=token.last_error,
             token_source=token.token_source,
         )
+
+
+def derive_data_api_status(token_state: str, data_plan: str | None) -> tuple[bool, bool, str]:
+    if token_state not in ("active", "expiring_soon"):
+        return False, False, "Dhan token is not active."
+    normalized = str(data_plan or "").strip().lower()
+    if normalized in INACTIVE_DATA_PLAN_VALUES or "deactive" in normalized or "inactive" in normalized:
+        return False, False, "Dhan data API is inactive or pending renewal."
+    return True, True, ""

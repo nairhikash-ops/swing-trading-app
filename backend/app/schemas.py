@@ -30,6 +30,9 @@ class TokenStatusResponse(BaseModel):
     ddpi: str | None = None
     mtf: str | None = None
     data_plan: str | None = None
+    data_api_active: bool = False
+    historical_fetch_allowed: bool = False
+    historical_block_reason: str = ""
     data_validity: str | None = None
     last_status_check_at: datetime | None = None
     last_renew_attempt_at: datetime | None = None

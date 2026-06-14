@@ -1,7 +1,12 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
+import pytest
+from cryptography.fernet import Fernet
+
+from app.crypto import TokenCrypto
 from app.config import Settings
 from app.historical_data import (
+    HistoricalDataService,
     HistoricalDataStore,
     HistoricalWindow,
     historical_window,
@@ -11,6 +16,16 @@ from app.historical_data import (
 from app.index_universe import IndexUniverseStore
 from app.instrument_master import InstrumentMasterStore
 from app.store import TokenStore
+from app.timezone import now_utc
+
+
+class FakeHistoricalDhanClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def historical_daily(self, **kwargs):
+        self.calls += 1
+        return {"timestamp": [], "open": [], "high": [], "low": [], "close": [], "volume": []}
 
 
 def make_stores(tmp_path):
@@ -23,6 +38,28 @@ def make_stores(tmp_path):
         InstrumentMasterStore(token_store),
         HistoricalDataStore(token_store),
     )
+
+
+@pytest.mark.asyncio
+async def test_historical_service_blocks_fetch_when_data_api_is_inactive(tmp_path):
+    settings = Settings(app_secret_key=Fernet.generate_key().decode(), data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    token_store.upsert_token(
+        dhan_client_id="123456",
+        encrypted_access_token=TokenCrypto(settings.app_secret_key).encrypt("manual-token-value-1234567890"),
+        token_source="manual",
+        expiry_time=now_utc() + timedelta(hours=20),
+        profile={"dataPlan": "Deactive", "dataValidity": "NA"},
+    )
+    historical_store = HistoricalDataStore(token_store)
+    dhan_client = FakeHistoricalDhanClient()
+    service = HistoricalDataService(settings, token_store, historical_store, dhan_client)
+
+    with pytest.raises(ValueError, match="Dhan data API is inactive or pending renewal"):
+        await service.start_or_resume_nifty_500_fetch()
+
+    assert dhan_client.calls == 0
+    assert historical_store.latest_run("NIFTY_500") is None
 
 
 def test_parse_historical_payload_returns_ist_trading_dates():

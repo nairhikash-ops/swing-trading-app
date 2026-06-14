@@ -42,11 +42,15 @@ class DataMaintenanceScheduler:
     async def run_once(self) -> dict[str, object]:
         renewed, status, token_message = await self.token_service.renew_if_needed(force=False)
         if not token_can_fetch(status):
-            logger.info("Data maintenance skipped: %s", token_message)
+            reason = status.historical_block_reason or token_message
+            logger.info("Data maintenance skipped: %s", reason)
             return {
                 "status": "skipped",
-                "reason": token_message,
+                "reason": reason,
                 "token_state": status.state,
+                "data_api_active": status.data_api_active,
+                "historical_fetch_allowed": status.historical_fetch_allowed,
+                "historical_block_reason": status.historical_block_reason,
                 "renewed": renewed,
             }
 
@@ -95,4 +99,4 @@ def token_can_fetch(status: TokenStatusResponse) -> bool:
         return False
     if status.expiry_time is not None and status.expiry_time <= now_utc():
         return False
-    return True
+    return status.historical_fetch_allowed

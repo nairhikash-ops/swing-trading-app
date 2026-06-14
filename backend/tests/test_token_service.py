@@ -7,7 +7,7 @@ from app.config import Settings
 from app.dhan_client import DhanProfile, DhanRenewedToken
 from app.store import TokenStore
 from app.timezone import now_utc
-from app.token_service import TokenService
+from app.token_service import TokenService, derive_data_api_status
 
 
 class FakeDhanClient:
@@ -69,6 +69,10 @@ async def test_manual_token_is_saved_encrypted_and_status_is_masked(tmp_path):
     assert status.state == "active"
     assert status.masked_token == "manual...7890"
     assert status.active_segment == "Equity"
+    assert status.data_plan == "Active"
+    assert status.data_api_active is True
+    assert status.historical_fetch_allowed is True
+    assert status.historical_block_reason == ""
     assert fake.profile_calls == 1
     stored = service.store.get()
     assert stored is not None
@@ -128,3 +132,36 @@ async def test_force_renew_still_calls_dhan_when_local_expiry_is_stale(tmp_path)
     assert status.token_source == "renewed"
     assert message == "Token renewed successfully."
     assert fake.renew_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_active_token_with_deactive_data_plan_blocks_historical_fetch(tmp_path):
+    service, _ = make_service(tmp_path)
+    service.store.upsert_token(
+        dhan_client_id="123456",
+        encrypted_access_token=service._crypto().encrypt("manual-token-value-1234567890"),
+        token_source="manual",
+        expiry_time=now_utc() + timedelta(hours=20),
+        profile={
+            "dhanClientId": "123456",
+            "tokenValidity": "31/12/2026 23:59",
+            "dataPlan": "Deactive",
+            "dataValidity": "NA",
+        },
+    )
+
+    status = service.status()
+
+    assert status.state == "active"
+    assert status.data_plan == "Deactive"
+    assert status.data_api_active is False
+    assert status.historical_fetch_allowed is False
+    assert status.historical_block_reason == "Dhan data API is inactive or pending renewal."
+
+
+def test_expiring_soon_token_with_active_data_plan_can_fetch_historical_data():
+    data_api_active, historical_fetch_allowed, reason = derive_data_api_status("expiring_soon", "Active")
+
+    assert data_api_active is True
+    assert historical_fetch_allowed is True
+    assert reason == ""
