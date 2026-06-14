@@ -3,76 +3,38 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.candlesticks import CandlestickService
 from app.config import Settings, get_settings
 from app.data_maintenance import DataMaintenanceScheduler
 from app.data_quality import DataQualityService
-from app.demo_automation import DemoAutomationService
-from app.demo_trading import DemoTradingService
-from app.discipline import AlgoDisciplineReviewService
-from app.drishti import DrishtiSignalService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
-from app.learning import LearningStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
-from app.reversal_opportunities import ReversalOpportunityService
-from app.support_resistance import SupportResistanceService
-from app.trading_journal import TradingJournalStore
 from app.schemas import (
-    AiSignalReviewResponse,
-    CandlestickReportResponse,
     DailyCandleItem,
-    DemoAccountSummary,
-    DemoAutomationRunResponse,
-    DemoJournalItem,
-    DemoJournalNotesUpdateRequest,
-    DemoJournalResponse,
-    DemoLedgerResetResponse,
-    DemoOrderCreateResponse,
-    DemoOrderFromSignalRequest,
-    DemoOrderItem,
-    DemoPositionItem,
-    DemoRefreshResponse,
-    DrishtiSignalReportResponse,
     HealthResponse,
     HistoricalFetchItem,
     HistoricalFetchStatusResponse,
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
-    LearningDecisionSnapshotItem,
-    LearningStatusResponse,
-    LearningTradeOutcomeItem,
     MoveEventReportResponse,
-    Nifty500NearSupportItem,
     QualityReportResponse,
     RangeMoverReportResponse,
     RenewResponse,
-    ReversalOpportunityBackfillResponse,
-    ReversalOpportunityItem,
-    ReversalOpportunityOutcomeRefreshResponse,
-    ReversalOpportunityPromotionResponse,
-    ReversalOpportunityRunResponse,
-    ReversalOpportunitySnapshotItem,
     StockRegimeItem,
     StockRegimeReportResponse,
-    SupportResistanceReportResponse,
     TokenStatusResponse,
     TokenUpdateRequest,
     UniverseConstituentItem,
     UniverseImportSummary,
     UniverseStatusResponse,
-    WatchlistActiveItem,
-    WatchlistCandidateItem,
-    WatchlistMonitorResponse,
 )
 from app.scheduler import RenewalScheduler
 from app.store import TokenStore
 from app.token_service import TokenService
-from app.watchlist import WatchlistService
 
 
 def build_token_service(settings: Settings) -> TokenService:
@@ -110,57 +72,8 @@ def build_move_event_service(settings: Settings) -> MoveEventService:
     return MoveEventService(settings=settings, token_store=TokenStore(settings.database_path))
 
 
-def build_drishti_signal_service(settings: Settings) -> DrishtiSignalService:
-    return DrishtiSignalService(settings=settings, token_store=TokenStore(settings.database_path))
-
-
-def build_demo_trading_service(settings: Settings) -> DemoTradingService:
-    return DemoTradingService(settings=settings, token_store=TokenStore(settings.database_path))
-
-
-def build_algo_discipline_review_service(settings: Settings) -> AlgoDisciplineReviewService:
-    return AlgoDisciplineReviewService(settings=settings, token_store=TokenStore(settings.database_path))
-
-
-def build_demo_automation_service(
-    settings: Settings,
-    drishti_signal_service: DrishtiSignalService,
-    demo_trading_service: DemoTradingService,
-) -> DemoAutomationService:
-    return DemoAutomationService(
-        settings=settings,
-        token_store=TokenStore(settings.database_path),
-        drishti_signal_service=drishti_signal_service,
-        demo_trading_service=demo_trading_service,
-    )
-
-
-def build_learning_store(settings: Settings) -> LearningStore:
-    return LearningStore(TokenStore(settings.database_path))
-
-
-def build_trading_journal_store(settings: Settings) -> TradingJournalStore:
-    return TradingJournalStore(TokenStore(settings.database_path))
-
-
-def build_watchlist_service(settings: Settings, demo_trading_service: DemoTradingService) -> WatchlistService:
-    return WatchlistService(settings, TokenStore(settings.database_path), demo_trading_service)
-
-
 def build_regime_service(settings: Settings) -> StockRegimeService:
     return StockRegimeService(TokenStore(settings.database_path))
-
-
-def build_support_resistance_service(settings: Settings) -> SupportResistanceService:
-    return SupportResistanceService(TokenStore(settings.database_path))
-
-
-def build_candlestick_service(settings: Settings) -> CandlestickService:
-    return CandlestickService(TokenStore(settings.database_path))
-
-
-def build_reversal_opportunity_service(settings: Settings) -> ReversalOpportunityService:
-    return ReversalOpportunityService(TokenStore(settings.database_path), settings=settings)
 
 
 @asynccontextmanager
@@ -173,29 +86,12 @@ async def lifespan(app: FastAPI):
     quality_service = build_quality_service(settings)
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
-    drishti_signal_service = build_drishti_signal_service(settings)
-    demo_trading_service = build_demo_trading_service(settings)
-    algo_discipline_review_service = build_algo_discipline_review_service(settings)
-    demo_automation_service = build_demo_automation_service(
-        settings,
-        drishti_signal_service,
-        demo_trading_service,
-    )
-    learning_store = build_learning_store(settings)
-    trading_journal_store = build_trading_journal_store(settings)
-    watchlist_service = build_watchlist_service(settings, demo_trading_service)
     regime_service = build_regime_service(settings)
-    support_resistance_service = build_support_resistance_service(settings)
-    candlestick_service = build_candlestick_service(settings)
-    reversal_opportunity_service = build_reversal_opportunity_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
         token_service,
         historical_service,
-        regime_service,
-        demo_automation_service,
-        reversal_opportunity_service=reversal_opportunity_service,
     )
     app.state.settings = settings
     app.state.token_service = token_service
@@ -205,17 +101,7 @@ async def lifespan(app: FastAPI):
     app.state.quality_service = quality_service
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
-    app.state.drishti_signal_service = drishti_signal_service
-    app.state.demo_trading_service = demo_trading_service
-    app.state.algo_discipline_review_service = algo_discipline_review_service
-    app.state.demo_automation_service = demo_automation_service
-    app.state.learning_store = learning_store
-    app.state.trading_journal_store = trading_journal_store
-    app.state.watchlist_service = watchlist_service
     app.state.regime_service = regime_service
-    app.state.support_resistance_service = support_resistance_service
-    app.state.candlestick_service = candlestick_service
-    app.state.reversal_opportunity_service = reversal_opportunity_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -264,48 +150,8 @@ def get_move_event_service_dep() -> MoveEventService:
     return app.state.move_event_service
 
 
-def get_drishti_signal_service_dep() -> DrishtiSignalService:
-    return app.state.drishti_signal_service
-
-
-def get_demo_trading_service_dep() -> DemoTradingService:
-    return app.state.demo_trading_service
-
-
-def get_algo_discipline_review_service_dep() -> AlgoDisciplineReviewService:
-    return app.state.algo_discipline_review_service
-
-
-def get_demo_automation_service_dep() -> DemoAutomationService:
-    return app.state.demo_automation_service
-
-
-def get_learning_store_dep() -> LearningStore:
-    return app.state.learning_store
-
-
-def get_trading_journal_store_dep() -> TradingJournalStore:
-    return app.state.trading_journal_store
-
-
-def get_watchlist_service_dep() -> WatchlistService:
-    return app.state.watchlist_service
-
-
 def get_regime_service_dep() -> StockRegimeService:
     return app.state.regime_service
-
-
-def get_support_resistance_service_dep() -> SupportResistanceService:
-    return app.state.support_resistance_service
-
-
-def get_candlestick_service_dep() -> CandlestickService:
-    return app.state.candlestick_service
-
-
-def get_reversal_opportunity_service_dep() -> ReversalOpportunityService:
-    return app.state.reversal_opportunity_service
 
 
 def get_settings_dep() -> Settings:
@@ -351,26 +197,6 @@ async def dhan_renew(token_service: TokenService = Depends(get_token_service_dep
     try:
         renewed, status, message = await token_service.renew_if_needed(force=True)
         return RenewResponse(renewed=renewed, status=status, message=message)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/algo/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse | None)
-async def algo_review_for_drishti_hit(
-    hit_id: int,
-    algo_discipline_review_service: AlgoDisciplineReviewService = Depends(get_algo_discipline_review_service_dep),
-) -> AiSignalReviewResponse | None:
-    review = algo_discipline_review_service.latest_review_for_hit(hit_id)
-    return AiSignalReviewResponse(**review) if review else None
-
-
-@app.post("/api/algo/reviews/drishti-hit/{hit_id}", response_model=AiSignalReviewResponse)
-async def algo_review_drishti_hit(
-    hit_id: int,
-    algo_discipline_review_service: AlgoDisciplineReviewService = Depends(get_algo_discipline_review_service_dep),
-) -> AiSignalReviewResponse:
-    try:
-        return AiSignalReviewResponse(**(await algo_discipline_review_service.review_drishti_hit(hit_id)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -564,205 +390,6 @@ async def research_nifty_500_move_events_refresh(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/research/reversal-opportunities/nifty500", response_model=list[ReversalOpportunityItem])
-async def research_nifty_500_reversal_opportunities(
-    limit: int = Query(default=500, ge=1, le=500),
-    include_watch_only: bool = Query(default=True),
-    min_score: float = Query(default=0, ge=0, le=100),
-    min_entry_quality_score: float = Query(default=0, ge=0, le=100),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> list[ReversalOpportunityItem]:
-    return [
-        ReversalOpportunityItem.model_validate(item)
-        for item in reversal_opportunity_service.scan_nifty_500(
-            limit=limit,
-            include_watch_only=include_watch_only,
-            min_score=min_score,
-            min_entry_quality_score=min_entry_quality_score,
-        )
-    ]
-
-
-@app.post("/api/research/reversal-opportunities/nifty500/refresh", response_model=ReversalOpportunityRunResponse)
-async def research_nifty_500_reversal_opportunities_refresh(
-    limit: int = Query(default=500, ge=1, le=500),
-    include_watch_only: bool = Query(default=False),
-    min_score: float = Query(default=0, ge=0, le=100),
-    min_entry_quality_score: float = Query(default=55, ge=0, le=100),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityRunResponse:
-    try:
-        return ReversalOpportunityRunResponse(
-            **reversal_opportunity_service.refresh_nifty_500_snapshot(
-                limit=limit,
-                include_watch_only=include_watch_only,
-                min_score=min_score,
-                min_entry_quality_score=min_entry_quality_score,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/research/reversal-opportunities/nifty500/latest", response_model=ReversalOpportunityRunResponse | None)
-async def research_nifty_500_reversal_opportunities_latest(
-    limit: int = Query(default=100, ge=1, le=500),
-    min_entry_quality_score: float = Query(default=0, ge=0, le=100),
-    stage: str | None = Query(default=None, max_length=32),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityRunResponse | None:
-    snapshot = reversal_opportunity_service.latest_snapshot(
-        limit=limit,
-        min_entry_quality_score=min_entry_quality_score,
-        stage=stage,
-    )
-    return ReversalOpportunityRunResponse(**snapshot) if snapshot else None
-
-
-@app.get(
-    "/api/research/reversal-opportunities/symbol/{symbol}/history",
-    response_model=list[ReversalOpportunitySnapshotItem],
-)
-async def research_reversal_opportunity_symbol_history(
-    symbol: str,
-    limit: int = Query(default=20, ge=1, le=200),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> list[ReversalOpportunitySnapshotItem]:
-    return [
-        ReversalOpportunitySnapshotItem.model_validate(item)
-        for item in reversal_opportunity_service.history_for_symbol(symbol=symbol, limit=limit)
-    ]
-
-
-@app.post(
-    "/api/research/reversal-opportunities/outcomes/refresh",
-    response_model=ReversalOpportunityOutcomeRefreshResponse,
-)
-async def research_reversal_opportunity_outcomes_refresh(
-    limit: int = Query(default=1000, ge=1, le=5000),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityOutcomeRefreshResponse:
-    return ReversalOpportunityOutcomeRefreshResponse(**reversal_opportunity_service.update_outcomes(limit=limit))
-
-
-@app.post("/api/research/reversal-opportunities/backfill", response_model=ReversalOpportunityBackfillResponse)
-async def research_reversal_opportunity_backfill(
-    start_date: str | None = Query(default=None, max_length=10),
-    end_date: str | None = Query(default=None, max_length=10),
-    sample_every_n_sessions: int = Query(default=5, ge=1, le=60),
-    limit_per_date: int = Query(default=500, ge=1, le=500),
-    min_score: float = Query(default=0, ge=0, le=100),
-    min_entry_quality_score: float = Query(default=55, ge=0, le=100),
-    include_watch_only: bool = Query(default=False),
-    max_dates: int = Query(default=60, ge=1, le=500),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityBackfillResponse:
-    try:
-        return ReversalOpportunityBackfillResponse(
-            **reversal_opportunity_service.backfill_reversal_opportunities(
-                start_date=start_date,
-                end_date=end_date,
-                sample_every_n_sessions=sample_every_n_sessions,
-                limit_per_date=limit_per_date,
-                min_score=min_score,
-                min_entry_quality_score=min_entry_quality_score,
-                include_watch_only=include_watch_only,
-                max_dates=max_dates,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/research/reversal-opportunities/backfill/run", response_model=ReversalOpportunityBackfillResponse)
-async def research_reversal_opportunity_backfill_run(
-    sample_every_n_sessions: int = Query(default=5, ge=1, le=60),
-    max_dates: int = Query(default=20, ge=1, le=500),
-    limit_per_date: int = Query(default=50, ge=1, le=500),
-    min_entry_quality_score: float = Query(default=55, ge=0, le=100),
-    min_score: float = Query(default=0, ge=0, le=100),
-    include_watch_only: bool = Query(default=False),
-    start_date: str | None = Query(default=None, max_length=10),
-    end_date: str | None = Query(default=None, max_length=10),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityBackfillResponse:
-    """Browser/manual convenience trigger for development research backfills."""
-    try:
-        return ReversalOpportunityBackfillResponse(
-            **reversal_opportunity_service.backfill_reversal_opportunities(
-                start_date=start_date,
-                end_date=end_date,
-                sample_every_n_sessions=sample_every_n_sessions,
-                limit_per_date=limit_per_date,
-                min_score=min_score,
-                min_entry_quality_score=min_entry_quality_score,
-                include_watch_only=include_watch_only,
-                max_dates=max_dates,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/research/reversal-opportunities/backfill/summary", response_model=ReversalOpportunityBackfillResponse)
-async def research_reversal_opportunity_backfill_summary(
-    limit: int = Query(default=10000, ge=1, le=50000),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityBackfillResponse:
-    return ReversalOpportunityBackfillResponse(**reversal_opportunity_service.backfill_summary(limit=limit))
-
-
-@app.post(
-    "/api/research/reversal-opportunities/promote-to-watchlist",
-    response_model=ReversalOpportunityPromotionResponse,
-)
-async def research_reversal_opportunity_promote_to_watchlist(
-    run_id: int | None = Query(default=None, ge=1),
-    min_entry_quality_score: float = Query(default=65, ge=0, le=100),
-    limit: int = Query(default=50, ge=1, le=500),
-    dry_run: bool = Query(default=True),
-    reversal_opportunity_service: ReversalOpportunityService = Depends(get_reversal_opportunity_service_dep),
-) -> ReversalOpportunityPromotionResponse:
-    return ReversalOpportunityPromotionResponse(
-        **reversal_opportunity_service.promote_to_watchlist(
-            run_id=run_id,
-            min_entry_quality_score=min_entry_quality_score,
-            limit=limit,
-            dry_run=dry_run,
-        )
-    )
-
-
-@app.get("/api/drishti/nifty500/signals/local-low-reversal", response_model=DrishtiSignalReportResponse | None)
-async def drishti_nifty_500_local_low_reversal(
-    limit: int = Query(default=500, ge=1, le=1000),
-    drishti_signal_service: DrishtiSignalService = Depends(get_drishti_signal_service_dep),
-) -> DrishtiSignalReportResponse | None:
-    report = drishti_signal_service.latest_nifty_500_signal_01_report(limit=limit)
-    return DrishtiSignalReportResponse(**report) if report else None
-
-
-@app.post("/api/drishti/nifty500/signals/local-low-reversal/refresh", response_model=DrishtiSignalReportResponse)
-async def drishti_nifty_500_local_low_reversal_refresh(
-    lookback_sessions: int = Query(default=45, ge=20, le=90),
-    volume_sma_sessions: int = Query(default=20, ge=5, le=60),
-    min_volume_ratio_1d: float = Query(default=1.2, ge=1.0, le=10.0),
-    min_volume_vs_sma: float = Query(default=1.0, ge=0.1, le=10.0),
-    drishti_signal_service: DrishtiSignalService = Depends(get_drishti_signal_service_dep),
-) -> DrishtiSignalReportResponse:
-    try:
-        return DrishtiSignalReportResponse(
-            **drishti_signal_service.refresh_nifty_500_signal_01(
-                lookback_sessions=lookback_sessions,
-                volume_sma_sessions=volume_sma_sessions,
-                min_volume_ratio_1d=min_volume_ratio_1d,
-                min_volume_vs_sma=min_volume_vs_sma,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @app.get("/api/regimes/nifty500/latest", response_model=StockRegimeReportResponse | None)
 async def regimes_nifty_500_latest(
     regime: str | None = Query(default=None, max_length=32),
@@ -796,196 +423,3 @@ async def regimes_nifty_500_history(
     ]
 
 
-@app.get("/api/technical/support-resistance", response_model=SupportResistanceReportResponse)
-async def technical_support_resistance(
-    symbol: str = Query(min_length=1, max_length=32),
-    limit: int = Query(default=365, ge=20, le=365),
-    support_resistance_service: SupportResistanceService = Depends(get_support_resistance_service_dep),
-) -> SupportResistanceReportResponse:
-    return SupportResistanceReportResponse(
-        **support_resistance_service.report_for_symbol(symbol=symbol, limit=limit)
-    )
-
-
-@app.get("/api/technical/support-resistance/nifty500/near-support", response_model=list[Nifty500NearSupportItem])
-async def technical_support_resistance_nifty500_near_support(
-    limit: int = Query(default=500, ge=1, le=500),
-    max_distance_percent: float = Query(default=2.0, ge=0.0, le=20.0),
-    support_resistance_service: SupportResistanceService = Depends(get_support_resistance_service_dep),
-) -> list[Nifty500NearSupportItem]:
-    return [
-        Nifty500NearSupportItem.model_validate(item)
-        for item in support_resistance_service.nifty_500_near_support(
-            limit=limit,
-            max_distance_percent=max_distance_percent,
-        )
-    ]
-
-
-@app.get("/api/technical/candlesticks", response_model=CandlestickReportResponse)
-async def technical_candlesticks(
-    symbol: str = Query(min_length=1, max_length=32),
-    limit: int = Query(default=120, ge=5, le=365),
-    candlestick_service: CandlestickService = Depends(get_candlestick_service_dep),
-) -> CandlestickReportResponse:
-    return CandlestickReportResponse(**candlestick_service.report_for_symbol(symbol=symbol, limit=limit))
-
-
-@app.get("/api/demo/summary", response_model=DemoAccountSummary)
-async def demo_summary(
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> DemoAccountSummary:
-    return DemoAccountSummary(**demo_trading_service.summary())
-
-
-@app.get("/api/demo/orders", response_model=list[DemoOrderItem])
-async def demo_orders(
-    status: str | None = Query(default=None, max_length=32),
-    limit: int = Query(default=100, ge=1, le=500),
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> list[DemoOrderItem]:
-    return [DemoOrderItem.model_validate(item) for item in demo_trading_service.orders(status=status, limit=limit)]
-
-
-@app.get("/api/demo/positions", response_model=list[DemoPositionItem])
-async def demo_positions(
-    status: str | None = Query(default=None, max_length=32),
-    limit: int = Query(default=100, ge=1, le=500),
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> list[DemoPositionItem]:
-    return [DemoPositionItem.model_validate(item) for item in demo_trading_service.positions(status=status, limit=limit)]
-
-
-@app.post("/api/demo/refresh", response_model=DemoRefreshResponse)
-async def demo_refresh(
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> DemoRefreshResponse:
-    return DemoRefreshResponse(**demo_trading_service.refresh())
-
-
-@app.post("/api/demo/reset", response_model=DemoLedgerResetResponse)
-async def demo_reset(
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> DemoLedgerResetResponse:
-    return DemoLedgerResetResponse(**demo_trading_service.reset_ledger())
-
-
-@app.get("/api/demo/automation/status", response_model=DemoAutomationRunResponse | None)
-async def demo_automation_status(
-    demo_automation_service: DemoAutomationService = Depends(get_demo_automation_service_dep),
-) -> DemoAutomationRunResponse | None:
-    status = demo_automation_service.latest_status()
-    return DemoAutomationRunResponse(**status) if status else None
-
-
-@app.post("/api/demo/automation/run", response_model=DemoAutomationRunResponse)
-async def demo_automation_run(
-    historical_service: HistoricalDataService = Depends(get_historical_service_dep),
-    demo_automation_service: DemoAutomationService = Depends(get_demo_automation_service_dep),
-) -> DemoAutomationRunResponse:
-    status = historical_service.latest_status("NIFTY_500")
-    return DemoAutomationRunResponse(**(await demo_automation_service.run_once(status)))
-
-
-@app.post("/api/demo/orders/from-drishti-hit/{hit_id}", response_model=DemoOrderCreateResponse)
-async def demo_order_from_drishti_hit(
-    hit_id: int,
-    request: DemoOrderFromSignalRequest | None = None,
-    demo_trading_service: DemoTradingService = Depends(get_demo_trading_service_dep),
-) -> DemoOrderCreateResponse:
-    try:
-        return DemoOrderCreateResponse(
-            **demo_trading_service.place_order_from_drishti_hit(
-                hit_id=hit_id,
-                quantity=request.quantity if request else None,
-                risk_reward=request.risk_reward if request else None,
-                stop_loss=request.stop_loss if request else None,
-                target_price=request.target_price if request else None,
-                entry_low=request.entry_low if request else None,
-                entry_high=request.entry_high if request else None,
-                trailing_stop_loss=request.trailing_stop_loss if request else None,
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/watchlist/active", response_model=list[WatchlistActiveItem])
-async def watchlist_active(
-    source: str | None = Query(default=None, max_length=64),
-    limit: int = Query(default=100, ge=1, le=500),
-    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
-) -> list[WatchlistActiveItem]:
-    return [
-        WatchlistActiveItem.model_validate(item)
-        for item in watchlist_service.active_report(source=source, limit=limit)
-    ]
-
-
-@app.get("/api/watchlist/candidates", response_model=list[WatchlistCandidateItem])
-async def watchlist_candidates(
-    status: str | None = Query(default=None, max_length=32),
-    limit: int = Query(default=100, ge=1, le=500),
-    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
-) -> list[WatchlistCandidateItem]:
-    return [WatchlistCandidateItem.model_validate(item) for item in watchlist_service.latest(status=status, limit=limit)]
-
-
-@app.post("/api/watchlist/monitor", response_model=WatchlistMonitorResponse)
-async def watchlist_monitor(
-    watchlist_service: WatchlistService = Depends(get_watchlist_service_dep),
-) -> WatchlistMonitorResponse:
-    return WatchlistMonitorResponse(**watchlist_service.monitor_entries())
-
-
-@app.get("/api/demo/journal", response_model=DemoJournalResponse)
-async def demo_journal(
-    status: str = Query(default="", max_length=32),
-    symbol: str = Query(default="", max_length=64),
-    limit: int = Query(default=200, ge=1, le=500),
-    trading_journal_store: TradingJournalStore = Depends(get_trading_journal_store_dep),
-) -> DemoJournalResponse:
-    return DemoJournalResponse(**trading_journal_store.journal(status=status, symbol=symbol, limit=limit))
-
-
-@app.post("/api/demo/journal/{order_id}/notes", response_model=DemoJournalItem)
-async def demo_journal_notes_update(
-    order_id: int,
-    request: DemoJournalNotesUpdateRequest,
-    trading_journal_store: TradingJournalStore = Depends(get_trading_journal_store_dep),
-) -> DemoJournalItem:
-    try:
-        return DemoJournalItem.model_validate(
-            trading_journal_store.upsert_notes(
-                order_id=order_id,
-                setup_notes=request.setup_notes,
-                management_notes=request.management_notes,
-                mistake_notes=request.mistake_notes,
-                tags=request.tags,
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/learning/status", response_model=LearningStatusResponse)
-async def learning_status(
-    learning_store: LearningStore = Depends(get_learning_store_dep),
-) -> LearningStatusResponse:
-    return LearningStatusResponse(**learning_store.status())
-
-
-@app.get("/api/learning/snapshots", response_model=list[LearningDecisionSnapshotItem])
-async def learning_snapshots(
-    limit: int = Query(default=100, ge=1, le=500),
-    learning_store: LearningStore = Depends(get_learning_store_dep),
-) -> list[LearningDecisionSnapshotItem]:
-    return [LearningDecisionSnapshotItem.model_validate(item) for item in learning_store.latest_snapshots(limit=limit)]
-
-
-@app.get("/api/learning/trade-outcomes", response_model=list[LearningTradeOutcomeItem])
-async def learning_trade_outcomes(
-    limit: int = Query(default=100, ge=1, le=500),
-    learning_store: LearningStore = Depends(get_learning_store_dep),
-) -> list[LearningTradeOutcomeItem]:
-    return [LearningTradeOutcomeItem.model_validate(item) for item in learning_store.latest_trade_outcomes(limit=limit)]

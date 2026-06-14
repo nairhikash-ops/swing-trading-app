@@ -1,15 +1,12 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
-  BookOpen,
-  Bot,
   CheckCircle2,
   Clock,
   Database,
   ExternalLink,
-  Radar,
   RefreshCcw,
   Save,
   Search,
@@ -28,7 +25,7 @@ type TokenState =
   | "config_error"
   | "unknown";
 
-type AppPage = "dashboard" | "drishti" | "demo" | "journal" | "data" | "settings";
+type AppPage = "dashboard" | "data" | "review" | "settings";
 
 type TokenStatus = {
   state: TokenState;
@@ -61,15 +58,7 @@ type InstrumentStatus = {
   nse_count: number;
   active_nse_count: number;
   last_import?: {
-    id: number;
-    source_url: string;
-    source_columns_json: string;
-    total_rows_seen: number;
     imported_rows: number;
-    inserted_rows: number;
-    updated_rows: number;
-    unchanged_rows: number;
-    deactivated_rows: number;
     completed_at?: string | null;
     error: string;
   } | null;
@@ -87,13 +76,6 @@ type InstrumentItem = {
   instrument_type: string;
   series: string;
   lot_size?: number | null;
-  expiry_date: string;
-  strike_price?: number | null;
-  option_type: string;
-  tick_size?: number | null;
-  buy_sell_indicator: string;
-  asm_gsm_flag: string;
-  mtf_leverage: string;
 };
 
 type UniverseStatus = {
@@ -102,15 +84,7 @@ type UniverseStatus = {
   active_count: number;
   industry_count: number;
   last_import?: {
-    id: number;
-    source_url: string;
-    source_columns_json: string;
-    total_rows_seen: number;
     imported_rows: number;
-    inserted_rows: number;
-    updated_rows: number;
-    unchanged_rows: number;
-    deactivated_rows: number;
     completed_at?: string | null;
     error: string;
   } | null;
@@ -210,8 +184,6 @@ type QualityReport = {
 };
 
 type RangeMoverItem = {
-  index_constituent_id?: number | null;
-  instrument_id?: number | null;
   symbol: string;
   company_name: string;
   industry: string;
@@ -222,16 +194,13 @@ type RangeMoverItem = {
   highest_high: number;
   highest_high_date: string;
   move_percent: number;
-  range_amount: number;
-  candle_count: number;
 };
 
 type RangeMoverReport = {
   generated_at: string;
-  historical_run_id?: number | null;
+  threshold_percent: number;
   from_date: string;
   to_date_exclusive: string;
-  threshold_percent: number;
   total_scanned: number;
   match_count: number;
   items: RangeMoverItem[];
@@ -239,323 +208,59 @@ type RangeMoverReport = {
 
 type MoveEventItem = {
   id: number;
-  run_id: number;
   symbol: string;
   company_name: string;
   industry: string;
-  event_number: number;
   bucket: string;
-  low_date: string;
+  event_number: number;
   low_price: number;
-  high_date: string;
+  low_date: string;
   high_price: number;
+  high_date: string;
   move_percent: number;
-  duration_calendar_days: number;
   duration_trading_sessions: number;
-  split_pullback_date?: string | null;
-  split_pullback_close?: number | null;
+  duration_calendar_days: number;
 };
 
 type MoveEventReport = {
-  run_id?: number | null;
-  universe_name: string;
+  generated_at: string;
   threshold_percent: number;
   pullback_percent: number;
   from_date: string;
   to_date_exclusive: string;
-  status: string;
-  total_symbols: number;
   scanned_symbols: number;
   candidate_symbols: number;
   event_count: number;
   error: string;
-  generated_at: string;
   items: MoveEventItem[];
 };
 
-type DrishtiSignalHitItem = {
-  id: number;
-  run_id: number;
-  signal_id: string;
+type RegimeItem = {
   symbol: string;
   company_name: string;
   industry: string;
   isin: string;
   security_id: string;
-  anchor_date: string;
-  trigger_date: string;
-  anchor_low: number;
-  anchor_high: number;
-  anchor_close: number;
-  anchor_volume: number;
-  trigger_close: number;
-  trigger_volume: number;
-  volume_ratio_1d: number;
-  volume_vs_sma: number;
-  close_to_anchor_high_ratio: number;
-  future_high: number;
-  future_high_date: string;
-  outcome_from_trigger_percent: number;
-  outcome_from_anchor_percent: number;
+  trading_date: string;
+  close: number;
+  regime: string;
+  confidence: number;
 };
 
-type DrishtiSignalReport = {
-  run_id?: number | null;
-  signal_id: string;
-  signal_name: string;
-  description: string;
-  universe_name: string;
-  lookback_sessions: number;
-  volume_sma_sessions: number;
-  min_volume_ratio_1d: number;
-  min_volume_vs_sma: number;
-  from_date: string;
-  to_date_exclusive: string;
+type RegimeReport = {
+  generated_at?: string | null;
   status: string;
   total_symbols: number;
   scanned_symbols: number;
-  hit_count: number;
-  outcome_ge_10_count: number;
-  outcome_ge_20_count: number;
+  classified_count: number;
+  uptrend_count: number;
+  downtrend_count: number;
+  sideways_count: number;
   error: string;
-  generated_at: string;
-  items: DrishtiSignalHitItem[];
+  items: RegimeItem[];
 };
 
-type AlgoSignalReview = {
-  id: number;
-  source_signal_hit_id: number;
-  provider: string;
-  model: string;
-  grounding_enabled: boolean;
-  status: "completed" | "quota_limited" | "failed";
-  decision: "ENTER" | "WAIT" | "IGNORE";
-  confidence: number;
-  summary: string;
-  support_price?: number | null;
-  resistance_price?: number | null;
-  entry_low?: number | null;
-  entry_high?: number | null;
-  stop_loss?: number | null;
-  target_1?: number | null;
-  target_2?: number | null;
-  trailing_stop_loss?: number | null;
-  risk_reward?: number | null;
-  wait_until: string;
-  invalidation: string;
-  sources: { title?: string; uri?: string }[];
-  error: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type DemoSummary = {
-  currency: string;
-  cash_balance: number;
-  realized_pnl: number;
-  unrealized_pnl: number;
-  open_market_value: number;
-  equity_value: number;
-  pending_orders: number;
-  filled_orders: number;
-  rejected_orders: number;
-  open_positions: number;
-  closed_positions: number;
-  updated_at: string;
-};
-
-type DemoOrder = {
-  id: number;
-  source_signal_hit_id?: number | null;
-  source_signal_id: string;
-  source_run_id?: number | null;
-  symbol: string;
-  company_name: string;
-  industry: string;
-  security_id: string;
-  side: string;
-  quantity: number;
-  order_type: string;
-  status: string;
-  trigger_date: string;
-  requested_price: number;
-  fill_after_date: string;
-  filled_date?: string | null;
-  filled_price?: number | null;
-  stop_loss: number;
-  target_price?: number | null;
-  risk_reward: number;
-  rejection_reason: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type DemoPosition = {
-  id: number;
-  order_id: number;
-  source_signal_hit_id?: number | null;
-  symbol: string;
-  company_name: string;
-  industry: string;
-  security_id: string;
-  side: string;
-  quantity: number;
-  entry_date: string;
-  entry_price: number;
-  stop_loss: number;
-  target_price: number;
-  risk_amount: number;
-  risk_reward: number;
-  status: string;
-  latest_candle_date?: string | null;
-  latest_close?: number | null;
-  holding_sessions: number;
-  unrealized_pnl: number;
-  unrealized_pnl_percent: number;
-  exit_date?: string | null;
-  exit_price?: number | null;
-  exit_reason: string;
-  realized_pnl: number;
-  realized_pnl_percent: number;
-  updated_at: string;
-};
-
-type DemoOrderCreateResponse = {
-  order: DemoOrder;
-  position?: DemoPosition | null;
-  summary: DemoSummary;
-};
-
-type DemoRefreshResponse = {
-  filled_orders: DemoOrder[];
-  rejected_orders: DemoOrder[];
-  updated_positions: DemoPosition[];
-  closed_positions: DemoPosition[];
-  summary: DemoSummary;
-};
-
-type DemoAutomationRun = {
-  id: number;
-  status: string;
-  reason: string;
-  historical_status: string;
-  historical_run_id?: number | null;
-  drishti_run_id?: number | null;
-  latest_trading_date?: string | null;
-  fresh_hit_count: number;
-  algo_analyzed_count: number;
-  ai_reviewed_count: number;
-  enter_count: number;
-  orders_created_count: number;
-  skipped_count: number;
-  error: string;
-  started_at: string;
-  completed_at?: string | null;
-};
-
-type DemoJournalSummary = {
-  total_trades: number;
-  pending_orders: number;
-  rejected_orders: number;
-  open_positions: number;
-  closed_positions: number;
-  winners: number;
-  failures: number;
-  neutral: number;
-  realized_pnl: number;
-  unrealized_pnl: number;
-  average_r: number;
-  win_rate_percent: number;
-};
-
-type DemoJournalItem = {
-  order_id: number;
-  position_id?: number | null;
-  source_signal_hit_id?: number | null;
-  decision_snapshot_id?: number | null;
-  ai_review_id?: number | null;
-  source_signal_id: string;
-  source_run_id?: number | null;
-  instrument_id: number;
-  symbol: string;
-  company_name: string;
-  industry: string;
-  isin: string;
-  security_id: string;
-  side: string;
-  quantity: number;
-  status: string;
-  order_status: string;
-  position_status?: string | null;
-  trigger_date: string;
-  requested_price: number;
-  fill_after_date: string;
-  filled_date?: string | null;
-  filled_price?: number | null;
-  entry_date?: string | null;
-  entry_price?: number | null;
-  entry_low?: number | null;
-  entry_high?: number | null;
-  stop_loss: number;
-  target_price?: number | null;
-  trailing_stop_loss?: number | null;
-  risk_amount?: number | null;
-  risk_reward: number;
-  latest_candle_date?: string | null;
-  latest_close?: number | null;
-  holding_sessions: number;
-  exit_date?: string | null;
-  exit_price?: number | null;
-  exit_reason: string;
-  rejection_reason: string;
-  realized_pnl: number;
-  realized_pnl_percent: number;
-  unrealized_pnl: number;
-  unrealized_pnl_percent: number;
-  pnl: number;
-  pnl_percent: number;
-  r_multiple?: number | null;
-  outcome_label: string;
-  max_favorable_price?: number | null;
-  max_favorable_percent?: number | null;
-  max_adverse_price?: number | null;
-  max_adverse_percent?: number | null;
-  target_hit: boolean;
-  stop_hit: boolean;
-  time_exit: boolean;
-  review_provider?: string | null;
-  review_model?: string | null;
-  review_decision?: string | null;
-  review_confidence?: number | null;
-  review_summary: string;
-  review_wait_until: string;
-  review_invalidation: string;
-  watchlist_status?: string | null;
-  watchlist_decision?: string | null;
-  watchlist_entry_rule?: string | null;
-  watchlist_summary: string;
-  setup_notes: string;
-  management_notes: string;
-  mistake_notes: string;
-  tags: string[];
-  notes_updated_at?: string | null;
-  order_created_at: string;
-  order_updated_at: string;
-};
-
-type DemoJournalResponse = {
-  summary: DemoJournalSummary;
-  items: DemoJournalItem[];
-};
-
-type DemoJournalNotesDraft = {
-  setup_notes: string;
-  management_notes: string;
-  mistake_notes: string;
-  tags_text: string;
-};
-
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
     ? configuredApiBaseUrl
@@ -589,20 +294,7 @@ function App() {
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
-  const [drishtiReport, setDrishtiReport] = useState<DrishtiSignalReport | null>(null);
-  const [algoReviewsByHit, setAlgoReviewsByHit] = useState<Record<number, AlgoSignalReview>>({});
-  const [drishtiBusy, setDrishtiBusy] = useState(false);
-  const [reviewingHitId, setReviewingHitId] = useState<number | null>(null);
-  const [demoSummary, setDemoSummary] = useState<DemoSummary | null>(null);
-  const [demoOrders, setDemoOrders] = useState<DemoOrder[]>([]);
-  const [demoOpenPositions, setDemoOpenPositions] = useState<DemoPosition[]>([]);
-  const [demoClosedPositions, setDemoClosedPositions] = useState<DemoPosition[]>([]);
-  const [demoAutomationStatus, setDemoAutomationStatus] = useState<DemoAutomationRun | null>(null);
-  const [demoJournal, setDemoJournal] = useState<DemoJournalResponse | null>(null);
-  const [journalStatus, setJournalStatus] = useState("");
-  const [journalSymbol, setJournalSymbol] = useState("");
-  const [journalDrafts, setJournalDrafts] = useState<Record<number, DemoJournalNotesDraft>>({});
-  const [savingJournalOrderId, setSavingJournalOrderId] = useState<number | null>(null);
+  const [regimeReport, setRegimeReport] = useState<RegimeReport | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
@@ -650,9 +342,7 @@ function App() {
       const data = await response.json();
       setMessage(`Imported ${formatNumber(data.imported_rows)} NSE instruments from Dhan.`);
       await loadInstrumentStatus();
-      if (instrumentQuery.trim()) {
-        await searchInstruments(instrumentQuery);
-      }
+      if (instrumentQuery.trim()) await searchInstruments(instrumentQuery);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to refresh instrument master.");
     } finally {
@@ -723,9 +413,7 @@ function App() {
       if (!response.ok) throw new Error(await readError(response));
       const data = (await response.json()) as HistoricalStatus | null;
       setHistoricalStatus(data);
-      if (data?.id && data.failed_count > 0) {
-        await loadHistoricalItems(data.id, "failed");
-      }
+      if (data?.id && data.failed_count > 0) await loadHistoricalItems(data.id, "failed");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load historical fetch status.");
     }
@@ -811,224 +499,6 @@ function App() {
     }
   }
 
-  async function loadDrishtiSignal01(showBusy = false) {
-    if (showBusy) {
-      setDrishtiBusy(true);
-      setMessage("");
-    }
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal?limit=500`);
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DrishtiSignalReport | null;
-      setDrishtiReport(data);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load Drishti signal.");
-    } finally {
-      if (showBusy) setDrishtiBusy(false);
-    }
-  }
-
-  async function analyzeDrishtiHitWithAlgo(hit: DrishtiSignalHitItem) {
-    setReviewingHitId(hit.id);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/algo/reviews/drishti-hit/${hit.id}`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const review = (await response.json()) as AlgoSignalReview;
-      setAlgoReviewsByHit((current) => ({ ...current, [hit.id]: review }));
-      setMessage(
-        review.status !== "completed"
-          ? `Algo analysis for ${hit.symbol} failed: ${review.error || "unknown error"}.`
-          : `Algo analysis for ${hit.symbol}: ${review.decision}.`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to analyze Drishti hit with the algo engine.");
-    } finally {
-      setReviewingHitId(null);
-    }
-  }
-
-  async function refreshDrishtiSignal01() {
-    setDrishtiBusy(true);
-    setMessage("");
-    try {
-      const params = new URLSearchParams({
-        lookback_sessions: "45",
-        volume_sma_sessions: "20",
-        min_volume_ratio_1d: "1.2",
-        min_volume_vs_sma: "1.0",
-      });
-      const response = await fetch(`${apiBaseUrl}/api/drishti/nifty500/signals/local-low-reversal/refresh?${params}`, {
-        method: "POST",
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DrishtiSignalReport;
-      setDrishtiReport(data);
-      setMessage(`Drishti Signal 01 found ${formatNumber(data.hit_count)} historical hit(s).`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh Drishti signal.");
-    } finally {
-      setDrishtiBusy(false);
-    }
-  }
-
-  function buildJournalParams(statusFilter = journalStatus, symbolFilter = journalSymbol) {
-    const params = new URLSearchParams({ limit: "200" });
-    if (statusFilter) params.set("status", statusFilter);
-    if (symbolFilter.trim()) params.set("symbol", symbolFilter.trim());
-    return params;
-  }
-
-  async function loadDemoJournal(statusFilter = journalStatus, symbolFilter = journalSymbol) {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/demo/journal?${buildJournalParams(statusFilter, symbolFilter)}`);
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DemoJournalResponse;
-      setDemoJournal(data);
-      setJournalDrafts(buildJournalDrafts(data.items));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load trading journal.");
-    }
-  }
-
-  async function loadDemoTrading() {
-    try {
-      const [
-        summaryResponse,
-        ordersResponse,
-        openPositionsResponse,
-        closedPositionsResponse,
-        automationResponse,
-        journalResponse,
-      ] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/demo/summary`),
-        fetch(`${apiBaseUrl}/api/demo/orders?limit=50`),
-        fetch(`${apiBaseUrl}/api/demo/positions?status=open&limit=50`),
-        fetch(`${apiBaseUrl}/api/demo/positions?status=closed&limit=50`),
-        fetch(`${apiBaseUrl}/api/demo/automation/status`),
-        fetch(`${apiBaseUrl}/api/demo/journal?${buildJournalParams()}`),
-      ]);
-      if (!summaryResponse.ok) throw new Error(await readError(summaryResponse));
-      if (!ordersResponse.ok) throw new Error(await readError(ordersResponse));
-      if (!openPositionsResponse.ok) throw new Error(await readError(openPositionsResponse));
-      if (!closedPositionsResponse.ok) throw new Error(await readError(closedPositionsResponse));
-      if (!automationResponse.ok) throw new Error(await readError(automationResponse));
-      if (!journalResponse.ok) throw new Error(await readError(journalResponse));
-      const journalData = (await journalResponse.json()) as DemoJournalResponse;
-      setDemoSummary(await summaryResponse.json());
-      setDemoOrders(await ordersResponse.json());
-      setDemoOpenPositions(await openPositionsResponse.json());
-      setDemoClosedPositions(await closedPositionsResponse.json());
-      setDemoAutomationStatus(await automationResponse.json());
-      setDemoJournal(journalData);
-      setJournalDrafts(buildJournalDrafts(journalData.items));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load demo trading ledger.");
-    }
-  }
-
-  function updateJournalDraft(orderId: number, patch: Partial<DemoJournalNotesDraft>) {
-    setJournalDrafts((current) => {
-      const previous = current[orderId] ?? emptyJournalDraft();
-      return {
-        ...current,
-        [orderId]: {
-          ...previous,
-          ...patch,
-        },
-      };
-    });
-  }
-
-  async function saveJournalNotes(item: DemoJournalItem) {
-    const draft = journalDrafts[item.order_id] ?? journalDraftFromItem(item);
-    setSavingJournalOrderId(item.order_id);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/demo/journal/${item.order_id}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setup_notes: draft.setup_notes,
-          management_notes: draft.management_notes,
-          mistake_notes: draft.mistake_notes,
-          tags: draft.tags_text
-            .split(",")
-            .map((tag) => tag.trim())
-            .filter(Boolean),
-        }),
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const updated = (await response.json()) as DemoJournalItem;
-      setDemoJournal((current) =>
-        current
-          ? { ...current, items: current.items.map((entry) => (entry.order_id === updated.order_id ? updated : entry)) }
-          : current,
-      );
-      setJournalDrafts((current) => ({ ...current, [updated.order_id]: journalDraftFromItem(updated) }));
-      setMessage(`Journal notes saved for ${updated.symbol}.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save journal notes.");
-    } finally {
-      setSavingJournalOrderId(null);
-    }
-  }
-
-  async function runDemoAutomation() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/demo/automation/run`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DemoAutomationRun;
-      setDemoAutomationStatus(data);
-      setMessage(
-        `Automation ${formatStatus(data.status)}: ${formatNumber(data.fresh_hit_count)} fresh hit(s), ${formatNumber(data.orders_created_count)} order(s).`,
-      );
-      await loadDemoTrading();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to run demo automation.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createDemoOrderFromHit(hit: DrishtiSignalHitItem) {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/demo/orders/from-drishti-hit/${hit.id}`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DemoOrderCreateResponse;
-      setDemoSummary(data.summary);
-      setMessage(`Demo order ${data.order.id} for ${data.order.symbol} is ${formatStatus(data.order.status)}.`);
-      await loadDemoTrading();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create demo order.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function refreshDemoTrading() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/demo/refresh`, { method: "POST" });
-      if (!response.ok) throw new Error(await readError(response));
-      const data = (await response.json()) as DemoRefreshResponse;
-      setDemoSummary(data.summary);
-      setMessage(
-        `Demo refreshed: ${formatNumber(data.filled_orders.length)} filled, ${formatNumber(data.closed_positions.length)} closed, ${formatNumber(data.rejected_orders.length)} rejected.`,
-      );
-      await loadDemoTrading();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh demo trades.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function refreshMoveEvents() {
     setBusy(true);
     setMessage("");
@@ -1050,10 +520,36 @@ function App() {
     }
   }
 
+  async function loadRegimes() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/regimes/nifty500/latest?limit=500`);
+      if (!response.ok) throw new Error(await readError(response));
+      setRegimeReport(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load regime diagnostics.");
+    }
+  }
+
+  async function refreshRegimes() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/regimes/nifty500/refresh`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = (await response.json()) as RegimeReport;
+      setRegimeReport(data);
+      setMessage(`Regime review classified ${formatNumber(data.classified_count)} stock(s).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh regime diagnostics.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function changeRangeMoverThreshold(value: string) {
     const nextThreshold = Number(value);
     setRangeMoverThreshold(nextThreshold);
-    loadRangeMovers(nextThreshold);
+    void loadRangeMovers(nextThreshold);
   }
 
   async function renewToken() {
@@ -1099,23 +595,22 @@ function App() {
   }
 
   useEffect(() => {
-    loadStatus();
-    loadInstrumentStatus();
-    loadUniverseStatus();
-    loadUniverse();
-    loadHistoricalStatus();
-    loadQualityReport();
-    loadRangeMovers();
-    loadMoveEvents();
-    loadDrishtiSignal01();
-    loadDemoTrading();
-    const timer = window.setInterval(() => loadStatus(), 60_000);
+    void loadStatus();
+    void loadInstrumentStatus();
+    void loadUniverseStatus();
+    void loadUniverse();
+    void loadHistoricalStatus();
+    void loadQualityReport();
+    void loadRangeMovers();
+    void loadMoveEvents();
+    void loadRegimes();
+    const timer = window.setInterval(() => void loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
     if (!historicalStatus || !["queued", "running"].includes(historicalStatus.status)) return;
-    const timer = window.setInterval(() => loadHistoricalStatus(), 3_000);
+    const timer = window.setInterval(() => void loadHistoricalStatus(), 3_000);
     return () => window.clearInterval(timer);
   }, [historicalStatus?.id, historicalStatus?.status]);
 
@@ -1134,7 +629,6 @@ function App() {
   );
   const activeStatusMeta = activePage === "settings" ? getSettingsStateMeta(stateMeta) : systemStateMeta;
   const pageMeta = getPageMeta(activePage);
-  const latestDrishtiItems = drishtiReport?.items.slice(0, 8) ?? [];
   const actionCount =
     (status?.state && !["active", "expiring_soon"].includes(status.state) ? 1 : 0) +
     (historicalStatus?.failed_count ?? 0) +
@@ -1153,183 +647,48 @@ function App() {
             <span>{activeStatusMeta.label}</span>
           </div>
           <nav className="page-tabs" aria-label="Dashboard views">
-            <button
-              type="button"
-              className={`page-tab ${activePage === "dashboard" ? "active" : ""}`}
-              onClick={() => setActivePage("dashboard")}
-            >
-              Dashboard
-            </button>
-            <button
-              type="button"
-              className={`page-tab ${activePage === "drishti" ? "active" : ""}`}
-              onClick={() => setActivePage("drishti")}
-            >
-              Drishti
-            </button>
-            <button
-              type="button"
-              className={`page-tab ${activePage === "demo" ? "active" : ""}`}
-              onClick={() => setActivePage("demo")}
-            >
-              Demo Trading
-            </button>
-            <button
-              type="button"
-              className={`page-tab ${activePage === "journal" ? "active" : ""}`}
-              onClick={() => setActivePage("journal")}
-            >
-              Journal
-            </button>
-            <button
-              type="button"
-              className={`page-tab ${activePage === "data" ? "active" : ""}`}
-              onClick={() => setActivePage("data")}
-            >
-              Data Health
-            </button>
-            <button
-              type="button"
-              className={`page-tab ${activePage === "settings" ? "active" : ""}`}
-              onClick={() => setActivePage("settings")}
-            >
-              Settings
-            </button>
+            <TabButton label="Dashboard" page="dashboard" activePage={activePage} setActivePage={setActivePage} />
+            <TabButton label="Data Health" page="data" activePage={activePage} setActivePage={setActivePage} />
+            <TabButton label="Review Tools" page="review" activePage={activePage} setActivePage={setActivePage} />
+            <TabButton label="Settings" page="settings" activePage={activePage} setActivePage={setActivePage} />
           </nav>
         </div>
       </section>
 
-      {activePage === "settings" ? (
-        <>
-        <section className="grid instruments-panel">
-        <div className="panel status-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Connection</p>
-              <h2>Dhan API Status</h2>
-            </div>
-            <button className="icon-button" onClick={() => loadStatus(true)} disabled={busy} title="Refresh status">
-              <RefreshCcw size={18} />
-            </button>
-          </div>
-
-          <dl className="status-list">
-            <StatusRow label="Client ID" value={status?.dhan_client_id ?? "-"} />
-            <StatusRow label="Stored token" value={status?.masked_token ?? "-"} />
-            <StatusRow label="Token source" value={status?.token_source ?? "-"} />
-            <StatusRow label="Expiry" value={formatDate(status?.expiry_time)} />
-            <StatusRow label="Minutes left" value={formatNumber(status?.minutes_to_expiry)} />
-            <StatusRow label="Data plan" value={status?.data_plan ?? "-"} />
-            <StatusRow label="Active segment" value={status?.active_segment ?? "-"} />
-            <StatusRow label="Last renew" value={formatDate(status?.last_renew_success_at)} />
-          </dl>
-
-          {status?.last_error ? <p className="error-text">{status.last_error}</p> : null}
-
-          <div className="button-row">
-            <button onClick={renewToken} disabled={busy || !status?.has_token}>
-              <RefreshCcw size={17} />
-              Renew now
-            </button>
-            <button className="secondary" onClick={() => loadStatus(false)} disabled={busy}>
-              <Wifi size={17} />
-              Check local
-            </button>
-          </div>
-        </div>
-
-        <form className="panel" onSubmit={saveToken}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Fallback</p>
-              <h2>Manual Token Update</h2>
-            </div>
-            <Shield size={22} />
-          </div>
-
-          <label>
-            Dhan Client ID
-            <input
-              value={form.dhanClientId}
-              onChange={(event) => setForm({ ...form, dhanClientId: event.target.value })}
-              autoComplete="off"
-              required
-            />
-          </label>
-
-          <label>
-            Access Token
-            <textarea
-              value={form.accessToken}
-              onChange={(event) => setForm({ ...form, accessToken: event.target.value })}
-              autoComplete="off"
-              rows={5}
-              required
-            />
-          </label>
-
-          <label>
-            Expiry time
-            <input
-              type="datetime-local"
-              value={form.expiryTime}
-              onChange={(event) => setForm({ ...form, expiryTime: event.target.value })}
-            />
-          </label>
-
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={form.validateWithDhan}
-              onChange={(event) => setForm({ ...form, validateWithDhan: event.target.checked })}
-            />
-            Validate with Dhan profile before saving
-          </label>
-
-          <button type="submit" disabled={busy}>
-            <Save size={17} />
-            Save token
-          </button>
-        </form>
-      </section>
-        </>
-
-      ) : (
-        <>
       {activePage === "dashboard" ? (
         <>
           <section className="dashboard-grid">
             <article className="hero-panel">
               <div>
-                <p className="eyebrow">Today</p>
-                <h2>Command Center</h2>
+                <p className="eyebrow">Data Foundation</p>
+                <h2>Operations Dashboard</h2>
               </div>
               <dl className="hero-metrics">
-                <StatusRow label="Drishti alerts" value={formatNumber(drishtiReport?.hit_count)} />
-                <StatusRow label="Open demo positions" value={formatNumber(demoSummary?.open_positions)} />
-                <StatusRow label="Pending demo orders" value={formatNumber(demoSummary?.pending_orders)} />
+                <StatusRow label="Dhan" value={formatStatus(status?.state)} />
+                <StatusRow label="Nifty 500 active" value={formatNumber(universeStatus?.active_count)} />
+                <StatusRow label="Historical progress" value={`${historicalProgress}%`} />
                 <StatusRow label="Action items" value={formatNumber(actionCount)} />
               </dl>
               <div className="button-row">
-                <button onClick={() => setActivePage("drishti")}>
-                  <Radar size={17} />
-                  Review Drishti
+                <button onClick={() => setActivePage("data")}>
+                  <Database size={17} />
+                  Inspect data
                 </button>
-                <button className="secondary" onClick={refreshDemoTrading} disabled={busy}>
-                  <RefreshCcw size={17} />
-                  Refresh demo
+                <button className="secondary" onClick={() => setActivePage("review")}>
+                  <Search size={17} />
+                  Review tools
                 </button>
               </div>
             </article>
 
             <article className="dashboard-card">
               <div className="card-icon ok"><Wifi size={19} /></div>
-              <p className="eyebrow">Connections</p>
-              <h2>Dhan Data Feed</h2>
+              <p className="eyebrow">Connection</p>
+              <h2>Dhan Feed</h2>
               <dl className="mini-list">
-                <StatusRow label="Dhan" value={formatStatus(status?.state)} />
-                <StatusRow label="Algo engine" value="active" />
+                <StatusRow label="State" value={formatStatus(status?.state)} />
                 <StatusRow label="Token expiry" value={formatDate(status?.expiry_time)} />
+                <StatusRow label="Data plan" value={status?.data_plan ?? "-"} />
               </dl>
               <button className="secondary" onClick={() => setActivePage("settings")}>
                 Open settings
@@ -1338,1127 +697,864 @@ function App() {
 
             <article className="dashboard-card">
               <div className="card-icon warn"><Database size={19} /></div>
-              <p className="eyebrow">Data Layer</p>
-              <h2>Nifty 500 Feed</h2>
+              <p className="eyebrow">Storage</p>
+              <h2>Nifty 500 Candles</h2>
               <dl className="mini-list">
                 <StatusRow label="Historical" value={historicalStatus?.status ?? "-"} />
-                <StatusRow label="Progress" value={`${historicalProgress}%`} />
+                <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
                 <StatusRow label="Quality blocked" value={formatNumber(qualityReport?.blocked_count)} />
               </dl>
               <button className="secondary" onClick={() => setActivePage("data")}>
-                Inspect data
+                Data health
               </button>
             </article>
           </section>
 
-          <section className="panel instruments-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Latest Watchlist</p>
-                <h2>Recent Drishti Signal 01 Alerts</h2>
-              </div>
-              <Radar size={22} />
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Trigger</th>
-                    <th>Trigger close</th>
-                    <th>Volume</th>
-                    <th>Outcome</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {latestDrishtiItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={6}>No Drishti alerts loaded yet.</td>
-                    </tr>
-                  ) : (
-                    latestDrishtiItems.map((item) => (
-                      <tr key={`dashboard-${item.id}`}>
-                        <td>{item.symbol}</td>
-                        <td>{item.trigger_date}</td>
-                        <td>{formatPrice(item.trigger_close)}</td>
-                        <td>{formatMultiplier(item.volume_ratio_1d)}</td>
-                        <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
-                        <td>
-                          <button className="mini-action" onClick={() => createDemoOrderFromHit(item)} disabled={busy}>
-                            Paper
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+          <DataQualityPanel qualityReport={qualityReport} />
+        </>
+      ) : null}
+
+      {activePage === "settings" ? (
+        <SettingsPanel
+          status={status}
+          form={form}
+          busy={busy}
+          setForm={setForm}
+          saveToken={saveToken}
+          renewToken={renewToken}
+          loadStatus={loadStatus}
+        />
+      ) : null}
+
+      {activePage === "data" ? (
+        <>
+          <section className="grid instruments-panel">
+            <StatusPanel
+              title="Instrument Master"
+              eyebrow="Dhan"
+              icon={<Database size={22} />}
+              rows={[
+                ["Total", formatNumber(instrumentStatus?.total_count)],
+                ["Active", formatNumber(instrumentStatus?.active_count)],
+                ["Active NSE", formatNumber(instrumentStatus?.active_nse_count)],
+                ["Last import", formatDate(instrumentStatus?.last_import?.completed_at)],
+              ]}
+              actions={[
+                <button key="refresh" onClick={refreshInstruments} disabled={busy}>
+                  <RefreshCcw size={17} />
+                  Refresh instruments
+                </button>,
+              ]}
+            />
+
+            <StatusPanel
+              title="Nifty 500 Universe"
+              eyebrow="Universe"
+              icon={<TrendingUp size={22} />}
+              rows={[
+                ["Active", formatNumber(universeStatus?.active_count)],
+                ["Industries", formatNumber(universeStatus?.industry_count)],
+                ["Last import", formatDate(universeStatus?.last_import?.completed_at)],
+              ]}
+              actions={[
+                <button key="refresh" onClick={refreshUniverse} disabled={busy}>
+                  <RefreshCcw size={17} />
+                  Refresh universe
+                </button>,
+              ]}
+            />
           </section>
-        </>
-      ) : null}
 
-      {activePage === "drishti" ? (
-        <>
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Drishti Early Watch</p>
-            <h2>Signal 01: Local Low Reversal</h2>
-          </div>
-          <Radar size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Stored signal" value={drishtiReport?.signal_id ?? "DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL"} />
-          <StatusRow label="Hits" value={formatNumber(drishtiReport?.hit_count)} />
-          <StatusRow label="Scanned" value={formatNumber(drishtiReport?.scanned_symbols)} />
-          <StatusRow label="Lookback sessions" value={formatNumber(drishtiReport?.lookback_sessions)} />
-          <StatusRow label="Volume rule" value={`${formatMultiplier(drishtiReport?.min_volume_ratio_1d)} day / ${formatMultiplier(drishtiReport?.min_volume_vs_sma)} SMA`} />
-          <StatusRow label=">=10% outcome" value={formatNumber(drishtiReport?.outcome_ge_10_count)} />
-          <StatusRow label=">=20% outcome" value={formatNumber(drishtiReport?.outcome_ge_20_count)} />
-          <StatusRow label="Window from" value={drishtiReport?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={drishtiReport?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(drishtiReport?.generated_at)} />
-        </dl>
-
-        {drishtiReport?.error ? <p className="error-text">{drishtiReport.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshDrishtiSignal01} disabled={drishtiBusy}>
-            <RefreshCcw size={17} />
-            {drishtiBusy ? "Running..." : "Run Signal 01"}
-          </button>
-          <button className="secondary" onClick={() => loadDrishtiSignal01(true)} disabled={drishtiBusy}>
-            <Wifi size={17} />
-            Load saved run
-          </button>
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Chart</th>
-                <th>Demo</th>
-                <th>Algo</th>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Anchor</th>
-                <th>Trigger</th>
-                <th>Anchor low</th>
-                <th>Trigger close</th>
-                <th>Volume</th>
-                <th>Vol/SMA</th>
-                <th>Future high</th>
-                <th>Trigger outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!drishtiReport || drishtiReport.items.length === 0 ? (
-                <tr>
-                  <td colSpan={13}>No saved Drishti hits yet.</td>
-                </tr>
-              ) : (
-                drishtiReport.items.map((item) => {
-                  const review = algoReviewsByHit[item.id];
-                  return [
-                    <tr key={`${item.symbol}-${item.trigger_date}-${item.id}`}>
-                      <td>
-                        <a
-                          className="table-action"
-                          href={dhanTradingViewUrl(item)}
-                          target="_blank"
-                          rel="noreferrer"
-                          aria-label={`Open ${item.symbol} in Dhan TradingView`}
-                          title={`Open ${item.symbol} in Dhan TradingView`}
-                        >
-                          <ExternalLink size={16} />
-                        </a>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="mini-action"
-                          onClick={() => createDemoOrderFromHit(item)}
-                          disabled={busy}
-                          title={`Create demo order for ${item.symbol}`}
-                        >
-                          Paper
-                        </button>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="mini-action algo-action"
-                          onClick={() => analyzeDrishtiHitWithAlgo(item)}
-                          disabled={reviewingHitId === item.id}
-                          title={`Run algorithmic analysis for ${item.symbol}`}
-                        >
-                          {reviewingHitId === item.id
-                            ? "..."
-                            : review?.status === "quota_limited"
-                              ? "Quota"
-                            : review?.status === "failed"
-                              ? "Retry"
-                              : review
-                                ? review.decision
-                                : "Algo"}
-                        </button>
-                      </td>
-                      <td>{item.symbol}</td>
-                      <td>{item.company_name}</td>
-                      <td>{item.anchor_date}</td>
-                      <td>{item.trigger_date}</td>
-                      <td>{formatPrice(item.anchor_low)}</td>
-                      <td>{formatPrice(item.trigger_close)}</td>
-                      <td>{formatMultiplier(item.volume_ratio_1d)}</td>
-                      <td>{formatMultiplier(item.volume_vs_sma)}</td>
-                      <td>
-                        {formatPrice(item.future_high)} on {item.future_high_date}
-                      </td>
-                      <td>{formatPercent(item.outcome_from_trigger_percent)}</td>
-                    </tr>,
-                    review ? (
-                      <tr key={`review-${review.id}`} className="review-row">
-                        <td colSpan={13}>
-                          <div className="review-card">
-                            <div>
-                              <p
-                                className={`review-decision ${
-                                  review.status === "quota_limited"
-                                    ? "quota"
-                                    : review.status === "failed"
-                                      ? "failed"
-                                      : review.decision.toLowerCase()
-                                }`}
-                              >
-                                {review.status === "quota_limited"
-                                  ? "QUOTA LIMITED"
-                                  : review.status === "failed"
-                                    ? "FAILED"
-                                    : review.decision}
-                              </p>
-                              <p>{review.summary || "No summary returned."}</p>
-                              <p className="review-mode">
-                                {review.provider} / {review.model} / deterministic cached-data rules
-                              </p>
-                            </div>
-                            <dl className="review-grid">
-                              <StatusRow label="Confidence" value={`${formatNumber(review.confidence)}%`} />
-                              <StatusRow label="Error" value={review.error || "-"} />
-                              <StatusRow label="Entry" value={`${formatPrice(review.entry_low)} - ${formatPrice(review.entry_high)}`} />
-                              <StatusRow label="Stop" value={formatPrice(review.stop_loss)} />
-                              <StatusRow label="Trail stop" value={formatPrice(review.trailing_stop_loss)} />
-                              <StatusRow label="Target 1" value={formatPrice(review.target_1)} />
-                              <StatusRow label="Target 2" value={formatPrice(review.target_2)} />
-                              <StatusRow label="R:R" value={formatNumber(review.risk_reward)} />
-                              <StatusRow label="Wait until" value={review.wait_until || "-"} />
-                              <StatusRow label="Invalidation" value={review.invalidation || "-"} />
-                            </dl>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null,
-                  ];
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-        </>
-      ) : null}
-
-      {activePage === "demo" ? (
-        <>
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Demo Trading</p>
-            <h2>Paper Orders And Positions</h2>
-          </div>
-          <TrendingUp size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Cash" value={formatCurrency(demoSummary?.cash_balance)} />
-          <StatusRow label="Equity" value={formatCurrency(demoSummary?.equity_value)} />
-          <StatusRow label="Open value" value={formatCurrency(demoSummary?.open_market_value)} />
-          <StatusRow label="Realized P&L" value={formatCurrency(demoSummary?.realized_pnl)} />
-          <StatusRow label="Unrealized P&L" value={formatCurrency(demoSummary?.unrealized_pnl)} />
-          <StatusRow label="Pending orders" value={formatNumber(demoSummary?.pending_orders)} />
-          <StatusRow label="Open positions" value={formatNumber(demoSummary?.open_positions)} />
-          <StatusRow label="Closed positions" value={formatNumber(demoSummary?.closed_positions)} />
-          <StatusRow label="Rejected orders" value={formatNumber(demoSummary?.rejected_orders)} />
-          <StatusRow label="Updated" value={formatDate(demoSummary?.updated_at)} />
-          <StatusRow label="Automation" value={formatStatus(demoAutomationStatus?.status)} />
-          <StatusRow label="Latest trade date" value={demoAutomationStatus?.latest_trading_date ?? "-"} />
-          <StatusRow label="Fresh hits" value={formatNumber(demoAutomationStatus?.fresh_hit_count)} />
-          <StatusRow
-            label="Algo analyzed"
-            value={formatNumber(demoAutomationStatus?.algo_analyzed_count ?? demoAutomationStatus?.ai_reviewed_count)}
+          <HistoricalPanel
+            historicalStatus={historicalStatus}
+            historicalItems={historicalItems}
+            historicalProgress={historicalProgress}
+            busy={busy}
+            startHistoricalFetch={startHistoricalFetch}
+            loadHistoricalStatus={loadHistoricalStatus}
+            loadHistoricalItems={loadHistoricalItems}
           />
-          <StatusRow label="Auto orders" value={formatNumber(demoAutomationStatus?.orders_created_count)} />
+
+          <CandleLookup
+            candleSymbol={candleSymbol}
+            candles={candles}
+            setCandleSymbol={setCandleSymbol}
+            loadCandles={loadCandles}
+          />
+
+          <InstrumentAndUniverseSearch
+            instrumentQuery={instrumentQuery}
+            instrumentResults={instrumentResults}
+            searchInstruments={searchInstruments}
+            universeQuery={universeQuery}
+            universeResults={universeResults}
+            loadUniverse={loadUniverse}
+          />
+
+          <DataQualityPanel qualityReport={qualityReport} />
+        </>
+      ) : null}
+
+      {activePage === "review" ? (
+        <>
+          <RangeMoversPanel
+            report={rangeMoverReport}
+            threshold={rangeMoverThreshold}
+            busy={busy}
+            changeRangeMoverThreshold={changeRangeMoverThreshold}
+            loadRangeMovers={loadRangeMovers}
+          />
+          <MoveEventsPanel
+            report={moveEventReport}
+            busy={busy}
+            refreshMoveEvents={refreshMoveEvents}
+            loadMoveEvents={loadMoveEvents}
+          />
+          <RegimePanel report={regimeReport} busy={busy} refreshRegimes={refreshRegimes} loadRegimes={loadRegimes} />
+        </>
+      ) : null}
+
+      {message ? <p className="message">{message}</p> : null}
+    </main>
+  );
+}
+
+function TabButton({
+  label,
+  page,
+  activePage,
+  setActivePage,
+}: {
+  label: string;
+  page: AppPage;
+  activePage: AppPage;
+  setActivePage: (page: AppPage) => void;
+}) {
+  return (
+    <button type="button" className={`page-tab ${activePage === page ? "active" : ""}`} onClick={() => setActivePage(page)}>
+      {label}
+    </button>
+  );
+}
+
+function SettingsPanel({
+  status,
+  form,
+  busy,
+  setForm,
+  saveToken,
+  renewToken,
+  loadStatus,
+}: {
+  status: TokenStatus | null;
+  form: { dhanClientId: string; accessToken: string; expiryTime: string; validateWithDhan: boolean };
+  busy: boolean;
+  setForm: (form: { dhanClientId: string; accessToken: string; expiryTime: string; validateWithDhan: boolean }) => void;
+  saveToken: (event: FormEvent<HTMLFormElement>) => void;
+  renewToken: () => void;
+  loadStatus: (refresh?: boolean) => void;
+}) {
+  return (
+    <section className="grid instruments-panel">
+      <div className="panel status-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Connection</p>
+            <h2>Dhan API Status</h2>
+          </div>
+          <button className="icon-button" onClick={() => loadStatus(true)} disabled={busy} title="Refresh status">
+            <RefreshCcw size={18} />
+          </button>
+        </div>
+
+        <dl className="status-list">
+          <StatusRow label="Client ID" value={status?.dhan_client_id ?? "-"} />
+          <StatusRow label="Stored token" value={status?.masked_token ?? "-"} />
+          <StatusRow label="Token source" value={status?.token_source ?? "-"} />
+          <StatusRow label="Expiry" value={formatDate(status?.expiry_time)} />
+          <StatusRow label="Minutes left" value={formatNumber(status?.minutes_to_expiry)} />
+          <StatusRow label="Data plan" value={status?.data_plan ?? "-"} />
+          <StatusRow label="Active segment" value={status?.active_segment ?? "-"} />
+          <StatusRow label="Last renew" value={formatDate(status?.last_renew_success_at)} />
         </dl>
-        {demoAutomationStatus?.reason || demoAutomationStatus?.error ? (
-          <p className={demoAutomationStatus.error ? "error-text" : "muted"}>
-            {demoAutomationStatus.error || demoAutomationStatus.reason}
-          </p>
-        ) : null}
+
+        {status?.last_error ? <p className="error-text">{status.last_error}</p> : null}
 
         <div className="button-row">
-          <button onClick={runDemoAutomation} disabled={busy}>
-            <Bot size={17} />
-            Run automation now
-          </button>
-          <button onClick={refreshDemoTrading} disabled={busy}>
+          <button onClick={renewToken} disabled={busy || !status?.has_token}>
             <RefreshCcw size={17} />
-            Refresh demo lifecycle
+            Renew now
           </button>
-          <button className="secondary" onClick={loadDemoTrading} disabled={busy}>
+          <button className="secondary" onClick={() => loadStatus(false)} disabled={busy}>
             <Wifi size={17} />
-            Reload ledger
+            Check local
           </button>
         </div>
+      </div>
 
-        <h3 className="table-heading">Open positions</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Entry</th>
-                <th>Entry date</th>
-                <th>Stop</th>
-                <th>Target</th>
-                <th>Latest</th>
-                <th>Sessions</th>
-                <th>Unrealized</th>
-              </tr>
-            </thead>
-            <tbody>
-              {demoOpenPositions.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No open demo positions.</td>
-                </tr>
-              ) : (
-                demoOpenPositions.map((position) => (
-                  <tr key={position.id}>
-                    <td>{position.symbol}</td>
-                    <td>{formatPrice(position.entry_price)}</td>
-                    <td>{position.entry_date}</td>
-                    <td>{formatPrice(position.stop_loss)}</td>
-                    <td>{formatPrice(position.target_price)}</td>
-                    <td>
-                      {formatPrice(position.latest_close)} on {position.latest_candle_date ?? "-"}
-                    </td>
-                    <td>{formatNumber(position.holding_sessions)}</td>
-                    <td>
-                      {formatCurrency(position.unrealized_pnl)} ({formatPercent(position.unrealized_pnl_percent)})
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <h3 className="table-heading">Recent orders</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Symbol</th>
-                <th>Trigger</th>
-                <th>Requested</th>
-                <th>Filled</th>
-                <th>Stop</th>
-                <th>Target</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {demoOrders.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No demo orders yet. Use Paper from a Drishti row.</td>
-                </tr>
-              ) : (
-                demoOrders.map((order) => (
-                  <tr key={order.id}>
-                    <td>{formatStatus(order.status)}</td>
-                    <td>{order.symbol}</td>
-                    <td>{order.trigger_date}</td>
-                    <td>{formatPrice(order.requested_price)}</td>
-                    <td>
-                      {formatPrice(order.filled_price)} {order.filled_date ? `on ${order.filled_date}` : ""}
-                    </td>
-                    <td>{formatPrice(order.stop_loss)}</td>
-                    <td>{formatPrice(order.target_price)}</td>
-                    <td>{order.rejection_reason || "-"}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <h3 className="table-heading">Closed positions</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>Reason</th>
-                <th>Sessions</th>
-                <th>P&L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {demoClosedPositions.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>No closed demo positions.</td>
-                </tr>
-              ) : (
-                demoClosedPositions.map((position) => (
-                  <tr key={position.id}>
-                    <td>{position.symbol}</td>
-                    <td>
-                      {formatPrice(position.entry_price)} on {position.entry_date}
-                    </td>
-                    <td>
-                      {formatPrice(position.exit_price)} on {position.exit_date ?? "-"}
-                    </td>
-                    <td>{position.exit_reason || "-"}</td>
-                    <td>{formatNumber(position.holding_sessions)}</td>
-                    <td>
-                      {formatCurrency(position.realized_pnl)} ({formatPercent(position.realized_pnl_percent)})
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-        </>
-      ) : null}
-
-      {activePage === "journal" ? (
-        <>
-      <section className="panel instruments-panel">
+      <form className="panel" onSubmit={saveToken}>
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Trading Journal</p>
-            <h2>Automated Demo Trade Review</h2>
+            <p className="eyebrow">Fallback</p>
+            <h2>Manual Token Update</h2>
           </div>
-          <BookOpen size={22} />
+          <Shield size={22} />
         </div>
 
-        <dl className="status-list compact">
-          <StatusRow label="Trades" value={formatNumber(demoJournal?.summary.total_trades)} />
-          <StatusRow label="Open" value={formatNumber(demoJournal?.summary.open_positions)} />
-          <StatusRow label="Closed" value={formatNumber(demoJournal?.summary.closed_positions)} />
-          <StatusRow label="Pending" value={formatNumber(demoJournal?.summary.pending_orders)} />
-          <StatusRow label="Rejected" value={formatNumber(demoJournal?.summary.rejected_orders)} />
-          <StatusRow label="Win rate" value={formatPercent(demoJournal?.summary.win_rate_percent)} />
-          <StatusRow label="Average R" value={formatR(demoJournal?.summary.average_r)} />
-          <StatusRow label="Realized P&L" value={formatCurrency(demoJournal?.summary.realized_pnl)} />
-          <StatusRow label="Unrealized P&L" value={formatCurrency(demoJournal?.summary.unrealized_pnl)} />
-          <StatusRow label="Winners" value={formatNumber(demoJournal?.summary.winners)} />
-          <StatusRow label="Failures" value={formatNumber(demoJournal?.summary.failures)} />
-          <StatusRow label="Neutral" value={formatNumber(demoJournal?.summary.neutral)} />
-        </dl>
+        <label>
+          Dhan Client ID
+          <input
+            value={form.dhanClientId}
+            onChange={(event) => setForm({ ...form, dhanClientId: event.target.value })}
+            autoComplete="off"
+            required
+          />
+        </label>
 
-        <form
-          className="button-row journal-filter-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void loadDemoJournal();
-          }}
-        >
-          <label className="inline-control">
-            Symbol
-            <input value={journalSymbol} onChange={(event) => setJournalSymbol(event.target.value)} placeholder="RELIANCE" />
-          </label>
-          <label className="inline-control">
-            Status
-            <select value={journalStatus} onChange={(event) => setJournalStatus(event.target.value)}>
-              <option value="">All trades</option>
-              <option value="pending_entry">Pending entry</option>
-              <option value="open">Open positions</option>
-              <option value="closed">Closed positions</option>
-              <option value="rejected">Rejected orders</option>
-              <option value="winner">Winners</option>
-              <option value="failure">Failures</option>
-              <option value="target">Target exits</option>
-              <option value="stop_loss">Stop exits</option>
-            </select>
-          </label>
-          <button type="submit" disabled={busy}>
-            <Search size={17} />
-            Filter journal
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy}
-            onClick={() => {
-              setJournalStatus("");
-              setJournalSymbol("");
-              void loadDemoJournal("", "");
-            }}
-          >
-            <RefreshCcw size={17} />
-            Reset
-          </button>
-        </form>
+        <label>
+          Access Token
+          <textarea
+            value={form.accessToken}
+            onChange={(event) => setForm({ ...form, accessToken: event.target.value })}
+            autoComplete="off"
+            rows={5}
+            required
+          />
+        </label>
 
-        <div className="journal-list">
-          {!demoJournal || demoJournal.items.length === 0 ? (
-            <p className="muted">No automated demo trades found for this journal filter.</p>
-          ) : (
-            demoJournal.items.map((item) => {
-              const draft = journalDrafts[item.order_id] ?? journalDraftFromItem(item);
-              return (
-                <article className="journal-card" key={item.order_id}>
-                  <div className="journal-card-header">
-                    <div>
-                      <p className="eyebrow">
-                        {formatStatus(item.status)} | Order #{item.order_id}
-                      </p>
-                      <h3>
-                        {item.symbol}
-                        <a
-                          className="table-action"
-                          href={dhanTradingViewUrl(item)}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={`Open ${item.symbol} in Dhan TradingView`}
-                        >
-                          <ExternalLink size={16} />
-                        </a>
-                      </h3>
-                      <p className="muted compact-text">
-                        {item.company_name || "-"} | {item.industry || "Industry unavailable"}
-                      </p>
-                    </div>
-                    <div className={`journal-pnl ${item.pnl >= 0 ? "positive" : "negative"}`}>
-                      <span>{formatCurrency(item.pnl)}</span>
-                      <small>
-                        {formatPercent(item.pnl_percent)} | {formatR(item.r_multiple)}
-                      </small>
-                    </div>
-                  </div>
+        <label>
+          Expiry time
+          <input
+            type="datetime-local"
+            value={form.expiryTime}
+            onChange={(event) => setForm({ ...form, expiryTime: event.target.value })}
+          />
+        </label>
 
-                  <dl className="status-list compact journal-metrics">
-                    <StatusRow label="Trigger" value={item.trigger_date} />
-                    <StatusRow label="Entry" value={`${formatPrice(item.entry_price)} on ${item.entry_date ?? "-"}`} />
-                    <StatusRow label="Stop" value={formatPrice(item.stop_loss)} />
-                    <StatusRow label="Target" value={formatPrice(item.target_price)} />
-                    <StatusRow label="Latest" value={`${formatPrice(item.latest_close)} on ${item.latest_candle_date ?? "-"}`} />
-                    <StatusRow label="Exit" value={`${formatPrice(item.exit_price)} on ${item.exit_date ?? "-"}`} />
-                    <StatusRow label="Exit reason" value={formatStatus(item.exit_reason || item.outcome_label || "-")} />
-                    <StatusRow label="Sessions" value={formatNumber(item.holding_sessions)} />
-                    <StatusRow label="MFE" value={formatPercent(item.max_favorable_percent)} />
-                    <StatusRow label="MAE" value={formatPercent(item.max_adverse_percent)} />
-                    <StatusRow label="Algo decision" value={formatStatus(item.review_decision)} />
-                    <StatusRow label="Watchlist" value={formatStatus(item.watchlist_status)} />
-                  </dl>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={form.validateWithDhan}
+            onChange={(event) => setForm({ ...form, validateWithDhan: event.target.checked })}
+          />
+          Validate with Dhan profile before saving
+        </label>
 
-                  {item.rejection_reason ? <p className="error-text">Rejected: {item.rejection_reason}</p> : null}
+        <button type="submit" disabled={busy}>
+          <Save size={17} />
+          Save token
+        </button>
+      </form>
+    </section>
+  );
+}
 
-                  <div className="journal-context">
-                    <p>
-                      <strong>Algo:</strong> {item.review_summary || "No algorithmic analysis snapshot recorded."}
-                    </p>
-                    <p>
-                      <strong>Watchlist:</strong> {item.watchlist_summary || item.watchlist_entry_rule || "No watchlist context recorded."}
-                    </p>
-                    {item.review_wait_until || item.review_invalidation ? (
-                      <p>
-                        <strong>Plan:</strong> {item.review_wait_until || "-"} | {item.review_invalidation || "-"}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="journal-notes-grid">
-                    <label>
-                      Setup notes
-                      <textarea
-                        rows={3}
-                        value={draft.setup_notes}
-                        onChange={(event) => updateJournalDraft(item.order_id, { setup_notes: event.target.value })}
-                        placeholder="Why this automated trade was acceptable or questionable."
-                      />
-                    </label>
-                    <label>
-                      Management notes
-                      <textarea
-                        rows={3}
-                        value={draft.management_notes}
-                        onChange={(event) => updateJournalDraft(item.order_id, { management_notes: event.target.value })}
-                        placeholder="How the trade behaved after entry."
-                      />
-                    </label>
-                    <label>
-                      Mistakes / lesson
-                      <textarea
-                        rows={3}
-                        value={draft.mistake_notes}
-                        onChange={(event) => updateJournalDraft(item.order_id, { mistake_notes: event.target.value })}
-                        placeholder="What to improve in automation or rules."
-                      />
-                    </label>
-                    <label>
-                      Tags
-                      <input
-                        value={draft.tags_text}
-                        onChange={(event) => updateJournalDraft(item.order_id, { tags_text: event.target.value })}
-                        placeholder="late entry, clean reversal, weak volume"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="button-row journal-card-actions">
-                    <button
-                      type="button"
-                      onClick={() => void saveJournalNotes(item)}
-                      disabled={savingJournalOrderId === item.order_id}
-                    >
-                      <Save size={17} />
-                      Save notes
-                    </button>
-                    {item.notes_updated_at ? <span className="muted">Notes updated {formatDate(item.notes_updated_at)}</span> : null}
-                  </div>
-                </article>
-              );
-            })
-          )}
+function StatusPanel({
+  title,
+  eyebrow,
+  icon,
+  rows,
+  actions,
+}: {
+  title: string;
+  eyebrow: string;
+  icon: ReactNode;
+  rows: [string, string][];
+  actions?: ReactNode[];
+}) {
+  return (
+    <section className="panel status-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
         </div>
-      </section>
+        {icon}
+      </div>
+      <dl className="status-list">
+        {rows.map(([label, value]) => (
+          <StatusRow key={label} label={label} value={value} />
+        ))}
+      </dl>
+      {actions?.length ? <div className="button-row">{actions}</div> : null}
+    </section>
+  );
+}
 
-        </>
+function HistoricalPanel({
+  historicalStatus,
+  historicalItems,
+  historicalProgress,
+  busy,
+  startHistoricalFetch,
+  loadHistoricalStatus,
+  loadHistoricalItems,
+}: {
+  historicalStatus: HistoricalStatus | null;
+  historicalItems: HistoricalItem[];
+  historicalProgress: number;
+  busy: boolean;
+  startHistoricalFetch: () => void;
+  loadHistoricalStatus: () => void;
+  loadHistoricalItems: (runId?: number, itemStatus?: string) => void;
+}) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Historical Candles</p>
+          <h2>Nifty 500 OHLCV Storage</h2>
+        </div>
+        <Database size={22} />
+      </div>
+      <dl className="status-list compact">
+        <StatusRow label="Status" value={historicalStatus?.status ?? "-"} />
+        <StatusRow label="Run ID" value={formatNumber(historicalStatus?.id)} />
+        <StatusRow label="Progress" value={`${historicalProgress}%`} />
+        <StatusRow label="Mapped symbols" value={formatNumber(historicalStatus?.mapped_symbols)} />
+        <StatusRow label="Done" value={formatNumber(historicalStatus?.done_count)} />
+        <StatusRow label="Failed" value={formatNumber(historicalStatus?.failed_count)} />
+        <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
+        <StatusRow label="Window" value={`${historicalStatus?.from_date ?? "-"} to ${historicalStatus?.to_date_exclusive ?? "-"}`} />
+      </dl>
+      {historicalStatus?.error ? <p className="error-text">{historicalStatus.error}</p> : null}
+      <div className="button-row">
+        <button onClick={startHistoricalFetch} disabled={busy}>
+          <RefreshCcw size={17} />
+          Start/resume Nifty 500 fetch
+        </button>
+        <button className="secondary" onClick={loadHistoricalStatus} disabled={busy}>
+          <Wifi size={17} />
+          Reload status
+        </button>
+        {historicalStatus?.id ? (
+          <button className="secondary" onClick={() => loadHistoricalItems(historicalStatus.id, "failed")} disabled={busy}>
+            <AlertTriangle size={17} />
+            Show failures
+          </button>
+        ) : null}
+      </div>
+      {historicalItems.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Candles</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historicalItems.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.symbol}</td>
+                  <td>{formatStatus(item.status)}</td>
+                  <td>{formatNumber(item.attempts)}</td>
+                  <td>{formatNumber(item.candles_received)}</td>
+                  <td>{item.error || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
+    </section>
+  );
+}
 
-      {activePage === "drishti" ? (
-        <>
-      <section className="panel instruments-panel">
+function CandleLookup({
+  candleSymbol,
+  candles,
+  setCandleSymbol,
+  loadCandles,
+}: {
+  candleSymbol: string;
+  candles: DailyCandle[];
+  setCandleSymbol: (symbol: string) => void;
+  loadCandles: (symbol?: string) => void;
+}) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Stored OHLCV</p>
+          <h2>Latest Candles</h2>
+        </div>
+        <Search size={22} />
+      </div>
+      <form
+        className="search-row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          loadCandles();
+        }}
+      >
+        <input value={candleSymbol} onChange={(event) => setCandleSymbol(event.target.value)} placeholder="RELIANCE" />
+        <button type="submit">
+          <Search size={17} />
+          Load candles
+        </button>
+      </form>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Open</th>
+              <th>High</th>
+              <th>Low</th>
+              <th>Close</th>
+              <th>Volume</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candles.length === 0 ? (
+              <tr>
+                <td colSpan={6}>No candles loaded.</td>
+              </tr>
+            ) : (
+              candles.map((candle) => (
+                <tr key={candle.trading_date}>
+                  <td>{candle.trading_date}</td>
+                  <td>{formatPrice(candle.open)}</td>
+                  <td>{formatPrice(candle.high)}</td>
+                  <td>{formatPrice(candle.low)}</td>
+                  <td>{formatPrice(candle.close)}</td>
+                  <td>{formatNumber(candle.volume)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function InstrumentAndUniverseSearch({
+  instrumentQuery,
+  instrumentResults,
+  searchInstruments,
+  universeQuery,
+  universeResults,
+  loadUniverse,
+}: {
+  instrumentQuery: string;
+  instrumentResults: InstrumentItem[];
+  searchInstruments: (query?: string) => void;
+  universeQuery: string;
+  universeResults: UniverseItem[];
+  loadUniverse: (query?: string) => void;
+}) {
+  const [instrumentDraft, setInstrumentDraft] = useState(instrumentQuery);
+  const [universeDraft, setUniverseDraft] = useState(universeQuery);
+
+  return (
+    <section className="grid instruments-panel">
+      <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Research Events</p>
-            <h2>45-Day Candidate Events</h2>
+            <p className="eyebrow">Dhan Master</p>
+            <h2>Instrument Search</h2>
           </div>
           <Search size={22} />
         </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Events" value={formatNumber(moveEventReport?.event_count)} />
-          <StatusRow label="Candidate stocks" value={formatNumber(moveEventReport?.candidate_symbols)} />
-          <StatusRow label="Scanned" value={formatNumber(moveEventReport?.scanned_symbols)} />
-          <StatusRow label="Threshold" value={formatPercent(moveEventReport?.threshold_percent)} />
-          <StatusRow label="Pullback split" value={formatPercent(moveEventReport?.pullback_percent)} />
-          <StatusRow label="Window from" value={moveEventReport?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={moveEventReport?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(moveEventReport?.generated_at)} />
-        </dl>
-
-        {moveEventReport?.error ? <p className="error-text">{moveEventReport.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshMoveEvents} disabled={busy}>
-            <RefreshCcw size={17} />
-            Detect candidate events
+        <form
+          className="search-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            searchInstruments(instrumentDraft);
+          }}
+        >
+          <input value={instrumentDraft} onChange={(event) => setInstrumentDraft(event.target.value)} placeholder="RELIANCE" />
+          <button type="submit">
+            <Search size={17} />
+            Search
           </button>
-          <button className="secondary" onClick={loadMoveEvents} disabled={busy}>
-            <Wifi size={17} />
-            Reload events
-          </button>
-        </div>
-
-        <div className="table-wrap">
+        </form>
+        <div className="table-wrap compact-table">
           <table>
             <thead>
               <tr>
                 <th>Symbol</th>
-                <th>Company</th>
-                <th>Industry</th>
-                <th>Bucket</th>
-                <th>Event</th>
-                <th>Low</th>
-                <th>Low date</th>
-                <th>High</th>
-                <th>High date</th>
-                <th>Move</th>
-                <th>Sessions</th>
-                <th>Days</th>
+                <th>Security</th>
+                <th>ISIN</th>
+                <th>Series</th>
               </tr>
             </thead>
             <tbody>
-              {!moveEventReport || moveEventReport.items.length === 0 ? (
+              {instrumentResults.length === 0 ? (
                 <tr>
-                  <td colSpan={12}>No stored candidate events. Run detection after the 45-day data is current.</td>
+                  <td colSpan={4}>Search for an instrument.</td>
                 </tr>
               ) : (
-                moveEventReport.items.map((item) => (
+                instrumentResults.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.industry}</td>
-                    <td>{item.bucket}</td>
-                    <td>{formatNumber(item.event_number)}</td>
-                    <td>{formatPrice(item.low_price)}</td>
-                    <td>{item.low_date}</td>
-                    <td>{formatPrice(item.high_price)}</td>
-                    <td>{item.high_date}</td>
-                    <td>{formatPercent(item.move_percent)}</td>
-                    <td>{formatNumber(item.duration_trading_sessions)}</td>
-                    <td>{formatNumber(item.duration_calendar_days)}</td>
+                    <td>{item.display_name || item.symbol_name}</td>
+                    <td>{item.security_id}</td>
+                    <td>{item.isin}</td>
+                    <td>{item.series || "-"}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </section>
+      </div>
 
-        </>
-      ) : null}
-
-      {activePage === "data" ? (
-        <>
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Momentum Scan</p>
-            <h2>45-Day Upward Move Above {rangeMoverThreshold}%</h2>
-          </div>
-          <TrendingUp size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Matches" value={formatNumber(rangeMoverReport?.match_count)} />
-          <StatusRow label="Scanned" value={formatNumber(rangeMoverReport?.total_scanned)} />
-          <StatusRow label="Threshold" value={formatPercent(rangeMoverReport?.threshold_percent)} />
-          <StatusRow label="Window from" value={rangeMoverReport?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={rangeMoverReport?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(rangeMoverReport?.generated_at)} />
-        </dl>
-
-        <div className="button-row">
-          <label className="inline-control">
-            Minimum upward move
-            <select value={rangeMoverThreshold} onChange={(event) => changeRangeMoverThreshold(event.target.value)}>
-              {rangeMoverThresholdOptions.map((value) => (
-                <option key={value} value={value}>
-                  {value}%
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="secondary" onClick={() => loadRangeMovers()} disabled={busy}>
-            <RefreshCcw size={17} />
-            Recheck movers
-          </button>
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Chart</th>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Industry</th>
-                <th>Low</th>
-                <th>Low date</th>
-                <th>High</th>
-                <th>High date</th>
-                <th>Move</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!rangeMoverReport || rangeMoverReport.items.length === 0 ? (
-                <tr>
-                  <td colSpan={9}>No stocks crossed the threshold.</td>
-                </tr>
-              ) : (
-                rangeMoverReport.items.map((item) => (
-                  <tr key={item.symbol}>
-                    <td>
-                      <a
-                        className="table-action"
-                        href={dhanTradingViewUrl(item)}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`Open ${item.symbol} in Dhan TradingView`}
-                        title={`Open ${item.symbol} in Dhan TradingView`}
-                      >
-                        <ExternalLink size={16} />
-                      </a>
-                    </td>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.industry}</td>
-                    <td>{formatPrice(item.lowest_low)}</td>
-                    <td>{item.lowest_low_date}</td>
-                    <td>{formatPrice(item.highest_high)}</td>
-                    <td>{item.highest_high_date}</td>
-                    <td>{formatPercent(item.move_percent)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-        </>
-      ) : null}
-
-      {activePage === "data" ? (
-        <>
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Quality</p>
-            <h2>Nifty 500 Data Checks</h2>
-          </div>
-          <CheckCircle2 size={22} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Healthy" value={formatNumber(qualityReport?.healthy_count)} />
-          <StatusRow label="Warnings" value={formatNumber(qualityReport?.warning_count)} />
-          <StatusRow label="Blocked" value={formatNumber(qualityReport?.blocked_count)} />
-          <StatusRow label="Expected sessions" value={formatNumber(qualityReport?.expected_session_count)} />
-          <StatusRow label="Latest session" value={qualityReport?.latest_expected_session ?? "-"} />
-          <StatusRow label="Historical run" value={qualityReport?.historical_run_status ?? "-"} />
-          <StatusRow label="Generated" value={formatDate(qualityReport?.generated_at)} />
-          <StatusRow label="Exceptions shown" value={formatNumber(qualityReport?.items.length)} />
-        </dl>
-
-        <div className="button-row">
-          <button className="secondary" onClick={loadQualityReport} disabled={busy}>
-            <RefreshCcw size={17} />
-            Recheck quality
-          </button>
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Latest</th>
-                <th>Candles</th>
-                <th>Missing</th>
-                <th>Issues</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!qualityReport || qualityReport.items.length === 0 ? (
-                <tr>
-                  <td colSpan={7}>No quality exceptions.</td>
-                </tr>
-              ) : (
-                qualityReport.items.map((item) => (
-                  <tr key={item.symbol}>
-                    <td>{item.quality_status}</td>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{item.latest_candle_date ?? "-"}</td>
-                    <td>{formatNumber(item.candle_count)}</td>
-                    <td>{formatNumber(item.missing_sessions)}</td>
-                    <td>{formatIssues(item.issues)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Historical Data</p>
-            <h2>Nifty 500 Rolling 45 Days</h2>
-          </div>
-          <Clock size={22} />
-        </div>
-
-        <div className="progress-track" aria-label="Historical fetch progress">
-          <span style={{ width: `${historicalProgress}%` }} />
-        </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Run status" value={historicalStatus?.status ?? "-"} />
-          <StatusRow label="Progress" value={`${historicalProgress}%`} />
-          <StatusRow label="Window from" value={historicalStatus?.from_date ?? "-"} />
-          <StatusRow label="Window to" value={historicalStatus?.to_date_exclusive ?? "-"} />
-          <StatusRow label="Mapped" value={formatNumber(historicalStatus?.mapped_symbols)} />
-          <StatusRow label="Done" value={formatNumber(historicalStatus?.done_count)} />
-          <StatusRow label="Failed" value={formatNumber(historicalStatus?.failed_count)} />
-          <StatusRow label="Skipped" value={formatNumber(historicalStatus?.skipped_count)} />
-          <StatusRow label="Candles received" value={formatNumber(historicalStatus?.candles_received)} />
-          <StatusRow label="Stored candles" value={formatNumber(historicalStatus?.stored_candle_count)} />
-          <StatusRow label="Updated" value={formatDate(historicalStatus?.updated_at)} />
-          <StatusRow label="Completed" value={formatDate(historicalStatus?.completed_at)} />
-        </dl>
-
-        {historicalStatus?.error ? <p className="error-text">{historicalStatus.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={startHistoricalFetch} disabled={busy}>
-            <RefreshCcw size={17} />
-            Check / fetch missing
-          </button>
-          <button className="secondary" onClick={() => loadHistoricalStatus()} disabled={busy}>
-            <Wifi size={17} />
-            Check status
-          </button>
-        </div>
-
-        {historicalItems.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Failed symbol</th>
-                  <th>Company</th>
-                  <th>Attempts</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historicalItems.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.symbol}</td>
-                    <td>{item.company_name}</td>
-                    <td>{formatNumber(item.attempts)}</td>
-                    <td>{item.error || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-
-        <label className="search-label">
-          Inspect stored candles
-          <div className="search-row">
-            <input
-              value={candleSymbol}
-              onChange={(event) => loadCandles(event.target.value)}
-              placeholder="RELIANCE"
-            />
-            <button type="button" className="secondary" onClick={() => loadCandles()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        {candles.length > 0 ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Open</th>
-                  <th>High</th>
-                  <th>Low</th>
-                  <th>Close</th>
-                  <th>Volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {candles.map((candle) => (
-                  <tr key={candle.trading_date}>
-                    <td>{candle.trading_date}</td>
-                    <td>{formatPrice(candle.open)}</td>
-                    <td>{formatPrice(candle.high)}</td>
-                    <td>{formatPrice(candle.low)}</td>
-                    <td>{formatPrice(candle.close)}</td>
-                    <td>{formatNumber(candle.volume)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="panel instruments-panel">
+      <div className="panel">
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Universe</p>
             <h2>Nifty 500 Constituents</h2>
           </div>
-          <Database size={22} />
+          <Search size={22} />
         </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Active stocks" value={formatNumber(universeStatus?.active_count)} />
-          <StatusRow label="Stored rows" value={formatNumber(universeStatus?.total_count)} />
-          <StatusRow label="Industries" value={formatNumber(universeStatus?.industry_count)} />
-          <StatusRow label="Last import" value={formatDate(universeStatus?.last_import?.completed_at)} />
-          <StatusRow label="Source rows seen" value={formatNumber(universeStatus?.last_import?.total_rows_seen)} />
-          <StatusRow label="Inserted" value={formatNumber(universeStatus?.last_import?.inserted_rows)} />
-          <StatusRow label="Updated" value={formatNumber(universeStatus?.last_import?.updated_rows)} />
-          <StatusRow label="Deactivated" value={formatNumber(universeStatus?.last_import?.deactivated_rows)} />
-        </dl>
-
-        {universeStatus?.last_import?.error ? <p className="error-text">{universeStatus.last_import.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshUniverse} disabled={busy}>
-            <RefreshCcw size={17} />
-            Refresh Nifty 500
+        <form
+          className="search-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            loadUniverse(universeDraft);
+          }}
+        >
+          <input value={universeDraft} onChange={(event) => setUniverseDraft(event.target.value)} placeholder="INFY" />
+          <button type="submit">
+            <Search size={17} />
+            Search
           </button>
-        </div>
-
-        <label className="search-label">
-          Search Nifty 500 universe
-          <div className="search-row">
-            <input
-              value={universeQuery}
-              onChange={(event) => loadUniverse(event.target.value)}
-              placeholder="RELIANCE, bank, Financial Services"
-            />
-            <button type="button" className="secondary" onClick={() => loadUniverse()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        <div className="table-wrap">
+        </form>
+        <div className="table-wrap compact-table">
           <table>
             <thead>
               <tr>
+                <th>Symbol</th>
                 <th>Company</th>
                 <th>Industry</th>
-                <th>Symbol</th>
-                <th>Series</th>
                 <th>ISIN</th>
               </tr>
             </thead>
             <tbody>
               {universeResults.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No constituents loaded.</td>
+                  <td colSpan={4}>No constituents loaded.</td>
                 </tr>
               ) : (
-                universeResults.map((item) => (
+                universeResults.slice(0, 25).map((item) => (
                   <tr key={item.id}>
-                    <td>{item.company_name || "-"}</td>
-                    <td>{item.industry || "-"}</td>
-                    <td>{item.symbol || "-"}</td>
-                    <td>{item.series || "-"}</td>
-                    <td>{item.isin || "-"}</td>
+                    <td>{item.symbol}</td>
+                    <td>{item.company_name}</td>
+                    <td>{item.industry}</td>
+                    <td>{item.isin}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </section>
+      </div>
+    </section>
+  );
+}
 
-      <section className="panel instruments-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Master Data</p>
-            <h2>NSE Instrument Master</h2>
-          </div>
-          <Database size={22} />
+function DataQualityPanel({ qualityReport }: { qualityReport: QualityReport | null }) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Data Quality</p>
+          <h2>Nifty 500 Exceptions</h2>
         </div>
-
-        <dl className="status-list compact">
-          <StatusRow label="Active NSE equities" value={formatNumber(instrumentStatus?.active_nse_count)} />
-          <StatusRow label="Stored NSE equities" value={formatNumber(instrumentStatus?.nse_count)} />
-          <StatusRow label="Last import" value={formatDate(instrumentStatus?.last_import?.completed_at)} />
-          <StatusRow label="Source rows seen" value={formatNumber(instrumentStatus?.last_import?.total_rows_seen)} />
-          <StatusRow label="Inserted" value={formatNumber(instrumentStatus?.last_import?.inserted_rows)} />
-          <StatusRow label="Updated" value={formatNumber(instrumentStatus?.last_import?.updated_rows)} />
-          <StatusRow label="Unchanged" value={formatNumber(instrumentStatus?.last_import?.unchanged_rows)} />
-          <StatusRow label="Deactivated" value={formatNumber(instrumentStatus?.last_import?.deactivated_rows)} />
-        </dl>
-
-        {instrumentStatus?.last_import?.error ? <p className="error-text">{instrumentStatus.last_import.error}</p> : null}
-
-        <div className="button-row">
-          <button onClick={refreshInstruments} disabled={busy}>
-            <RefreshCcw size={17} />
-            Refresh from Dhan
-          </button>
-        </div>
-
-        <label className="search-label">
-          Search stored NSE equities
-          <div className="search-row">
-            <input
-              value={instrumentQuery}
-              onChange={(event) => searchInstruments(event.target.value)}
-              placeholder="RELIANCE, HDFCBANK, NIFTY"
-            />
-            <button type="button" className="secondary" onClick={() => searchInstruments()} disabled={busy}>
-              <Search size={17} />
-            </button>
-          </div>
-        </label>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
+        <AlertTriangle size={22} />
+      </div>
+      <dl className="status-list compact">
+        <StatusRow label="Historical run" value={qualityReport?.historical_run_status ?? "-"} />
+        <StatusRow label="Expected sessions" value={formatNumber(qualityReport?.expected_session_count)} />
+        <StatusRow label="Healthy" value={formatNumber(qualityReport?.healthy_count)} />
+        <StatusRow label="Warnings" value={formatNumber(qualityReport?.warning_count)} />
+        <StatusRow label="Blocked" value={formatNumber(qualityReport?.blocked_count)} />
+        <StatusRow label="Generated" value={formatDate(qualityReport?.generated_at)} />
+      </dl>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Symbol</th>
+              <th>Latest</th>
+              <th>Candles</th>
+              <th>Missing</th>
+              <th>Issues</th>
+              <th>Fetch</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!qualityReport || qualityReport.items.length === 0 ? (
               <tr>
-                <th>Symbol</th>
-                <th>Display</th>
-                <th>Security ID</th>
-                <th>ISIN</th>
-                <th>Segment</th>
-                <th>Type</th>
-                <th>Series</th>
-                <th>Lot</th>
+                <td colSpan={7}>No data quality exceptions.</td>
               </tr>
-            </thead>
-            <tbody>
-              {instrumentResults.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No search results.</td>
+            ) : (
+              qualityReport.items.map((item) => (
+                <tr key={item.symbol}>
+                  <td>{formatStatus(item.quality_status)}</td>
+                  <td>{item.symbol}</td>
+                  <td>{item.latest_candle_date ?? "-"}</td>
+                  <td>{formatNumber(item.candle_count)}</td>
+                  <td>{formatNumber(item.missing_sessions)}</td>
+                  <td>{formatIssues(item.issues)}</td>
+                  <td>{item.fetch_error || formatStatus(item.fetch_status)}</td>
                 </tr>
-              ) : (
-                instrumentResults.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.symbol_name || "-"}</td>
-                    <td>{item.display_name || "-"}</td>
-                    <td>{item.security_id || "-"}</td>
-                    <td>{item.isin || "-"}</td>
-                    <td>{item.segment || "-"}</td>
-                    <td>{item.instrument_type || item.instrument || "-"}</td>
-                    <td>{item.series || "-"}</td>
-                    <td>{formatNumber(item.lot_size)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-        </>
-      ) : null}
-        </>
-      )}
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
-      {message ? <p className="message">{message}</p> : null}
-    </main>
+function RangeMoversPanel({
+  report,
+  threshold,
+  busy,
+  changeRangeMoverThreshold,
+  loadRangeMovers,
+}: {
+  report: RangeMoverReport | null;
+  threshold: number;
+  busy: boolean;
+  changeRangeMoverThreshold: (value: string) => void;
+  loadRangeMovers: () => void;
+}) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Review Tool</p>
+          <h2>45-Day Upward Move Above {threshold}%</h2>
+        </div>
+        <TrendingUp size={22} />
+      </div>
+      <dl className="status-list compact">
+        <StatusRow label="Matches" value={formatNumber(report?.match_count)} />
+        <StatusRow label="Scanned" value={formatNumber(report?.total_scanned)} />
+        <StatusRow label="Threshold" value={formatPercent(report?.threshold_percent)} />
+        <StatusRow label="Window" value={`${report?.from_date ?? "-"} to ${report?.to_date_exclusive ?? "-"}`} />
+      </dl>
+      <div className="button-row">
+        <label className="inline-control">
+          Minimum upward move
+          <select value={threshold} onChange={(event) => changeRangeMoverThreshold(event.target.value)}>
+            {rangeMoverThresholdOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}%
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="secondary" onClick={loadRangeMovers} disabled={busy}>
+          <RefreshCcw size={17} />
+          Recheck movers
+        </button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Chart</th>
+              <th>Symbol</th>
+              <th>Company</th>
+              <th>Industry</th>
+              <th>Low</th>
+              <th>Low date</th>
+              <th>High</th>
+              <th>High date</th>
+              <th>Move</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!report || report.items.length === 0 ? (
+              <tr>
+                <td colSpan={9}>No stocks crossed the threshold.</td>
+              </tr>
+            ) : (
+              report.items.map((item) => (
+                <tr key={item.symbol}>
+                  <td>
+                    <a className="table-action" href={dhanTradingViewUrl(item)} target="_blank" rel="noreferrer">
+                      <ExternalLink size={16} />
+                    </a>
+                  </td>
+                  <td>{item.symbol}</td>
+                  <td>{item.company_name}</td>
+                  <td>{item.industry}</td>
+                  <td>{formatPrice(item.lowest_low)}</td>
+                  <td>{item.lowest_low_date}</td>
+                  <td>{formatPrice(item.highest_high)}</td>
+                  <td>{item.highest_high_date}</td>
+                  <td>{formatPercent(item.move_percent)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function MoveEventsPanel({
+  report,
+  busy,
+  refreshMoveEvents,
+  loadMoveEvents,
+}: {
+  report: MoveEventReport | null;
+  busy: boolean;
+  refreshMoveEvents: () => void;
+  loadMoveEvents: () => void;
+}) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Review Tool</p>
+          <h2>45-Day Candidate Events</h2>
+        </div>
+        <Search size={22} />
+      </div>
+      <dl className="status-list compact">
+        <StatusRow label="Events" value={formatNumber(report?.event_count)} />
+        <StatusRow label="Candidate stocks" value={formatNumber(report?.candidate_symbols)} />
+        <StatusRow label="Scanned" value={formatNumber(report?.scanned_symbols)} />
+        <StatusRow label="Threshold" value={formatPercent(report?.threshold_percent)} />
+        <StatusRow label="Pullback split" value={formatPercent(report?.pullback_percent)} />
+      </dl>
+      {report?.error ? <p className="error-text">{report.error}</p> : null}
+      <div className="button-row">
+        <button onClick={refreshMoveEvents} disabled={busy}>
+          <RefreshCcw size={17} />
+          Detect candidate events
+        </button>
+        <button className="secondary" onClick={loadMoveEvents} disabled={busy}>
+          <Wifi size={17} />
+          Reload events
+        </button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Company</th>
+              <th>Bucket</th>
+              <th>Low</th>
+              <th>Low date</th>
+              <th>High</th>
+              <th>High date</th>
+              <th>Move</th>
+              <th>Sessions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!report || report.items.length === 0 ? (
+              <tr>
+                <td colSpan={9}>No stored candidate events.</td>
+              </tr>
+            ) : (
+              report.items.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.symbol}</td>
+                  <td>{item.company_name}</td>
+                  <td>{item.bucket}</td>
+                  <td>{formatPrice(item.low_price)}</td>
+                  <td>{item.low_date}</td>
+                  <td>{formatPrice(item.high_price)}</td>
+                  <td>{item.high_date}</td>
+                  <td>{formatPercent(item.move_percent)}</td>
+                  <td>{formatNumber(item.duration_trading_sessions)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RegimePanel({
+  report,
+  busy,
+  refreshRegimes,
+  loadRegimes,
+}: {
+  report: RegimeReport | null;
+  busy: boolean;
+  refreshRegimes: () => void;
+  loadRegimes: () => void;
+}) {
+  return (
+    <section className="panel instruments-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Review Tool</p>
+          <h2>Regime Diagnostics</h2>
+        </div>
+        <Database size={22} />
+      </div>
+      <dl className="status-list compact">
+        <StatusRow label="Status" value={report?.status ?? "-"} />
+        <StatusRow label="Classified" value={formatNumber(report?.classified_count)} />
+        <StatusRow label="Uptrend" value={formatNumber(report?.uptrend_count)} />
+        <StatusRow label="Downtrend" value={formatNumber(report?.downtrend_count)} />
+        <StatusRow label="Sideways" value={formatNumber(report?.sideways_count)} />
+      </dl>
+      {report?.error ? <p className="error-text">{report.error}</p> : null}
+      <div className="button-row">
+        <button onClick={refreshRegimes} disabled={busy}>
+          <RefreshCcw size={17} />
+          Refresh regimes
+        </button>
+        <button className="secondary" onClick={loadRegimes} disabled={busy}>
+          <Wifi size={17} />
+          Reload latest
+        </button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Company</th>
+              <th>Regime</th>
+              <th>Confidence</th>
+              <th>Close</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!report || report.items.length === 0 ? (
+              <tr>
+                <td colSpan={6}>No regime diagnostics loaded.</td>
+              </tr>
+            ) : (
+              report.items.slice(0, 100).map((item) => (
+                <tr key={`${item.symbol}-${item.trading_date}`}>
+                  <td>{item.symbol}</td>
+                  <td>{item.company_name}</td>
+                  <td>{formatStatus(item.regime)}</td>
+                  <td>{formatPercent(item.confidence)}</td>
+                  <td>{formatPrice(item.close)}</td>
+                  <td>{item.trading_date}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -2487,11 +1583,7 @@ function getStateMeta(state: TokenState) {
   return { label: "Unknown", className: "neutral", icon: <Clock size={18} /> };
 }
 
-function getSystemStateMeta(
-  dhanState: TokenState,
-  historicalState?: string,
-  blockedCount = 0,
-) {
+function getSystemStateMeta(dhanState: TokenState, historicalState?: string, blockedCount = 0) {
   if (dhanState === "expired" || dhanState === "renew_failed" || dhanState === "config_error") {
     return { label: "Dhan needs attention", className: "bad", icon: <AlertTriangle size={18} /> };
   }
@@ -2499,7 +1591,7 @@ function getSystemStateMeta(
     return { label: "Data needs review", className: "warn", icon: <AlertTriangle size={18} /> };
   }
   if (dhanState === "active" || dhanState === "expiring_soon") {
-    return { label: "System ready", className: "ok", icon: <CheckCircle2 size={18} /> };
+    return { label: "Data system ready", className: "ok", icon: <CheckCircle2 size={18} /> };
   }
   return { label: "Setup incomplete", className: "neutral", icon: <Clock size={18} /> };
 }
@@ -2515,37 +1607,10 @@ function getSettingsStateMeta(dhanMeta: ReturnType<typeof getStateMeta>) {
 }
 
 function getPageMeta(page: AppPage) {
-  if (page === "drishti") return { eyebrow: "Early Watch", title: "Drishti Radar" };
-  if (page === "demo") return { eyebrow: "Paper Ledger", title: "Demo Trading" };
-  if (page === "journal") return { eyebrow: "Trade Review", title: "Trading Journal" };
   if (page === "data") return { eyebrow: "Operations", title: "Data Health" };
+  if (page === "review") return { eyebrow: "Diagnostics", title: "Review Tools" };
   if (page === "settings") return { eyebrow: "Admin", title: "Settings" };
   return { eyebrow: "Overview", title: "Command Dashboard" };
-}
-
-function buildJournalDrafts(items: DemoJournalItem[]) {
-  return Object.fromEntries(items.map((item) => [item.order_id, journalDraftFromItem(item)])) as Record<
-    number,
-    DemoJournalNotesDraft
-  >;
-}
-
-function journalDraftFromItem(item: DemoJournalItem): DemoJournalNotesDraft {
-  return {
-    setup_notes: item.setup_notes,
-    management_notes: item.management_notes,
-    mistake_notes: item.mistake_notes,
-    tags_text: item.tags.join(", "),
-  };
-}
-
-function emptyJournalDraft(): DemoJournalNotesDraft {
-  return {
-    setup_notes: "",
-    management_notes: "",
-    mistake_notes: "",
-    tags_text: "",
-  };
 }
 
 function formatDate(value?: string | null) {
@@ -2567,28 +1632,9 @@ function formatPrice(value?: number | null) {
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
 }
 
-function formatCurrency(value?: number | null) {
-  if (value === null || value === undefined) return "-";
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 2,
-  }).format(value);
-}
-
 function formatPercent(value?: number | null) {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}%`;
-}
-
-function formatMultiplier(value?: number | null) {
-  if (value === null || value === undefined) return "-";
-  return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}x`;
-}
-
-function formatR(value?: number | null) {
-  if (value === null || value === undefined) return "-";
-  return `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value)}R`;
 }
 
 function formatIssues(value: string[]) {

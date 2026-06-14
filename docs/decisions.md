@@ -4,47 +4,35 @@ This file records project decisions that should not be rediscovered from mixed c
 
 ## Current Decisions
 
-### Drishti Is Early Watch, Not Trade Advice
+### Active System Is Data Foundation First
 
-Drishti is a radar system. It finds stocks worth watching and researching.
+The active system is focused on Dhan token handling, instrument master, Nifty 500 universe, historical candles, and data quality.
 
-It does not place orders, recommend entries as final instructions, or act as an automated trading system.
+It does not place orders, recommend entries as final instructions, run AI review, or act as an automated trading system.
 
-### Keep Data Separate From Drishti
+### Keep Data Separate From Retired Signal Code
 
 The data layer owns token handling, instruments, universe membership, candles, and quality checks.
 
-Drishti consumes data. It should not own data ingestion.
+Retired signal/demo modules consume data only if manually redesigned later. They should not own data ingestion.
 
-### Keep Research Tools Separate From Drishti
+### Keep Review Tools Manual
 
-Momentum scans, move events, blind spot reports, and parameter sweeps are research tools.
+Momentum scans, move events, and regime diagnostics are review tools.
 
-They are allowed to be noisy and exploratory.
+They are allowed to be noisy and exploratory, but they must not trigger demo/trading action flows.
 
-They are not official Drishti output unless explicitly promoted.
+They are not official signal output unless explicitly redesigned and promoted.
 
-### Signal 01 Is Official
+### Drishti And Demo Flow Are Museum Code
 
-Official id:
+The old Drishti, reversal opportunity, support/resistance, candlestick, watchlist, learning, demo trading, and journal modules are not active runtime.
 
-- `DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL`
+They are retained only as reference where still present.
 
-Purpose:
+### Gemini / AI Review Is Removed
 
-- Detect a fresh local low followed by immediate upside demand with volume confirmation.
-
-### Signal 02 Is Research-Only
-
-Current working family:
-
-- Compact Volume Breakout
-
-Status:
-
-- Candidate only.
-- Not saved as an official Drishti signal.
-- The exact rejection math is not locked.
+Gemini credentials, Gemini review, and local discipline review are removed from active development.
 
 ### Production Remains Untouched
 
@@ -54,6 +42,5 @@ Production `main` remains untouched until a tested release is intentionally appr
 
 ## Open Decisions
 
-- Whether Compact Volume Breakout should become Drishti Signal 02.
-- How to mathematically separate valid compact breakouts from vertical exhaustion into supply.
-- Whether Drishti research tools should eventually get a separate UI page.
+- Whether any retired signal/demo module should return after a fresh design.
+- Whether review diagnostics should remain in the current frontend or move to a separate diagnostics area.

@@ -1,6 +1,6 @@
 # Project Layers
 
-This project has three separate layers. Keep them mentally and technically separate.
+This project currently has two active layers and one museum/reference area. Keep them mentally and technically separate.
 
 ## 1. Data Layer
 
@@ -28,23 +28,21 @@ Rule:
 
 > The data layer should not know what Drishti is.
 
-## 2. Research / Discovery Tools
+## 2. Review / Diagnostics Tools
 
-Research tools are allowed to be experimental. Their job is to discover, test, and challenge possible Drishti signals.
+Review tools are manual diagnostics. They help inspect market data, but they do not control trading, demo trading, or data maintenance.
 
 Examples:
 
 - Momentum/range scans
 - Move-event detection
-- Blind spot reports
-- False early detection reports
-- Parameter sweeps
-- Signal candidate cross-checks
+- Regime diagnostics
 
 Current backend examples:
 
 - `backend/app/range_movers.py`
 - `backend/app/move_events.py`
+- `backend/app/regime.py`
 
 Current notes live under:
 
@@ -52,25 +50,26 @@ Current notes live under:
 
 Rule:
 
-> Research tools are not official Drishti signals.
+> Review tools are not trading signals and must not run automatically from data maintenance.
 
-## 3. Drishti Layer
+## 3. Museum / Reference Code
 
-Drishti is the official early-watch radar system.
+Drishti and the old demo-trading flow are retired from the active runtime until a new design is approved.
 
-Only validated signals belong here.
-
-Current official signal:
-
-- `DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL`
-
-Current backend example:
+Current museum examples:
 
 - `backend/app/drishti.py`
+- `backend/app/reversal_opportunities.py`
+- `backend/app/support_resistance.py`
+- `backend/app/candlesticks.py`
+- `backend/app/watchlist.py`
+- `backend/app/learning.py`
+- `backend/app/demo_trading.py`
+- `backend/app/trading_journal.py`
 
 Rule:
 
-> Drishti stores approved early-watch signals only. Candidate ideas stay in research until validated.
+> Museum code is not active runtime. It should not be wired into startup, data maintenance, or normal frontend navigation.
 
 ## Flow
 
@@ -78,15 +77,14 @@ Rule:
 Data Layer
   -> clean candles and universe data
 
-Research / Discovery Tools
-  -> find patterns, misses, failures, and candidate rules
+Review / Diagnostics Tools
+  -> manually inspect movers, events, and regimes
 
-Drishti Layer
-  -> stores only approved early-watch signals
+Museum / Reference Code
+  -> preserved for future redesign only
 ```
 
 ## Naming Guidance
 
-- Use `Drishti` only for approved signals and official radar output.
-- Use `research`, `candidate`, `cross-check`, or `experiment` for discovery work.
-- Do not call Signal 02 official until it has passed review and is intentionally promoted.
+- Use `review` or `diagnostics` for current non-trading tools.
+- Do not promote museum code back into active runtime without an explicit design decision.

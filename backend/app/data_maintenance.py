@@ -3,10 +3,7 @@ import contextlib
 import logging
 
 from app.config import Settings
-from app.demo_automation import DemoAutomationService
 from app.historical_data import HistoricalDataService
-from app.regime import StockRegimeService
-from app.reversal_opportunities import ReversalOpportunityService
 from app.schemas import TokenStatusResponse
 from app.timezone import now_utc
 from app.token_service import TokenService
@@ -21,16 +18,10 @@ class DataMaintenanceScheduler:
         settings: Settings,
         token_service: TokenService,
         historical_service: HistoricalDataService,
-        regime_service: StockRegimeService | None = None,
-        demo_automation_service: DemoAutomationService | None = None,
-        reversal_opportunity_service: ReversalOpportunityService | None = None,
     ) -> None:
         self.settings = settings
         self.token_service = token_service
         self.historical_service = historical_service
-        self.regime_service = regime_service
-        self.demo_automation_service = demo_automation_service
-        self.reversal_opportunity_service = reversal_opportunity_service
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -59,25 +50,21 @@ class DataMaintenanceScheduler:
                 "renewed": renewed,
             }
 
-        retention_result = self.historical_service.prune_retention_window()
+        retention_result: dict[str, object] = {
+            "retention_status": "disabled",
+            "deleted_candle_count": 0,
+        }
+        if self.settings.auto_purge_market_data:
+            retention_result = {
+                "retention_status": "purged",
+                **self.historical_service.prune_retention_window(),
+            }
         historical_status = await self.historical_service.start_or_resume_nifty_500_fetch()
-        regime_result = None
-        if self.regime_service is not None and can_refresh_regimes(historical_status):
-            regime_result = self.regime_service.refresh_nifty_500_regimes()
-        reversal_result = self._refresh_reversal_opportunities(historical_status)
-        automation_result = None
-        if self.demo_automation_service is not None:
-            automation_result = await self.demo_automation_service.run_once(historical_status)
         result: dict[str, object] = {
             "status": "ok",
             "renewed": renewed,
             "historical_status": historical_status.get("status"),
             "historical_run_id": historical_status.get("id"),
-            "regime_status": regime_result.get("status") if regime_result else None,
-            "regime_run_id": regime_result.get("run_id") if regime_result else None,
-            **reversal_result,
-            "demo_automation_status": automation_result.get("status") if automation_result else None,
-            "demo_automation_run_id": automation_result.get("id") if automation_result else None,
             **retention_result,
         }
 
@@ -86,65 +73,6 @@ class DataMaintenanceScheduler:
             result.get("historical_status"),
             result.get("historical_run_id"),
         )
-        return result
-
-    def _refresh_reversal_opportunities(self, historical_status: dict[str, object]) -> dict[str, object]:
-        result: dict[str, object] = {
-            "reversal_snapshot_status": None,
-            "reversal_snapshot_run_id": None,
-            "reversal_snapshot_item_count": None,
-            "reversal_snapshot_error": "",
-            "reversal_outcome_status": None,
-            "reversal_outcome_checked_count": None,
-            "reversal_outcome_updated_count": None,
-            "reversal_outcome_complete_count": None,
-            "reversal_outcome_partial_count": None,
-            "reversal_outcome_not_enough_future_candles_count": None,
-            "reversal_outcome_error": "",
-        }
-        if not self.settings.reversal_opportunity_automation_enabled:
-            result["reversal_snapshot_status"] = "disabled"
-            result["reversal_outcome_status"] = "disabled"
-            return result
-        if self.reversal_opportunity_service is None:
-            result["reversal_snapshot_status"] = "unavailable"
-            result["reversal_outcome_status"] = "unavailable"
-            return result
-
-        if can_refresh_reversal_opportunities(historical_status):
-            try:
-                snapshot = self.reversal_opportunity_service.refresh_nifty_500_snapshot(
-                    limit=self.settings.reversal_opportunity_limit,
-                    include_watch_only=self.settings.reversal_opportunity_include_watch_only,
-                    min_score=self.settings.reversal_opportunity_min_score,
-                    min_entry_quality_score=self.settings.reversal_opportunity_min_entry_quality_score,
-                )
-                result["reversal_snapshot_status"] = "ok"
-                result["reversal_snapshot_run_id"] = snapshot.get("id")
-                result["reversal_snapshot_item_count"] = snapshot.get("item_count")
-            except Exception as exc:
-                logger.exception("Reversal opportunity snapshot refresh failed.")
-                result["reversal_snapshot_status"] = "error"
-                result["reversal_snapshot_error"] = str(exc)
-        else:
-            result["reversal_snapshot_status"] = "skipped"
-
-        try:
-            outcome = self.reversal_opportunity_service.update_outcomes(
-                limit=self.settings.reversal_opportunity_outcome_refresh_limit,
-            )
-            result["reversal_outcome_status"] = "ok"
-            result["reversal_outcome_checked_count"] = outcome.get("checked_count")
-            result["reversal_outcome_updated_count"] = outcome.get("updated_count")
-            result["reversal_outcome_complete_count"] = outcome.get("complete_count")
-            result["reversal_outcome_partial_count"] = outcome.get("partial_count")
-            result["reversal_outcome_not_enough_future_candles_count"] = outcome.get(
-                "not_enough_future_candles_count"
-            )
-        except Exception as exc:
-            logger.exception("Reversal opportunity outcome refresh failed.")
-            result["reversal_outcome_status"] = "error"
-            result["reversal_outcome_error"] = str(exc)
         return result
 
     async def _run(self) -> None:
@@ -168,11 +96,3 @@ def token_can_fetch(status: TokenStatusResponse) -> bool:
     if status.expiry_time is not None and status.expiry_time <= now_utc():
         return False
     return True
-
-
-def can_refresh_regimes(historical_status: dict[str, object]) -> bool:
-    return historical_status.get("status") in {"up_to_date", "completed", "completed_with_errors"}
-
-
-def can_refresh_reversal_opportunities(historical_status: dict[str, object]) -> bool:
-    return can_refresh_regimes(historical_status)

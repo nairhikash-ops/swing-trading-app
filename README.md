@@ -2,7 +2,7 @@
 
 Private NSE swing-trading advisory project.
 
-Current implementation stage: **Dhan data foundation + Drishti research**.
+Current implementation stage: **Dhan data foundation + review diagnostics**.
 
 ## Branch Rules
 
@@ -24,29 +24,24 @@ Current implementation stage: **Dhan data foundation + Drishti research**.
 - Fetch rolling 45-calendar-day Dhan daily candles for mapped Nifty 500 stocks through a resumable, rate-limited job.
 - Run automated Nifty 500 candle quality checks and show only exceptions for review.
 - Scan the latest 45-day Nifty 500 candle window for stocks whose later high clears a selectable upward-move threshold; the default is 20%.
-- Maintain Drishti as an early-watch radar, separate from data ingestion and research tools.
+- Keep Drishti, watchlist, learning, and demo trading as retired/museum code until a new design is approved.
+- Gemini/AI review and discipline code has been removed from active development.
 
 ## Project Layers
 
 The repo separates three concepts:
 
 - **Data layer**: token handling, instruments, universe data, candles, and quality checks.
-- **Research / discovery tools**: momentum scans, move events, blind spots, and signal experiments.
-- **Drishti layer**: approved early-watch signals only.
+- **Review / diagnostics tools**: momentum scans, move events, and regime diagnostics. These are manual review aids only.
+- **Museum code**: retired Drishti, support/resistance, candlestick, watchlist, learning, and demo modules kept only as reference where still present.
 
-Read the layer map before promoting research into official Drishti behavior:
+Read the layer map before moving any museum/reference code back into active runtime:
 
 - `docs/layers.md`
 - `docs/decisions.md`
 - `notes/research/README.md`
 
-Current official Drishti signal:
-
-- `DRISHTI_SIGNAL_01_LOCAL_LOW_REVERSAL`
-
-Current research-only candidate:
-
-- Compact Volume Breakout / possible Signal 02
+There is currently no active signal, demo-trading, or AI review workflow.
 
 ## Run Locally
 
@@ -75,4 +70,6 @@ Frontend: `http://localhost:5173`
 - If renewal is missed and the token expires, use the manual fallback screen.
 - The NSE equity instrument master is stored in SQLite and can be refreshed from Dhan on demand.
 - Historical Dhan fetches run one mapped Nifty 500 instrument at a time, retry temporary failures, and record per-symbol failures without deleting successful candles.
+- Automatic candle pruning is disabled by default with `AUTO_PURGE_MARKET_DATA=false`.
+- The data-maintenance loop is limited to token maintenance and historical candle refresh. It does not run regime refresh, reversal radar, demo automation, or AI review.
 - Data quality checks classify each stock as healthy, warning, or blocked before future analysis uses the candle cache.

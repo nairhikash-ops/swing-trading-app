@@ -9,7 +9,10 @@ services:
       HISTORICAL_LOOKBACK_CALENDAR_DAYS: "365"
       DATA_MAINTENANCE_ENABLED: "true"
       DATA_MAINTENANCE_CHECK_INTERVAL_SECONDS: "3600"
+      AUTO_PURGE_MARKET_DATA: "false"
       DATA_RETENTION_CALENDAR_DAYS: "365"
+      REVERSAL_OPPORTUNITY_AUTOMATION_ENABLED: "false"
+      DEMO_AUTOMATION_ENABLED: "false"
     volumes:
       - dhan-auth-data:/app/data
     ports:
