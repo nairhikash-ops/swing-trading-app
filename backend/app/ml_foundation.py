@@ -236,7 +236,7 @@ class MLFoundationService:
             "active_model": self.store.active_model(),
             "model_count": len(self.store.list_models(limit=500)),
             "training_available": False,
-            "message": "ML-0 foundation only. Sample generation and model training are not implemented in this phase.",
+            "message": "ML foundation is active. One-symbol local sample generation is available; model training is not implemented in this phase.",
         }
 
     def start_training(self) -> dict[str, Any]:

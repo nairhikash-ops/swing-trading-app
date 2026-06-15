@@ -10,6 +10,7 @@ from app.historical_data import HistoricalDataService, HistoricalDataStore, upwa
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
 from app.ml_foundation import MLFoundationService, MLFoundationStore
+from app.ml_samples import MLSampleService, MLSampleStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
@@ -22,6 +23,7 @@ from app.schemas import (
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
     MLModelRegistryItem,
+    MLSampleGenerateResponse,
     MLStatusResponse,
     MLTrainingJobResponse,
     MLTrainingStatusResponse,
@@ -86,6 +88,11 @@ def build_ml_service(settings: Settings) -> MLFoundationService:
     return MLFoundationService(settings=settings, store=MLFoundationStore(token_store))
 
 
+def build_ml_sample_service(settings: Settings) -> MLSampleService:
+    token_store = TokenStore(settings.database_path)
+    return MLSampleService(settings=settings, store=MLSampleStore(token_store))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -98,6 +105,7 @@ async def lifespan(app: FastAPI):
     move_event_service = build_move_event_service(settings)
     regime_service = build_regime_service(settings)
     ml_service = build_ml_service(settings)
+    ml_sample_service = build_ml_sample_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -114,6 +122,7 @@ async def lifespan(app: FastAPI):
     app.state.move_event_service = move_event_service
     app.state.regime_service = regime_service
     app.state.ml_service = ml_service
+    app.state.ml_sample_service = ml_sample_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -168,6 +177,10 @@ def get_regime_service_dep() -> StockRegimeService:
 
 def get_ml_service_dep() -> MLFoundationService:
     return app.state.ml_service
+
+
+def get_ml_sample_service_dep() -> MLSampleService:
+    return app.state.ml_sample_service
 
 
 def get_settings_dep() -> Settings:
@@ -240,6 +253,17 @@ async def ml_model(
     if model is None:
         raise HTTPException(status_code=404, detail="ML model not found.")
     return MLModelRegistryItem.model_validate(model)
+
+
+@app.post("/api/ml/samples/generate-one", response_model=MLSampleGenerateResponse)
+async def ml_generate_one_symbol_samples(
+    symbol: str = Query(default="RELIANCE", min_length=1, max_length=32),
+    ml_sample_service: MLSampleService = Depends(get_ml_sample_service_dep),
+) -> MLSampleGenerateResponse:
+    try:
+        return MLSampleGenerateResponse(**ml_sample_service.generate_one(symbol=symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/dhan/status", response_model=TokenStatusResponse)

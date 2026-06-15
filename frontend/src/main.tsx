@@ -343,6 +343,19 @@ type MLStatus = {
   message: string;
 };
 
+type MLSampleGenerateResult = {
+  symbol: string;
+  instrument_id: number;
+  candles_available: number;
+  samples_created: number;
+  samples_updated: number;
+  outcome_counts: Record<string, number>;
+  trainable_count: number;
+  ambiguous_count: number;
+  first_sample_date?: string | null;
+  last_sample_date?: string | null;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -379,6 +392,8 @@ function App() {
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [regimeReport, setRegimeReport] = useState<RegimeReport | null>(null);
   const [mlStatus, setMlStatus] = useState<MLStatus | null>(null);
+  const [mlSampleSymbol, setMlSampleSymbol] = useState("RELIANCE");
+  const [mlSampleResult, setMlSampleResult] = useState<MLSampleGenerateResult | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
@@ -652,9 +667,34 @@ function App() {
       const response = await fetch(`${apiBaseUrl}/api/ml/training/${action}`, { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
       await loadMlStatus();
-      setMessage(`ML training job ${action} request recorded. No model training runs in ML-0.`);
+      setMessage(`ML training job ${action} request recorded. No model training runs in this phase.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Unable to ${action} ML training job.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generateMlSamplesForSymbol(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const symbol = mlSampleSymbol.trim().toUpperCase() || "RELIANCE";
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ml/samples/generate-one?symbol=${encodeURIComponent(symbol)}`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const result = (await response.json()) as MLSampleGenerateResult;
+      setMlSampleSymbol(result.symbol);
+      setMlSampleResult(result);
+      setMessage(
+        `Generated one-symbol local samples for ${result.symbol}: ${formatNumber(result.samples_created)} created, ${formatNumber(
+          result.samples_updated,
+        )} updated. No Dhan call or model training was run.`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to generate one-symbol ML samples.");
     } finally {
       setBusy(false);
     }
@@ -954,8 +994,12 @@ function App() {
         <MLTrainingPanel
           status={mlStatus}
           busy={busy}
+          mlSampleSymbol={mlSampleSymbol}
+          setMlSampleSymbol={setMlSampleSymbol}
+          mlSampleResult={mlSampleResult}
           loadMlStatus={loadMlStatus}
           controlMlTraining={controlMlTraining}
+          generateMlSamplesForSymbol={generateMlSamplesForSymbol}
         />
       ) : null}
 
@@ -1133,13 +1177,21 @@ function StatusPanel({
 function MLTrainingPanel({
   status,
   busy,
+  mlSampleSymbol,
+  setMlSampleSymbol,
+  mlSampleResult,
   loadMlStatus,
   controlMlTraining,
+  generateMlSamplesForSymbol,
 }: {
   status: MLStatus | null;
   busy: boolean;
+  mlSampleSymbol: string;
+  setMlSampleSymbol: (symbol: string) => void;
+  mlSampleResult: MLSampleGenerateResult | null;
   loadMlStatus: () => void;
   controlMlTraining: (action: "start" | "pause" | "resume" | "cancel") => void;
+  generateMlSamplesForSymbol: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const job = status?.current_job ?? null;
   const contract = status?.contract ?? null;
@@ -1162,8 +1214,8 @@ function MLTrainingPanel({
           </div>
 
           <p className="muted">
-            ML-0 is control and registry scaffolding only. These controls record job state but do not generate samples,
-            train a model, score stocks, or place orders.
+            ML foundation controls record job state only. One-symbol sample generation below reads saved local candles only;
+            nothing here calls Dhan, trains a model, scores stocks, or places orders.
           </p>
 
           <dl className="status-list">
@@ -1220,6 +1272,58 @@ function MLTrainingPanel({
             <StatusRow label="Excluded" value={(contract?.excluded_outcomes ?? ["AMBIGUOUS"]).join(" / ")} />
             <StatusRow label="Ranking" value={contract?.ranking_score ?? "P(WIN) - P(LOSS)"} />
             <StatusRow label="Data source" value={contract?.data_source ?? "saved local Dhan daily OHLCV only"} />
+          </dl>
+        </div>
+      </section>
+
+      <section className="grid instruments-panel">
+        <div className="panel status-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">ML-1 Proof</p>
+              <h2>One-Symbol Local Samples</h2>
+            </div>
+            <Database size={22} />
+          </div>
+
+          <p className="muted">
+            One-symbol local sample generation only. This reads existing saved daily candles for the selected symbol and
+            writes idempotent ML sample labels. It does not fetch from Dhan and does not train a model.
+          </p>
+
+          <form className="inline-form" onSubmit={generateMlSamplesForSymbol}>
+            <input
+              value={mlSampleSymbol}
+              onChange={(event) => setMlSampleSymbol(event.target.value.toUpperCase())}
+              placeholder="RELIANCE"
+            />
+            <button type="submit" disabled={busy}>
+              <Database size={17} />
+              Generate Samples For Symbol
+            </button>
+          </form>
+        </div>
+
+        <div className="panel status-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Sample Result</p>
+              <h2>Local Label Summary</h2>
+            </div>
+            <Clock size={22} />
+          </div>
+
+          <dl className="status-list">
+            <StatusRow label="Symbol" value={mlSampleResult?.symbol ?? "-"} />
+            <StatusRow label="Instrument ID" value={formatNumber(mlSampleResult?.instrument_id)} />
+            <StatusRow label="Candles available" value={formatNumber(mlSampleResult?.candles_available)} />
+            <StatusRow label="Samples created" value={formatNumber(mlSampleResult?.samples_created)} />
+            <StatusRow label="Samples updated" value={formatNumber(mlSampleResult?.samples_updated)} />
+            <StatusRow label="Trainable" value={formatNumber(mlSampleResult?.trainable_count)} />
+            <StatusRow label="Ambiguous" value={formatNumber(mlSampleResult?.ambiguous_count)} />
+            <StatusRow label="First sample" value={mlSampleResult?.first_sample_date ?? "-"} />
+            <StatusRow label="Last sample" value={mlSampleResult?.last_sample_date ?? "-"} />
+            <StatusRow label="Outcome counts" value={formatOutcomeCounts(mlSampleResult?.outcome_counts)} />
           </dl>
         </div>
       </section>
@@ -1911,6 +2015,13 @@ function formatPercent(value?: number | null) {
 function formatIssues(value: string[]) {
   if (value.length === 0) return "-";
   return value.map((item) => item.replaceAll("_", " ")).join(", ");
+}
+
+function formatOutcomeCounts(value?: Record<string, number> | null) {
+  if (!value || Object.keys(value).length === 0) return "-";
+  return Object.entries(value)
+    .map(([outcome, count]) => `${formatStatus(outcome)}: ${formatNumber(count)}`)
+    .join(", ");
 }
 
 function formatStatus(value?: string | null) {

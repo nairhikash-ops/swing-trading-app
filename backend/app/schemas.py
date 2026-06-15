@@ -98,6 +98,19 @@ class MLTrainingStatusResponse(BaseModel):
     contract: MLContractResponse
 
 
+class MLSampleGenerateResponse(BaseModel):
+    symbol: str
+    instrument_id: int
+    candles_available: int
+    samples_created: int
+    samples_updated: int
+    outcome_counts: dict[str, int]
+    trainable_count: int
+    ambiguous_count: int
+    first_sample_date: str | None = None
+    last_sample_date: str | None = None
+
+
 class TokenUpdateRequest(BaseModel):
     dhan_client_id: str = Field(min_length=1, max_length=64)
     access_token: str = Field(min_length=20)
