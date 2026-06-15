@@ -25,7 +25,7 @@ type TokenState =
   | "config_error"
   | "unknown";
 
-type AppPage = "dashboard" | "data" | "review" | "settings";
+type AppPage = "dashboard" | "data" | "review" | "ml" | "settings";
 
 type TokenStatus = {
   state: TokenState;
@@ -281,6 +281,68 @@ type RegimeReport = {
   items: RegimeItem[];
 };
 
+type MLContract = {
+  model_name: string;
+  label_name: string;
+  input_window_sessions: number;
+  future_window_sessions: number;
+  target_percent: number;
+  stop_percent: number;
+  universe_name: string;
+  prediction_timing: string;
+  future_scan: string;
+  data_source: string;
+  ranking_score: string;
+  trainable_outcomes: string[];
+  excluded_outcomes: string[];
+  forbidden_v1_features: string[];
+};
+
+type MLTrainingJob = {
+  id: number;
+  model_name: string;
+  model_version?: string | null;
+  status: string;
+  phase: string;
+  config: Record<string, unknown>;
+  current_instrument_id?: number | null;
+  current_symbol: string;
+  total_instruments: number;
+  processed_instruments: number;
+  generated_samples: number;
+  trainable_samples: number;
+  excluded_samples: number;
+  started_at?: string | null;
+  paused_at?: string | null;
+  resumed_at?: string | null;
+  completed_at?: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MLModel = {
+  id: number;
+  model_name: string;
+  model_version: string;
+  status: string;
+  label_name: string;
+  is_active: boolean;
+  artifact_path: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MLStatus = {
+  status: string;
+  contract: MLContract;
+  current_job?: MLTrainingJob | null;
+  active_model?: MLModel | null;
+  model_count: number;
+  training_available: boolean;
+  message: string;
+};
+
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 const apiBaseUrl =
   configuredApiBaseUrl && configuredApiBaseUrl.length > 0
@@ -316,6 +378,7 @@ function App() {
   const [rangeMoverReport, setRangeMoverReport] = useState<RangeMoverReport | null>(null);
   const [moveEventReport, setMoveEventReport] = useState<MoveEventReport | null>(null);
   const [regimeReport, setRegimeReport] = useState<RegimeReport | null>(null);
+  const [mlStatus, setMlStatus] = useState<MLStatus | null>(null);
   const [rangeMoverThreshold, setRangeMoverThreshold] = useState(20);
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
   const [message, setMessage] = useState("");
@@ -572,6 +635,31 @@ function App() {
     }
   }
 
+  async function loadMlStatus() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ml/status`);
+      if (!response.ok) throw new Error(await readError(response));
+      setMlStatus(await response.json());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load ML status.");
+    }
+  }
+
+  async function controlMlTraining(action: "start" | "pause" | "resume" | "cancel") {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ml/training/${action}`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      await loadMlStatus();
+      setMessage(`ML training job ${action} request recorded. No model training runs in ML-0.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `Unable to ${action} ML training job.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function changeRangeMoverThreshold(value: string) {
     const nextThreshold = Number(value);
     setRangeMoverThreshold(nextThreshold);
@@ -630,6 +718,7 @@ function App() {
     void loadRangeMovers();
     void loadMoveEvents();
     void loadRegimes();
+    void loadMlStatus();
     const timer = window.setInterval(() => void loadStatus(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -678,6 +767,7 @@ function App() {
             <TabButton label="Dashboard" page="dashboard" activePage={activePage} setActivePage={setActivePage} />
             <TabButton label="Data Health" page="data" activePage={activePage} setActivePage={setActivePage} />
             <TabButton label="Review Tools" page="review" activePage={activePage} setActivePage={setActivePage} />
+            <TabButton label="ML Training" page="ml" activePage={activePage} setActivePage={setActivePage} />
             <TabButton label="Settings" page="settings" activePage={activePage} setActivePage={setActivePage} />
           </nav>
         </div>
@@ -737,6 +827,20 @@ function App() {
               </dl>
               <button className="secondary" onClick={() => setActivePage("data")}>
                 Data health
+              </button>
+            </article>
+
+            <article className="dashboard-card">
+              <div className="card-icon ok"><Database size={19} /></div>
+              <p className="eyebrow">ML Foundation</p>
+              <h2>Training Control</h2>
+              <dl className="mini-list">
+                <StatusRow label="Active model" value={mlStatus?.active_model?.model_version ?? "No active model yet"} />
+                <StatusRow label="Job" value={formatStatus(mlStatus?.current_job?.status ?? "not_started")} />
+                <StatusRow label="Phase" value={formatStatus(mlStatus?.current_job?.phase ?? "idle")} />
+              </dl>
+              <button className="secondary" onClick={() => setActivePage("ml")}>
+                Open ML
               </button>
             </article>
           </section>
@@ -844,6 +948,15 @@ function App() {
           />
           <RegimePanel report={regimeReport} busy={busy} refreshRegimes={refreshRegimes} loadRegimes={loadRegimes} />
         </>
+      ) : null}
+
+      {activePage === "ml" ? (
+        <MLTrainingPanel
+          status={mlStatus}
+          busy={busy}
+          loadMlStatus={loadMlStatus}
+          controlMlTraining={controlMlTraining}
+        />
       ) : null}
 
       {message ? <p className="message">{message}</p> : null}
@@ -1014,6 +1127,103 @@ function StatusPanel({
       </dl>
       {actions?.length ? <div className="button-row">{actions}</div> : null}
     </section>
+  );
+}
+
+function MLTrainingPanel({
+  status,
+  busy,
+  loadMlStatus,
+  controlMlTraining,
+}: {
+  status: MLStatus | null;
+  busy: boolean;
+  loadMlStatus: () => void;
+  controlMlTraining: (action: "start" | "pause" | "resume" | "cancel") => void;
+}) {
+  const job = status?.current_job ?? null;
+  const contract = status?.contract ?? null;
+  const isRunning = job?.status === "running";
+  const isPaused = job?.status === "paused";
+  const hasActiveJob = isRunning || isPaused;
+
+  return (
+    <>
+      <section className="grid instruments-panel">
+        <div className="panel status-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">ML Foundation</p>
+              <h2>Training Job Control</h2>
+            </div>
+            <button className="icon-button" onClick={loadMlStatus} disabled={busy} title="Refresh ML status">
+              <RefreshCcw size={18} />
+            </button>
+          </div>
+
+          <p className="muted">
+            ML-0 is control and registry scaffolding only. These controls record job state but do not generate samples,
+            train a model, score stocks, or place orders.
+          </p>
+
+          <dl className="status-list">
+            <StatusRow label="Active model" value={status?.active_model?.model_version ?? "No active model yet"} />
+            <StatusRow label="Models registered" value={formatNumber(status?.model_count)} />
+            <StatusRow label="Job status" value={formatStatus(job?.status ?? "not_started")} />
+            <StatusRow label="Phase" value={formatStatus(job?.phase ?? "idle")} />
+            <StatusRow label="Current symbol" value={job?.current_symbol || "-"} />
+            <StatusRow
+              label="Processed"
+              value={`${formatNumber(job?.processed_instruments)} / ${formatNumber(job?.total_instruments)}`}
+            />
+            <StatusRow label="Generated samples" value={formatNumber(job?.generated_samples)} />
+            <StatusRow label="Trainable samples" value={formatNumber(job?.trainable_samples)} />
+            <StatusRow label="Excluded samples" value={formatNumber(job?.excluded_samples)} />
+            <StatusRow label="Started" value={formatDate(job?.started_at)} />
+            <StatusRow label="Updated" value={formatDate(job?.updated_at)} />
+            <StatusRow label="Last error" value={job?.last_error || "-"} />
+          </dl>
+
+          <div className="button-row">
+            <button onClick={() => controlMlTraining("start")} disabled={busy || hasActiveJob}>
+              Start Training
+            </button>
+            <button className="secondary" onClick={() => controlMlTraining("pause")} disabled={busy || !isRunning}>
+              Pause Training
+            </button>
+            <button className="secondary" onClick={() => controlMlTraining("resume")} disabled={busy || !isPaused}>
+              Resume Training
+            </button>
+            <button className="secondary" onClick={() => controlMlTraining("cancel")} disabled={busy || !hasActiveJob}>
+              Cancel Training
+            </button>
+          </div>
+        </div>
+
+        <div className="panel status-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">ML V1 Contract</p>
+              <h2>OHLCV Opportunity Model</h2>
+            </div>
+            <Database size={22} />
+          </div>
+
+          <dl className="status-list">
+            <StatusRow label="Model" value={contract?.model_name ?? "stock_opportunity_ohlcv_v1"} />
+            <StatusRow label="Label" value={contract?.label_name ?? "hit_7pct_before_down_3pct_20d"} />
+            <StatusRow label="Input window" value={`${formatNumber(contract?.input_window_sessions ?? 60)} sessions`} />
+            <StatusRow label="Future window" value={`${formatNumber(contract?.future_window_sessions ?? 20)} sessions`} />
+            <StatusRow label="Target" value={`+${formatPercent(contract?.target_percent ?? 7)}`} />
+            <StatusRow label="Stop" value={`-${formatPercent(contract?.stop_percent ?? 3)}`} />
+            <StatusRow label="Trainable" value={(contract?.trainable_outcomes ?? ["WIN", "LOSS", "TIMEOUT"]).join(" / ")} />
+            <StatusRow label="Excluded" value={(contract?.excluded_outcomes ?? ["AMBIGUOUS"]).join(" / ")} />
+            <StatusRow label="Ranking" value={contract?.ranking_score ?? "P(WIN) - P(LOSS)"} />
+            <StatusRow label="Data source" value={contract?.data_source ?? "saved local Dhan daily OHLCV only"} />
+          </dl>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -1669,6 +1879,7 @@ function getSettingsStateMeta(dhanMeta: ReturnType<typeof getStateMeta>) {
 function getPageMeta(page: AppPage) {
   if (page === "data") return { eyebrow: "Operations", title: "Data Health" };
   if (page === "review") return { eyebrow: "Diagnostics", title: "Review Tools" };
+  if (page === "ml") return { eyebrow: "Foundation", title: "ML Training" };
   if (page === "settings") return { eyebrow: "Admin", title: "Settings" };
   return { eyebrow: "Overview", title: "Command Dashboard" };
 }

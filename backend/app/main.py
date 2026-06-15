@@ -9,6 +9,7 @@ from app.data_quality import DataQualityService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
+from app.ml_foundation import MLFoundationService, MLFoundationStore
 from app.move_events import MoveEventService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
@@ -20,6 +21,10 @@ from app.schemas import (
     InstrumentImportSummary,
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
+    MLModelRegistryItem,
+    MLStatusResponse,
+    MLTrainingJobResponse,
+    MLTrainingStatusResponse,
     MoveEventReportResponse,
     QualityReportResponse,
     RangeMoverReportResponse,
@@ -76,6 +81,11 @@ def build_regime_service(settings: Settings) -> StockRegimeService:
     return StockRegimeService(TokenStore(settings.database_path))
 
 
+def build_ml_service(settings: Settings) -> MLFoundationService:
+    token_store = TokenStore(settings.database_path)
+    return MLFoundationService(settings=settings, store=MLFoundationStore(token_store))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -87,6 +97,7 @@ async def lifespan(app: FastAPI):
     range_mover_service = build_range_mover_service(settings)
     move_event_service = build_move_event_service(settings)
     regime_service = build_regime_service(settings)
+    ml_service = build_ml_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -102,6 +113,7 @@ async def lifespan(app: FastAPI):
     app.state.range_mover_service = range_mover_service
     app.state.move_event_service = move_event_service
     app.state.regime_service = regime_service
+    app.state.ml_service = ml_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -154,6 +166,10 @@ def get_regime_service_dep() -> StockRegimeService:
     return app.state.regime_service
 
 
+def get_ml_service_dep() -> MLFoundationService:
+    return app.state.ml_service
+
+
 def get_settings_dep() -> Settings:
     return app.state.settings
 
@@ -161,6 +177,69 @@ def get_settings_dep() -> Settings:
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok", app="swing-trading-app")
+
+
+@app.get("/api/ml/status", response_model=MLStatusResponse)
+async def ml_status(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLStatusResponse:
+    return MLStatusResponse(**ml_service.status())
+
+
+@app.post("/api/ml/training/start", response_model=MLTrainingJobResponse)
+async def ml_training_start(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLTrainingJobResponse:
+    try:
+        return MLTrainingJobResponse(**ml_service.start_training())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ml/training/pause", response_model=MLTrainingJobResponse)
+async def ml_training_pause(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLTrainingJobResponse:
+    try:
+        return MLTrainingJobResponse(**ml_service.pause_training())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ml/training/resume", response_model=MLTrainingJobResponse)
+async def ml_training_resume(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLTrainingJobResponse:
+    try:
+        return MLTrainingJobResponse(**ml_service.resume_training())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ml/training/cancel", response_model=MLTrainingJobResponse)
+async def ml_training_cancel(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLTrainingJobResponse:
+    try:
+        return MLTrainingJobResponse(**ml_service.cancel_training())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ml/training/status", response_model=MLTrainingStatusResponse)
+async def ml_training_status(
+    ml_service: MLFoundationService = Depends(get_ml_service_dep),
+) -> MLTrainingStatusResponse:
+    return MLTrainingStatusResponse(**ml_service.training_status())
+
+
+@app.get("/api/ml/models", response_model=list[MLModelRegistryItem])
+async def ml_models(
+    limit: int = Query(default=100, ge=1, le=500),
+    ml_service: MLFoundationService = Depends(get_ml_service_dep),
+) -> list[MLModelRegistryItem]:
+    return [MLModelRegistryItem.model_validate(item) for item in ml_service.models(limit=limit)]
+
+
+@app.get("/api/ml/models/{model_id}", response_model=MLModelRegistryItem)
+async def ml_model(
+    model_id: int,
+    ml_service: MLFoundationService = Depends(get_ml_service_dep),
+) -> MLModelRegistryItem:
+    model = ml_service.model(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="ML model not found.")
+    return MLModelRegistryItem.model_validate(model)
 
 
 @app.get("/api/dhan/status", response_model=TokenStatusResponse)

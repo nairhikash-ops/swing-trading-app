@@ -12,6 +12,92 @@ class HealthResponse(BaseModel):
     app: str
 
 
+MLJobStatus = Literal["not_started", "running", "paused", "completed", "failed", "cancelled"]
+
+
+class MLContractResponse(BaseModel):
+    model_name: str
+    label_name: str
+    input_window_sessions: int
+    future_window_sessions: int
+    target_percent: float
+    stop_percent: float
+    universe_name: str
+    prediction_timing: str
+    future_scan: str
+    data_source: str
+    ranking_score: str
+    trainable_outcomes: list[str]
+    excluded_outcomes: list[str]
+    forbidden_v1_features: list[str]
+
+
+class MLTrainingJobResponse(BaseModel):
+    id: int
+    model_name: str
+    model_version: str | None = None
+    status: str
+    phase: str
+    config: dict[str, Any]
+    current_instrument_id: int | None = None
+    current_symbol: str
+    total_instruments: int
+    processed_instruments: int
+    generated_samples: int
+    trainable_samples: int
+    excluded_samples: int
+    started_at: datetime | None = None
+    paused_at: datetime | None = None
+    resumed_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_error: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MLModelRegistryItem(BaseModel):
+    id: int
+    model_name: str
+    model_version: str
+    status: str
+    label_name: str
+    input_window_sessions: int
+    future_window_sessions: int
+    target_percent: float
+    stop_percent: float
+    train_from_date: str | None = None
+    train_to_date: str | None = None
+    validation_from_date: str | None = None
+    validation_to_date: str | None = None
+    test_from_date: str | None = None
+    test_to_date: str | None = None
+    universe_name: str
+    instruments_count: int
+    sample_counts: dict[str, Any]
+    feature_config: dict[str, Any]
+    label_config: dict[str, Any]
+    metrics: dict[str, Any]
+    artifact_path: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class MLStatusResponse(BaseModel):
+    status: str
+    contract: MLContractResponse
+    current_job: MLTrainingJobResponse | None = None
+    active_model: MLModelRegistryItem | None = None
+    model_count: int
+    training_available: bool
+    message: str
+
+
+class MLTrainingStatusResponse(BaseModel):
+    current_job: MLTrainingJobResponse | None = None
+    contract: MLContractResponse
+
+
 class TokenUpdateRequest(BaseModel):
     dhan_client_id: str = Field(min_length=1, max_length=64)
     access_token: str = Field(min_length=20)
