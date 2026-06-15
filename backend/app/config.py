@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     dhan_renew_before_minutes: int = Field(default=180, ge=5, le=23 * 60)
     dhan_status_stale_minutes: int = Field(default=15, ge=1, le=24 * 60)
     dhan_renew_check_interval_seconds: int = Field(default=900, ge=60, le=24 * 3600)
-    data_maintenance_enabled: bool = True
+    data_maintenance_enabled: bool = False
     data_maintenance_check_interval_seconds: int = Field(default=3600, ge=300, le=24 * 3600)
     auto_purge_market_data: bool = False
     data_retention_calendar_days: int = Field(default=365, ge=1, le=3650)
