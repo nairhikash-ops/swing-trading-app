@@ -111,6 +111,23 @@ class MLSampleGenerateResponse(BaseModel):
     last_sample_date: str | None = None
 
 
+class MLSampleBatchGenerateRequest(BaseModel):
+    symbols: list[str]
+    dry_run: bool = True
+
+
+class MLSampleBatchGenerateResponse(BaseModel):
+    symbols_requested: int
+    symbols_processed: int
+    symbols_failed: int
+    total_samples_created: int
+    total_samples_updated: int
+    total_trainable_count: int
+    dry_run: bool
+    results: list[MLSampleGenerateResponse]
+    errors: list[dict[str, str]]
+
+
 class TokenUpdateRequest(BaseModel):
     dhan_client_id: str = Field(min_length=1, max_length=64)
     access_token: str = Field(min_length=20)

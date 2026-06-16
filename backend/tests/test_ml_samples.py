@@ -377,3 +377,155 @@ def test_ml_sample_generator_does_not_import_or_call_dhan():
 
     assert "DhanClient" not in source
     assert "historical_daily" not in source
+
+
+def test_generate_one_dry_run_writes_zero_samples(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    summary = service.generate_one("RELIANCE", dry_run=True)
+
+    assert summary["samples_created"] == 21
+    assert summary["samples_updated"] == 0
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
+
+
+def test_generate_one_dry_run_reports_would_update_accurately(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    service.generate_one("RELIANCE", dry_run=False)
+    assert sample_store.sample_count_for_instrument(instrument_id) == 21
+
+    summary = service.generate_one("RELIANCE", dry_run=True)
+    assert summary["samples_created"] == 0
+    assert summary["samples_updated"] == 21
+    assert sample_store.sample_count_for_instrument(instrument_id) == 21
+
+
+def test_generate_batch_dry_run_true(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    result = service.generate_batch(["RELIANCE"], dry_run=True)
+    assert result["dry_run"] is True
+    assert result["symbols_processed"] == 1
+    assert result["total_samples_created"] == 21
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
+
+
+def test_generate_batch_dry_run_false(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    result = service.generate_batch(["RELIANCE"], dry_run=False)
+    assert result["dry_run"] is False
+    assert result["symbols_processed"] == 1
+    assert result["total_samples_created"] == 21
+    assert sample_store.sample_count_for_instrument(instrument_id) == 21
+
+
+def test_generate_batch_captures_blocked_symbols_in_errors(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path, fetch_item_status="failed")
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    result = service.generate_batch(["RELIANCE"], dry_run=False)
+    assert result["symbols_processed"] == 0
+    assert result["symbols_failed"] == 1
+    assert len(result["errors"]) == 1
+    assert "RELIANCE" in result["errors"][0]["symbol"]
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
+
+
+def test_generate_batch_rejects_empty_list(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.generate_batch([])
+    assert "No symbols provided" in str(exc.value)
+
+
+def test_generate_batch_rejects_more_than_five_symbols(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.generate_batch(["S1", "S2", "S3", "S4", "S5", "S6"])
+    assert "Maximum of 5" in str(exc.value)
+
+
+def test_generate_batch_rejects_duplicates(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.generate_batch(["RELIANCE", "reliance"])
+    assert "Duplicate symbol" in str(exc.value)
+
+
+def test_generate_batch_endpoint_returns_response(tmp_path):
+    token_store, _sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+    app.dependency_overrides[get_ml_sample_service_dep] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post("/api/ml/samples/generate-batch", json={"symbols": ["RELIANCE"], "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["symbols_requested"] == 1
+    assert data["total_samples_created"] == 21
+    assert data["dry_run"] is True
+
+
+def test_generate_batch_rejects_blank_symbols(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.generate_batch(["RELIANCE", "   ", "TCS"])
+    assert "Blank or whitespace-only" in str(exc.value)
+
+
+def test_generate_batch_endpoint_validates_max_5(tmp_path):
+    token_store, _sample_store, service, instrument_id = make_service(tmp_path)
+    app.dependency_overrides[get_ml_sample_service_dep] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post("/api/ml/samples/generate-batch", json={"symbols": ["A", "B", "C", "D", "E", "F"], "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "Maximum of 5" in response.json()["detail"]
+
+
+def test_generate_batch_endpoint_rejects_empty_list(tmp_path):
+    token_store, _sample_store, service, instrument_id = make_service(tmp_path)
+    app.dependency_overrides[get_ml_sample_service_dep] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post("/api/ml/samples/generate-batch", json={"symbols": [], "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "No symbols provided" in response.json()["detail"]
+
+
+def test_generate_batch_endpoint_rejects_duplicate_symbols(tmp_path):
+    token_store, _sample_store, service, instrument_id = make_service(tmp_path)
+    app.dependency_overrides[get_ml_sample_service_dep] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post("/api/ml/samples/generate-batch", json={"symbols": ["TCS", "tcs"], "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "Duplicate symbol" in response.json()["detail"]
+
+
+def test_generate_batch_endpoint_rejects_blank_symbols(tmp_path):
+    token_store, _sample_store, service, instrument_id = make_service(tmp_path)
+    app.dependency_overrides[get_ml_sample_service_dep] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post("/api/ml/samples/generate-batch", json={"symbols": ["TCS", "  "], "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "Blank or whitespace-only" in response.json()["detail"]
+

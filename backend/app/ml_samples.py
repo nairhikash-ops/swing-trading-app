@@ -185,6 +185,21 @@ class MLSampleStore:
             ).fetchone()
         return sample_row_to_dict(row) if row else None
 
+    def sample_exists(self, model_name: str, label_name: str, instrument_id: int, sample_date: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM ml_samples
+                WHERE model_name = ?
+                  AND label_name = ?
+                  AND instrument_id = ?
+                  AND sample_date = ?
+                """,
+                (model_name, label_name, instrument_id, sample_date),
+            ).fetchone()
+        return row is not None
+
     def sample_count_for_instrument(self, instrument_id: int) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -231,6 +246,7 @@ class MLSampleService:
         future_window_sessions: int = ML_FUTURE_WINDOW_SESSIONS,
         target_percent: float = ML_TARGET_PERCENT,
         stop_percent: float = ML_STOP_PERCENT,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         normalized_symbol = symbol.strip().upper() or "RELIANCE"
         if lookback_sessions != ML_INPUT_WINDOW_SESSIONS:
@@ -259,7 +275,16 @@ class MLSampleService:
                 stop_percent=stop_percent,
                 future_window_sessions=future_window_sessions,
             )
-            action = self.store.upsert_sample(sample)
+            if dry_run:
+                exists = self.store.sample_exists(
+                    model_name=sample["model_name"],
+                    label_name=sample["label_name"],
+                    instrument_id=sample["instrument_id"],
+                    sample_date=sample["sample_date"],
+                )
+                action = "updated" if exists else "created"
+            else:
+                action = self.store.upsert_sample(sample)
             if action == "created":
                 created += 1
             else:
@@ -280,6 +305,50 @@ class MLSampleService:
             "ambiguous_count": ambiguous_count,
             "first_sample_date": generated_samples[0]["sample_date"] if generated_samples else None,
             "last_sample_date": generated_samples[-1]["sample_date"] if generated_samples else None,
+        }
+
+    def generate_batch(self, symbols: list[str], dry_run: bool = True) -> dict[str, Any]:
+        if not symbols:
+            raise ValueError("No symbols provided for batch generation.")
+        if len(symbols) > 5:
+            raise ValueError("Maximum of 5 symbols allowed per batch request.")
+
+        unique_symbols = set()
+        for symbol in symbols:
+            normalized = symbol.strip().upper()
+            if not normalized:
+                raise ValueError("Blank or whitespace-only symbol found in request.")
+            if normalized in unique_symbols:
+                raise ValueError(f"Duplicate symbol found in request: {normalized}")
+            unique_symbols.add(normalized)
+
+        results = []
+        errors = []
+
+        created = 0
+        updated = 0
+        trainable = 0
+
+        for symbol in symbols:
+            try:
+                res = self.generate_one(symbol=symbol, dry_run=dry_run)
+                results.append(res)
+                created += res["samples_created"]
+                updated += res["samples_updated"]
+                trainable += res["trainable_count"]
+            except ValueError as e:
+                errors.append({"symbol": symbol, "error": str(e)})
+
+        return {
+            "symbols_requested": len(symbols),
+            "symbols_processed": len(results),
+            "symbols_failed": len(errors),
+            "total_samples_created": created,
+            "total_samples_updated": updated,
+            "total_trainable_count": trainable,
+            "dry_run": dry_run,
+            "results": results,
+            "errors": errors,
         }
 
 

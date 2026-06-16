@@ -23,6 +23,8 @@ from app.schemas import (
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
     MLModelRegistryItem,
+    MLSampleBatchGenerateRequest,
+    MLSampleBatchGenerateResponse,
     MLSampleGenerateResponse,
     MLStatusResponse,
     MLTrainingJobResponse,
@@ -264,6 +266,20 @@ async def ml_generate_one_symbol_samples(
         return MLSampleGenerateResponse(**ml_sample_service.generate_one(symbol=symbol))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ml/samples/generate-batch", response_model=MLSampleBatchGenerateResponse)
+async def ml_generate_batch_samples(
+    request: MLSampleBatchGenerateRequest,
+    ml_sample_service: MLSampleService = Depends(get_ml_sample_service_dep),
+) -> MLSampleBatchGenerateResponse:
+    try:
+        return MLSampleBatchGenerateResponse(
+            **ml_sample_service.generate_batch(symbols=request.symbols, dry_run=request.dry_run)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 @app.get("/api/dhan/status", response_model=TokenStatusResponse)
