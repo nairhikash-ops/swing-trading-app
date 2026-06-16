@@ -273,6 +273,11 @@ def archive_status_for_item(item: dict[str, Any], archive: dict[str, Any], lates
         return "fetch_failed"
     if item["status"] == "skipped_unmapped":
         return "unmapped"
+    if item["status"] == "skipped_no_new_data" and item.get("archive_status") == "older_history_backfill":
+        if bool(archive.get("complete_available_history")):
+            return "complete_available_history_saved"
+        if bool(archive.get("source_floor_reached")):
+            return "dhan_source_floor_reached"
     if item["status"] == "skipped_no_new_data":
         return "waiting_for_next_session"
     latest_stored = archive.get("latest_stored_candle_date")

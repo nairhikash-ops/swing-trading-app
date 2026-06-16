@@ -1,5 +1,6 @@
 from datetime import datetime, date, timedelta
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 
@@ -29,6 +30,25 @@ class FakeHistoricalDhanClient:
     async def historical_daily(self, **kwargs):
         self.calls += 1
         return {"timestamp": [], "open": [], "high": [], "low": [], "close": [], "volume": []}
+
+
+class FakeNoDataDhanClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def historical_daily(self, **kwargs):
+        self.calls += 1
+        request = httpx.Request("POST", "https://api.dhan.co/v2/charts/historical")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={
+                "errorType": "Input_Exception",
+                "errorCode": "DH-905",
+                "errorMessage": "System is unable to fetch data due to incorrect parameters or no data present",
+            },
+        )
+        raise httpx.HTTPStatusError("No data present", request=request, response=response)
 
 
 def make_stores(tmp_path):
@@ -91,6 +111,26 @@ def archive_test_candle(trading_date: str, close: float = 100.0):
         "volume": 1000.0,
         "open_interest": None,
     }
+
+
+def seed_partial_archive(historical_store, universe_store, instrument_store):
+    seed_single_constituent(universe_store, instrument_store, symbol="PARTIAL")
+    seed_run_id = historical_store.create_run(
+        "NIFTY_500",
+        365,
+        HistoricalWindow(from_date=date(2025, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    seed_item = historical_store.items(seed_run_id, status="queued")[0]
+    historical_store.upsert_candles(
+        seed_item,
+        [
+            archive_test_candle("2025-06-16", 100.0),
+            archive_test_candle("2026-06-12", 120.0),
+        ],
+        "NSE_EQ",
+        "EQUITY",
+    )
+    return seed_item
 
 
 @pytest.mark.asyncio
@@ -779,11 +819,18 @@ def test_fetch_plan_skips_instrument_when_latest_candle_is_up_to_date(tmp_path):
         HistoricalWindow(from_date=date(2024, 5, 1), to_date_exclusive=date(2024, 5, 4)),
     )
     first_item = historical_store.items(first_run_id, status="queued")[0]
+    first_candle = archive_test_candle("2024-05-03")
     historical_store.upsert_candles(
         first_item,
-        [archive_test_candle("2024-05-03")],
+        [first_candle],
         "NSE_EQ",
         "EQUITY",
+    )
+    historical_store.record_fetch_outcome(
+        first_item,
+        [first_candle],
+        date.fromisoformat(first_item["request_from_date"]),
+        date.fromisoformat(first_item["request_to_date"]),
     )
 
     second_run_id = historical_store.create_run(
@@ -798,6 +845,158 @@ def test_fetch_plan_skips_instrument_when_latest_candle_is_up_to_date(tmp_path):
     assert second_item["request_from_date"] is None
     assert second_item["archive_status"] == "up_to_date"
     assert status["done_count"] == 1
+
+
+def test_partial_archive_plans_older_history_backfill_before_incremental_update(tmp_path):
+    _, _, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_partial_archive(historical_store, universe_store, instrument_store)
+
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+
+    assert item["archive_status"] == "older_history_backfill"
+    assert item["request_from_date"] == "2021-06-16"
+    assert item["request_to_date"] == "2025-06-15"
+    assert item["source_floor_reason"] == "unknown"
+
+
+def test_older_history_backfill_preserves_recent_candles_and_next_run_is_incremental(tmp_path):
+    _, _, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_partial_archive(historical_store, universe_store, instrument_store)
+    backfill_run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    backfill_item = historical_store.items(backfill_run_id, status="queued")[0]
+    old_candles = [
+        archive_test_candle("2021-06-16", 80.0),
+        archive_test_candle("2021-06-17", 81.0),
+    ]
+
+    historical_store.upsert_candles(backfill_item, old_candles, "NSE_EQ", "EQUITY")
+    reason = historical_store.record_fetch_outcome(
+        backfill_item,
+        old_candles,
+        date.fromisoformat(backfill_item["request_from_date"]),
+        date.fromisoformat(backfill_item["request_to_date"]),
+    )
+    historical_store.mark_item_done(backfill_item["id"], len(old_candles))
+
+    archive = historical_store.archive_metadata(backfill_item["instrument_id"])
+    candles = historical_store.candles_for_symbol("PARTIAL", limit=500)
+    by_date = {candle["trading_date"]: candle for candle in candles}
+
+    assert reason == "dhan_5_year_limit"
+    assert archive["source_floor_reached"] is True
+    assert archive["complete_available_history"] is True
+    assert archive["source_floor_date"] == "2021-06-16"
+    assert by_date["2025-06-16"]["close"] == 101.0
+    assert by_date["2026-06-12"]["close"] == 121.0
+
+    next_run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    next_item = historical_store.items(next_run_id, status="queued")[0]
+
+    assert next_item["archive_status"] == "incremental_update"
+    assert next_item["request_from_date"] == "2026-06-13"
+    assert next_item["request_to_date"] == "2026-06-15"
+
+
+def test_no_data_older_history_backfill_marks_complete_without_hard_failure(tmp_path):
+    settings, token_store, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_partial_archive(historical_store, universe_store, instrument_store)
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+
+    reason = historical_store.record_fetch_outcome(
+        item,
+        [],
+        date.fromisoformat(item["request_from_date"]),
+        date.fromisoformat(item["request_to_date"]),
+    )
+    historical_store.mark_item_no_new_data(item["id"], reason)
+    historical_store.finish_run_if_complete(run_id)
+
+    latest_item = historical_store.items(run_id)[0]
+    status = historical_store.status(run_id)
+    archive = historical_store.archive_metadata(item["instrument_id"])
+    report = DataQualityService(settings, token_store).report(status_filter="all")
+    quality_item = report["items"][0]
+
+    assert reason == "no_older_data_from_dhan"
+    assert latest_item["status"] == "skipped_no_new_data"
+    assert latest_item["archive_status"] == "older_history_backfill"
+    assert status["status"] == "completed"
+    assert archive["source_floor_reached"] is True
+    assert archive["complete_available_history"] is True
+    assert archive["next_retry_after"] is None
+    assert quality_item["quality_status"] == "healthy"
+    assert quality_item["archive_status"] == "complete_available_history_saved"
+
+
+def test_up_to_date_skip_requires_source_floor_reached_when_older_history_is_missing(tmp_path):
+    _, _, universe_store, instrument_store, historical_store = make_stores(tmp_path)
+    seed_partial_archive(historical_store, universe_store, instrument_store)
+
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 13)),
+    )
+    item = historical_store.items(run_id, status="queued")[0]
+
+    assert item["archive_status"] == "older_history_backfill"
+    assert item["request_from_date"] == "2021-06-16"
+    assert item["request_to_date"] == "2025-06-15"
+
+
+@pytest.mark.asyncio
+async def test_dhan_no_data_400_is_recorded_as_no_new_data_not_failed(tmp_path):
+    settings = Settings(app_secret_key=Fernet.generate_key().decode(), data_dir=tmp_path)
+    token_store = TokenStore(settings.database_path)
+    universe_store = IndexUniverseStore(token_store)
+    instrument_store = InstrumentMasterStore(token_store)
+    historical_store = HistoricalDataStore(token_store)
+    token_store.upsert_token(
+        dhan_client_id="123456",
+        encrypted_access_token=TokenCrypto(settings.app_secret_key).encrypt("manual-token-value-1234567890"),
+        token_source="manual",
+        expiry_time=now_utc() + timedelta(hours=20),
+        profile={"dataPlan": "Active", "dataValidity": "2026-07-16 13:34:22.0"},
+    )
+    seed_partial_archive(historical_store, universe_store, instrument_store)
+    run_id = historical_store.create_run(
+        "NIFTY_500",
+        1825,
+        HistoricalWindow(from_date=date(2021, 6, 16), to_date_exclusive=date(2026, 6, 16)),
+    )
+    service = HistoricalDataService(settings, token_store, historical_store, FakeNoDataDhanClient())
+
+    await service._run_fetch(run_id)
+
+    item = historical_store.items(run_id)[0]
+    status = historical_store.status(run_id)
+    archive = historical_store.archive_metadata(item["instrument_id"])
+
+    assert item["status"] == "skipped_no_new_data"
+    assert item["archive_status"] == "older_history_backfill"
+    assert item["source_floor_reason"] == "no_older_data_from_dhan"
+    assert status["status"] == "completed"
+    assert status["failed_count"] == 0
+    assert archive["source_floor_reached"] is True
+    assert archive["complete_available_history"] is True
 
 
 def test_initial_capture_records_newly_listed_stock_as_complete_available_history(tmp_path):

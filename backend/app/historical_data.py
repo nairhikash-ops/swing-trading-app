@@ -691,7 +691,10 @@ class HistoricalDataStore:
                 """
                 UPDATE historical_fetch_items
                 SET status = 'skipped_no_new_data', candles_received = 0, error = ?,
-                    archive_status = 'waiting_for_next_session',
+                    archive_status = CASE
+                        WHEN archive_status = 'older_history_backfill' THEN archive_status
+                        ELSE 'waiting_for_next_session'
+                    END,
                     source_floor_reason = ?,
                     finished_at = ?, updated_at = ?
                 WHERE id = ?
@@ -829,22 +832,35 @@ class HistoricalDataStore:
             if candles:
                 last_successful_fetch_at = timestamp
                 next_retry_after = None
-                if item.get("archive_status") == "initial_capture" and returned_first and returned_first > request_from.isoformat():
+                archive_status = item.get("archive_status")
+                if archive_status == "initial_capture" and returned_first and returned_first > request_from.isoformat():
                     source_floor_reached = True
                     complete_available_history = True
                     source_floor_date = returned_first
                     source_floor_reason = "stock_listed_recently"
-                elif item.get("archive_status") == "initial_capture":
+                elif archive_status == "older_history_backfill" and returned_first and returned_first > request_from.isoformat():
+                    source_floor_reached = True
+                    complete_available_history = True
+                    source_floor_date = returned_first
+                    source_floor_reason = "no_older_data_from_dhan"
+                elif archive_status in ("initial_capture", "older_history_backfill"):
                     source_floor_reached = True
                     complete_available_history = True
                     source_floor_date = request_from.isoformat()
                     source_floor_reason = "dhan_5_year_limit"
             else:
                 last_no_new_data_at = timestamp
-                next_retry_after = retry_after
-                if first_stored:
+                if item.get("archive_status") == "older_history_backfill" and first_stored:
+                    next_retry_after = None
+                    source_floor_reached = True
+                    complete_available_history = True
+                    source_floor_date = first_stored
+                    source_floor_reason = "no_older_data_from_dhan"
+                elif first_stored:
+                    next_retry_after = retry_after
                     source_floor_reason = "no_new_data_available_yet"
                 else:
+                    next_retry_after = None
                     source_floor_reached = True
                     complete_available_history = True
                     source_floor_date = request_from.isoformat()
@@ -1195,21 +1211,25 @@ class HistoricalDataService:
                     await asyncio.sleep(wait_for)
                 next_request_at = asyncio.get_running_loop().time() + interval_seconds
 
+                request_from_text = ""
+                request_to_text = ""
                 try:
                     run = self.store.status(run_id)
                     if not run:
                         raise ValueError("Historical fetch run no longer exists.")
+                    request_from_text = item.get("request_from_date") or run["from_date"]
+                    request_to_text = item.get("request_to_date") or run["to_date_exclusive"]
                     payload = await self.dhan_client.historical_daily(
                         access_token=access_token,
                         security_id=item["security_id"],
                         exchange_segment=self.settings.dhan_historical_exchange_segment,
                         instrument=self.settings.dhan_historical_instrument,
-                        from_date=item.get("request_from_date") or run["from_date"],
-                        to_date=item.get("request_to_date") or run["to_date_exclusive"],
+                        from_date=request_from_text,
+                        to_date=request_to_text,
                     )
                     candles = parse_historical_payload(payload)
-                    request_from = date.fromisoformat(item.get("request_from_date") or run["from_date"])
-                    request_to = date.fromisoformat(item.get("request_to_date") or run["to_date_exclusive"])
+                    request_from = date.fromisoformat(request_from_text)
+                    request_to = date.fromisoformat(request_to_text)
                     if candles:
                         self.store.upsert_candles(
                             item,
@@ -1229,6 +1249,12 @@ class HistoricalDataService:
                     self.store.fail_remaining(run_id, message)
                     return
                 except Exception as exc:
+                    if is_no_data_error(exc):
+                        request_from = date.fromisoformat(request_from_text)
+                        request_to = date.fromisoformat(request_to_text)
+                        reason = self.store.record_fetch_outcome(item, [], request_from, request_to)
+                        self.store.mark_item_no_new_data(item["id"], reason)
+                        break
                     if is_fatal_error(exc):
                         message = readable_error(exc)
                         self.store.mark_item_failed(item["id"], message)
@@ -1352,6 +1378,22 @@ def fetch_plan_for_instrument(conn, instrument_id: int, security_id: str, symbol
             }
 
     latest_expected = window.to_date_exclusive - timedelta(days=1)
+    source_floor_reached = bool(archive["source_floor_reached"]) if archive else False
+    complete_available_history = bool(archive["complete_available_history"]) if archive else False
+    source_floor_reason = archive["source_floor_reason"] if archive else ""
+
+    if latest_stored and first_stored:
+        first_stored_date = date.fromisoformat(first_stored)
+        if first_stored_date > window.from_date and not source_floor_reached and not complete_available_history:
+            return {
+                "status": "queued",
+                "error": "",
+                "request_from_date": window.from_date.isoformat(),
+                "request_to_date": (first_stored_date - timedelta(days=1)).isoformat(),
+                "archive_status": "older_history_backfill",
+                "source_floor_reason": source_floor_reason,
+            }
+
     if latest_stored and date.fromisoformat(latest_stored) >= latest_expected:
         return {
             "status": "skipped_up_to_date",
@@ -1359,7 +1401,7 @@ def fetch_plan_for_instrument(conn, instrument_id: int, security_id: str, symbol
             "request_from_date": None,
             "request_to_date": None,
             "archive_status": "up_to_date",
-            "source_floor_reason": archive["source_floor_reason"] if archive else "",
+            "source_floor_reason": source_floor_reason,
         }
 
     if latest_stored:
@@ -1376,7 +1418,7 @@ def fetch_plan_for_instrument(conn, instrument_id: int, security_id: str, symbol
             "request_from_date": None,
             "request_to_date": None,
             "archive_status": "up_to_date",
-            "source_floor_reason": archive["source_floor_reason"] if archive else "",
+            "source_floor_reason": source_floor_reason,
         }
 
     return {
@@ -1385,7 +1427,7 @@ def fetch_plan_for_instrument(conn, instrument_id: int, security_id: str, symbol
         "request_from_date": request_from.isoformat(),
         "request_to_date": latest_expected.isoformat(),
         "archive_status": archive_status,
-        "source_floor_reason": archive["source_floor_reason"] if archive else "",
+        "source_floor_reason": source_floor_reason,
     }
 
 
@@ -1479,6 +1521,13 @@ def is_retryable_error(exc: Exception) -> bool:
         status_code = exc.response.status_code
         return status_code == 429 or status_code >= 500
     return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+
+
+def is_no_data_error(exc: Exception) -> bool:
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code != 400:
+        return False
+    detail = exc.response.text.lower()
+    return "no data present" in detail
 
 
 def is_fatal_error(exc: Exception) -> bool:
