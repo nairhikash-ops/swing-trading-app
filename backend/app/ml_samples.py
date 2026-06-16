@@ -3,6 +3,7 @@ from collections import Counter
 from typing import Any
 
 from app.config import Settings
+from app.data_quality import DataQualityService
 from app.ml_foundation import (
     ML_FUTURE_WINDOW_SESSIONS,
     ML_INPUT_WINDOW_SESSIONS,
@@ -203,6 +204,25 @@ class MLSampleService:
     def __init__(self, settings: Settings, store: MLSampleStore) -> None:
         self.settings = settings
         self.store = store
+        self.quality_service = DataQualityService(settings=settings, token_store=store.token_store)
+
+    def _enforce_healthy_quality_gate(self, symbol: str) -> None:
+        report = self.quality_service.report(status_filter="exceptions", limit=500)
+        historical_run_id = report.get("historical_run_id")
+        if not historical_run_id:
+            raise ValueError("historical_run_id is missing from data quality report")
+
+        for item in report.get("items", []):
+            if str(item.get("symbol", "")).upper() == symbol:
+                raise ValueError(f"Symbol {symbol} failed quality gate: {item['quality_status']} - {item['issues']}")
+
+        with self.store._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM historical_fetch_items WHERE run_id = ? AND UPPER(symbol) = ?",
+                (historical_run_id, symbol),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Symbol {symbol} not found in historical_fetch_items for run {historical_run_id}")
 
     def generate_one(
         self,
@@ -221,6 +241,8 @@ class MLSampleService:
         instrument = self.store.resolve_symbol(normalized_symbol)
         if instrument is None:
             raise ValueError(f"No active NSE equity instrument found for symbol {normalized_symbol}.")
+
+        self._enforce_healthy_quality_gate(normalized_symbol)
 
         candles = self.store.candles_for_instrument(int(instrument["id"]))
         created = 0

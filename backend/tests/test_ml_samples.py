@@ -1,5 +1,6 @@
 import inspect
 import json
+import pytest
 from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
@@ -18,7 +19,12 @@ from app.ml_samples import (
 from app.store import TokenStore
 
 
-def make_service(tmp_path, symbol: str = "RELIANCE") -> tuple[TokenStore, MLSampleStore, MLSampleService, int]:
+def make_service(
+    tmp_path,
+    symbol: str = "RELIANCE",
+    fetch_item_status: str = "done",
+    seed_quality: bool = True,
+) -> tuple[TokenStore, MLSampleStore, MLSampleService, int]:
     settings = Settings(app_secret_key="a" * 44, data_dir=tmp_path)
     token_store = TokenStore(settings.database_path)
     instrument_store = InstrumentMasterStore(token_store)
@@ -44,6 +50,8 @@ def make_service(tmp_path, symbol: str = "RELIANCE") -> tuple[TokenStore, MLSamp
         "E",
     )
     instrument_id = int(sample_store.resolve_symbol(symbol)["id"])
+    if seed_quality:
+        seed_quality_run(token_store, instrument_id, symbol=symbol, fetch_item_status=fetch_item_status)
     return token_store, sample_store, MLSampleService(settings=settings, store=sample_store), instrument_id
 
 
@@ -82,6 +90,64 @@ def seed_candles(token_store: TokenStore, instrument_id: int, candles: list[dict
                     timestamp,
                 ),
             )
+
+
+def seed_quality_run(token_store: TokenStore, instrument_id: int, symbol: str, fetch_item_status: str) -> int:
+    timestamp = "2026-01-01T00:00:00+00:00"
+    with token_store._connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO historical_fetch_runs (
+                universe_name, lookback_calendar_days, from_date, to_date_exclusive,
+                status, total_symbols, mapped_symbols, skipped_symbols, error,
+                started_at, updated_at, completed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("NIFTY_500", 80, "2024-01-01", "2024-03-21", "completed", 1, 1, 0, "", timestamp, timestamp, timestamp),
+        )
+        run_id = cursor.lastrowid
+
+        conn.execute(
+            """
+            INSERT INTO historical_fetch_items (
+                run_id, index_constituent_id, instrument_id, company_name, industry,
+                symbol, isin, security_id, status, attempts, candles_received, error,
+                started_at, finished_at, updated_at,
+                request_from_date, request_to_date, archive_status, source_floor_reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id, 1, instrument_id, f"{symbol} LTD", "TEST_INDUSTRY",
+                symbol, "TEST_ISIN", "500325", fetch_item_status, 1, 80, "",
+                timestamp, timestamp, timestamp,
+                "2024-01-01", "2024-03-20", "older_history_backfill", "dhan_5_year_limit"
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO historical_instrument_archive (
+                instrument_id, security_id, symbol, source_provider, interval,
+                first_stored_candle_date, latest_stored_candle_date,
+                source_floor_reached, source_floor_date, source_floor_reason,
+                complete_available_history, last_successful_fetch_at,
+                last_no_new_data_at, next_retry_after, last_error,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                instrument_id, "500325", symbol, "dhan", "daily",
+                "2024-01-01", "2024-03-20",
+                1, "2024-01-01", "dhan_5_year_limit",
+                1, timestamp,
+                None, None, "",
+                timestamp, timestamp
+            ),
+        )
+        return run_id
 
 
 def make_80_candles(outcome: str, sample_candle_crosses_barriers: bool = False) -> list[dict]:
@@ -250,6 +316,43 @@ def test_generate_one_symbol_is_idempotent(tmp_path):
     assert second["samples_created"] == 0
     assert second["samples_updated"] == 21
     assert sample_store.sample_count_for_instrument(instrument_id) == 21
+
+
+def test_generate_one_rejects_missing_quality_report(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path, seed_quality=False)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    with pytest.raises(ValueError) as exc_info:
+        service.generate_one("RELIANCE")
+
+    assert "historical_run_id is missing" in str(exc_info.value)
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
+
+
+def test_generate_one_rejects_warning_quality_symbol_before_writing_samples(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    candles = make_80_candles("WIN")
+    candles[10]["volume"] = 0.0
+    seed_candles(token_store, instrument_id, candles)
+
+    with pytest.raises(ValueError) as exc_info:
+        service.generate_one("RELIANCE")
+
+    assert "failed quality gate" in str(exc_info.value)
+    assert "ZERO_VOLUME" in str(exc_info.value)
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
+
+
+def test_generate_one_rejects_blocked_quality_symbol_before_writing_samples(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path, fetch_item_status="failed")
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    with pytest.raises(ValueError) as exc_info:
+        service.generate_one("RELIANCE")
+
+    assert "failed quality gate" in str(exc_info.value)
+    assert "FETCH_FAILED" in str(exc_info.value)
+    assert sample_store.sample_count_for_instrument(instrument_id) == 0
 
 
 def test_generate_one_endpoint_returns_summary(tmp_path):
