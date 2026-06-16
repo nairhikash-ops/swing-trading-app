@@ -9,6 +9,7 @@ from app.data_quality import DataQualityService
 from app.historical_data import HistoricalDataService, HistoricalDataStore, upward_movers_universe_name
 from app.index_universe import IndexUniverseService, IndexUniverseStore
 from app.instrument_master import InstrumentMasterService, InstrumentMasterStore
+from app.ml_dataset import MLDatasetService
 from app.ml_foundation import MLFoundationService, MLFoundationStore
 from app.ml_samples import MLSampleService, MLSampleStore
 from app.move_events import MoveEventService
@@ -23,6 +24,7 @@ from app.schemas import (
     InstrumentMasterStatusResponse,
     InstrumentSearchItem,
     MLModelRegistryItem,
+    MLDatasetInspectionResponse,
     MLSampleBatchGenerateRequest,
     MLSampleBatchGenerateResponse,
     MLSampleGenerateResponse,
@@ -95,6 +97,11 @@ def build_ml_sample_service(settings: Settings) -> MLSampleService:
     return MLSampleService(settings=settings, store=MLSampleStore(token_store))
 
 
+def build_ml_dataset_service(settings: Settings) -> MLDatasetService:
+    token_store = TokenStore(settings.database_path)
+    return MLDatasetService(settings=settings, token_store=token_store)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -107,6 +114,7 @@ async def lifespan(app: FastAPI):
     move_event_service = build_move_event_service(settings)
     regime_service = build_regime_service(settings)
     ml_service = build_ml_service(settings)
+    ml_dataset_service = build_ml_dataset_service(settings)
     ml_sample_service = build_ml_sample_service(settings)
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
@@ -124,6 +132,7 @@ async def lifespan(app: FastAPI):
     app.state.move_event_service = move_event_service
     app.state.regime_service = regime_service
     app.state.ml_service = ml_service
+    app.state.ml_dataset_service = ml_dataset_service
     app.state.ml_sample_service = ml_sample_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
@@ -185,6 +194,10 @@ def get_ml_sample_service_dep() -> MLSampleService:
     return app.state.ml_sample_service
 
 
+def get_ml_dataset_service_dep() -> MLDatasetService:
+    return app.state.ml_dataset_service
+
+
 def get_settings_dep() -> Settings:
     return app.state.settings
 
@@ -197,6 +210,11 @@ async def health() -> HealthResponse:
 @app.get("/api/ml/status", response_model=MLStatusResponse)
 async def ml_status(ml_service: MLFoundationService = Depends(get_ml_service_dep)) -> MLStatusResponse:
     return MLStatusResponse(**ml_service.status())
+
+
+@app.get("/api/ml/dataset/inspect", response_model=MLDatasetInspectionResponse, tags=["ML"])
+async def inspect_ml_dataset(service: MLDatasetService = Depends(get_ml_dataset_service_dep)) -> MLDatasetInspectionResponse:
+    return MLDatasetInspectionResponse(**service.inspect())
 
 
 @app.post("/api/ml/training/start", response_model=MLTrainingJobResponse)

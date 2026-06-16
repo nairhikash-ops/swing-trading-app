@@ -1235,3 +1235,18 @@ class DemoJournalNotesUpdateRequest(BaseModel):
     management_notes: str = ""
     mistake_notes: str = ""
     tags: list[str] = []
+
+
+class MLDatasetInspectionResponse(BaseModel):
+    total_usable_rows: int
+    rows_by_symbol: dict[str, int]
+    rows_by_outcome: dict[str, int]
+    first_sample_date: str | None
+    last_sample_date: str | None
+    duplicate_sample_count: int
+    invalid_feature_json_count: int
+    invalid_window_length_count: int
+    missing_required_key_count: int
+    forbidden_feature_key_count: int
+    null_value_count: int
+    expected_feature_column_count: int
