@@ -1,6 +1,7 @@
 import os
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
@@ -97,15 +98,37 @@ def run_training_experiment(
     precision = precision_score(y_test, y_pred, zero_division=0)
     recall = recall_score(y_test, y_pred, zero_division=0)
 
-    # Top-decile WIN rate
+    # Ranking Diagnostics
     test_df = test_df.copy()
     test_df["prob"] = y_prob
     test_df_sorted = test_df.sort_values("prob", ascending=False)
-    top_10_percent_idx = max(1, int(len(test_df_sorted) * 0.1))
-    top_decile = test_df_sorted.iloc[:top_10_percent_idx]
-    top_decile_win_rate = top_decile["target"].mean()
-
     overall_win_rate = test_df["target"].mean()
+
+    def get_top_n_win_rate(percent):
+        idx = max(1, int(len(test_df_sorted) * (percent / 100.0)))
+        subset = test_df_sorted.iloc[:idx]
+        return subset["target"].mean()
+
+    top_1_win = get_top_n_win_rate(1)
+    top_5_win = get_top_n_win_rate(5)
+    top_10_win = get_top_n_win_rate(10)
+    top_20_win = get_top_n_win_rate(20)
+
+    decile_stats = []
+    if len(test_df_sorted) > 0:
+        chunks = np.array_split(test_df_sorted, 10)
+        for d, d_df in enumerate(chunks, start=1):
+            row_count = len(d_df)
+            win_count = len(d_df[d_df["outcome"] == "WIN"])
+            loss_count = len(d_df[d_df["outcome"] == "LOSS"])
+            timeout_count = len(d_df[d_df["outcome"] == "TIMEOUT"])
+            win_rate = win_count / row_count if row_count > 0 else 0.0
+            loss_rate = loss_count / row_count if row_count > 0 else 0.0
+            avg_score = d_df["prob"].mean() if row_count > 0 else 0.0
+            decile_stats.append(
+                f"D{d:02d} | Rows: {row_count:<5} | WIN: {win_count:<5} | LOSS: {loss_count:<5} | TO: {timeout_count:<4} | "
+                f"WIN%: {win_rate:.4f} | LOSS%: {loss_rate:.4f} | AvgProb: {avg_score:.4f}"
+            )
 
     report_lines = [
         "=== BASELINE TRAINING EXPERIMENT ===",
@@ -133,12 +156,20 @@ def run_training_experiment(
         f"WIN Precision:        {precision:.4f}",
         f"WIN Recall:           {recall:.4f}",
         f"Overall test WIN rate:{overall_win_rate:.4f}",
-        f"Top-decile WIN rate:  {top_decile_win_rate:.4f}",
         "",
         "Confusion Matrix (Test):",
         f"TN: {cm[0][0]}  FP: {cm[0][1]}",
         f"FN: {cm[1][0]}  TP: {cm[1][1]}",
+        "",
+        "=== RANKING DIAGNOSTICS ===",
+        f"Top 1%  WIN rate: {top_1_win:.4f} (Lift: {top_1_win/overall_win_rate if overall_win_rate else 0:.2f}x)",
+        f"Top 5%  WIN rate: {top_5_win:.4f} (Lift: {top_5_win/overall_win_rate if overall_win_rate else 0:.2f}x)",
+        f"Top 10% WIN rate: {top_10_win:.4f} (Lift: {top_10_win/overall_win_rate if overall_win_rate else 0:.2f}x)",
+        f"Top 20% WIN rate: {top_20_win:.4f} (Lift: {top_20_win/overall_win_rate if overall_win_rate else 0:.2f}x)",
+        "",
+        "--- DECILE ANALYSIS ---"
     ]
+    report_lines.extend(decile_stats)
 
     report_text = "\n".join(report_lines) + "\n"
     print(report_text)
