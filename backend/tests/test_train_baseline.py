@@ -55,7 +55,7 @@ def test_train_baseline_success(tmp_path, tiny_dataset):
         assert "Train row count:      8" in content
         assert "Test row count:       2" in content
         assert "=== RANKING DIAGNOSTICS ===" in content
-        assert "Top 10% WIN rate:" in content
+        assert "Top 10% | Rows:" in content
         assert "--- DECILE ANALYSIS ---" in content
         assert "D01 | Rows:" in content
 
