@@ -116,7 +116,14 @@ def run_training_experiment(
 
     decile_stats = []
     if len(test_df_sorted) > 0:
-        chunks = np.array_split(test_df_sorted, 10)
+        n_rows = len(test_df_sorted)
+        chunk_size = n_rows // 10
+        chunks = []
+        for i in range(10):
+            start = i * chunk_size
+            end = (i + 1) * chunk_size if i < 9 else n_rows
+            chunks.append(test_df_sorted.iloc[start:end])
+            
         for d, d_df in enumerate(chunks, start=1):
             row_count = len(d_df)
             win_count = len(d_df[d_df["outcome"] == "WIN"])
