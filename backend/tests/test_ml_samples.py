@@ -2,6 +2,7 @@ import inspect
 import json
 import pytest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -528,4 +529,30 @@ def test_generate_batch_endpoint_rejects_blank_symbols(tmp_path):
         app.dependency_overrides.clear()
     assert response.status_code == 400
     assert "Blank or whitespace-only" in response.json()["detail"]
+
+
+def test_get_existing_sample_dates_returns_correct_dates(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    service.generate_one("RELIANCE", dry_run=False)
+
+    from app.ml_foundation import ML_MODEL_NAME, ML_LABEL_NAME
+    dates = sample_store.get_existing_sample_dates(instrument_id, ML_MODEL_NAME, ML_LABEL_NAME)
+    assert len(dates) == 21
+    assert sample_date() in dates
+
+
+def test_generate_one_dry_run_bulk_queries_once(tmp_path):
+    token_store, sample_store, service, instrument_id = make_service(tmp_path)
+    seed_candles(token_store, instrument_id, make_80_candles("WIN"))
+
+    with patch.object(sample_store, "get_existing_sample_dates", wraps=sample_store.get_existing_sample_dates) as mock_get_dates, \
+         patch.object(sample_store, "sample_exists", wraps=sample_store.sample_exists) as mock_sample_exists:
+
+         summary = service.generate_one("RELIANCE", dry_run=True)
+
+         mock_get_dates.assert_called_once()
+         mock_sample_exists.assert_not_called()
+         assert summary["samples_created"] == 21
 

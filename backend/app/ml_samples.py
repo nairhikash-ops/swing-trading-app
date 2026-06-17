@@ -200,6 +200,25 @@ class MLSampleStore:
             ).fetchone()
         return row is not None
 
+    def get_existing_sample_dates(
+        self,
+        instrument_id: int,
+        model_name: str,
+        label_name: str,
+    ) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sample_date
+                FROM ml_samples
+                WHERE instrument_id = ?
+                  AND model_name = ?
+                  AND label_name = ?
+                """,
+                (instrument_id, model_name, label_name),
+            ).fetchall()
+        return {row["sample_date"] for row in rows}
+
     def sample_count_for_instrument(self, instrument_id: int) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -263,6 +282,15 @@ class MLSampleService:
         candles = self.store.candles_for_instrument(int(instrument["id"]))
         created = 0
         updated = 0
+
+        existing_dates: set[str] = set()
+        if dry_run:
+            existing_dates = self.store.get_existing_sample_dates(
+                instrument_id=int(instrument["id"]),
+                model_name=ML_MODEL_NAME,
+                label_name=ML_LABEL_NAME,
+            )
+
         generated_samples: list[dict[str, Any]] = []
         for sample_index in range(lookback_sessions - 1, len(candles)):
             input_window = candles[sample_index - lookback_sessions + 1 : sample_index + 1]
@@ -276,12 +304,7 @@ class MLSampleService:
                 future_window_sessions=future_window_sessions,
             )
             if dry_run:
-                exists = self.store.sample_exists(
-                    model_name=sample["model_name"],
-                    label_name=sample["label_name"],
-                    instrument_id=sample["instrument_id"],
-                    sample_date=sample["sample_date"],
-                )
+                exists = sample["sample_date"] in existing_dates
                 action = "updated" if exists else "created"
             else:
                 action = self.store.upsert_sample(sample)
