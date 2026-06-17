@@ -1,0 +1,245 @@
+import os
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix, precision_score, recall_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+# Frozen Baseline Payoff Expectancy (V1 Stock-Only)
+# Using strict 80/20 single-split baseline, NOT walk-forward averages.
+FROZEN_BASELINE_EXP = {
+    1: 0.3841,
+    5: 0.1176,
+    10: -0.0254,
+    20: -0.1604
+}
+
+def encode_label(outcome: str) -> int:
+    """Encode outcome to binary classification target."""
+    if outcome == "WIN":
+        return 1
+    elif outcome in ("LOSS", "TIMEOUT"):
+        return 0
+    raise ValueError(f"Unknown outcome: {outcome}")
+
+def run_regime_training_experiment(
+    input_csv_path: str = "/app/data/exports/ml_dataset_ohlcv_regime_v1.csv",
+    report_path: str = "/app/data/exports/regime_baseline_report.txt",
+    model_path: str = "/app/data/models/experiments/regime_logistic_ohlcv_v1.joblib"
+):
+    if not os.path.exists(input_csv_path):
+        raise FileNotFoundError(f"Dataset not found at {input_csv_path}")
+
+    print(f"Loading regime dataset from {input_csv_path}...")
+    df = pd.read_csv(input_csv_path)
+
+    # 1. Verify 3 metadata columns
+    metadata_cols = ["symbol", "sample_date", "outcome"]
+    
+    # 2. Verify 300 technical features
+    technical_cols = []
+    for i in range(60):
+        prefix = f"c{i:02d}_"
+        technical_cols.extend([
+            f"{prefix}open_rel",
+            f"{prefix}high_rel",
+            f"{prefix}low_rel",
+            f"{prefix}close_rel",
+            f"{prefix}volume_rel",
+        ])
+        
+    # 3. Verify 8 regime features
+    regime_cols = [
+        "market_median_20d_return",
+        "market_breakout_rate",
+        "market_breakdown_rate",
+        "market_breadth_delta",
+        "market_cross_sectional_volatility",
+        "stock_20d_return_minus_market_median",
+        "stock_is_stronger_than_market",
+        "stock_breakout_while_market_weak"
+    ]
+    
+    expected_cols = metadata_cols + technical_cols + regime_cols
+
+    # 4. Verify 311 columns
+    if len(df.columns) != 311:
+        raise ValueError(f"Expected exactly 311 columns, got {len(df.columns)}")
+        
+    actual_cols = list(df.columns)
+    if set(actual_cols) != set(expected_cols):
+        missing = set(expected_cols) - set(actual_cols)
+        extra = set(actual_cols) - set(expected_cols)
+        raise ValueError(f"Column mismatch. Missing: {missing}, Extra: {extra}")
+
+    # 5. Verify zero null/inf in feature columns
+    feature_cols = technical_cols + regime_cols
+    if df[feature_cols].isna().any().any():
+        raise ValueError("NaN values found in feature columns.")
+    if np.isinf(df[feature_cols].select_dtypes(include=np.number)).any().any():
+        raise ValueError("Infinite values found in feature columns.")
+
+    # Sort by sample_date for chronological split
+    df = df.sort_values("sample_date").reset_index(drop=True)
+
+    # 6. Binary target
+    df["target"] = df["outcome"].apply(encode_label)
+
+    # 7. Chronological 80/20 split
+    split_idx = int(len(df) * 0.8)
+    train_df = df.iloc[:split_idx]
+    test_df = df.iloc[split_idx:]
+
+    X_train = train_df[feature_cols]
+    y_train = train_df["target"]
+    X_test = test_df[feature_cols]
+    y_test = test_df["target"]
+
+    # Baseline Dummy
+    dummy = DummyClassifier(strategy="most_frequent")
+    dummy.fit(X_train, y_train)
+    dummy_acc = accuracy_score(y_test, dummy.predict(X_test))
+
+    # 8. Train StandardScaler + LogisticRegression
+    print("Training StandardScaler + LogisticRegression...")
+    lr = Pipeline([
+        ("scaler", StandardScaler()),
+        ("lr", LogisticRegression(max_iter=1000, random_state=42))
+    ])
+    lr.fit(X_train, y_train)
+
+    y_pred = lr.predict(X_test)
+    y_prob = lr.predict_proba(X_test)[:, 1]
+
+    # Metrics
+    lr_acc = accuracy_score(y_test, y_pred)
+    lr_bal_acc = balanced_accuracy_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    recall = recall_score(y_test, y_pred, zero_division=0)
+
+    # Ranking Diagnostics
+    test_df = test_df.copy()
+    test_df["prob"] = y_prob
+    test_df_sorted = test_df.sort_values("prob", ascending=False)
+    overall_win_rate = test_df["target"].mean()
+
+    def get_top_n_stats(percent):
+        idx = max(1, int(len(test_df_sorted) * (percent / 100.0)))
+        subset = test_df_sorted.iloc[:idx]
+        row_count = len(subset)
+        win_count = len(subset[subset["outcome"] == "WIN"])
+        loss_count = len(subset[subset["outcome"] == "LOSS"])
+        timeout_count = len(subset[subset["outcome"] == "TIMEOUT"])
+        
+        win_rate = win_count / row_count if row_count > 0 else 0.0
+        loss_rate = loss_count / row_count if row_count > 0 else 0.0
+        timeout_rate = timeout_count / row_count if row_count > 0 else 0.0
+        
+        expectancy = (win_rate * 7.0) - (loss_rate * 3.0)
+        lift = win_rate / overall_win_rate if overall_win_rate > 0 else 0.0
+        
+        baseline_exp = FROZEN_BASELINE_EXP.get(percent, 0.0)
+        exp_delta = expectancy - baseline_exp
+        
+        # 9 & 10. Report expectancy and compare against baseline
+        return (
+            f"Top {percent:02d}% | Rows: {row_count:<5} | WIN: {win_count:<5} | LOSS: {loss_count:<5} | TO: {timeout_count:<4} | "
+            f"WIN%: {win_rate:.4f} (Lift: {lift:.2f}x) | LOSS%: {loss_rate:.4f} | "
+            f"Exp: {expectancy:+.4f} (vs Frozen: {baseline_exp:+.4f} | Delta: {exp_delta:+.4f})"
+        )
+
+    top_stats = [
+        get_top_n_stats(1),
+        get_top_n_stats(5),
+        get_top_n_stats(10),
+        get_top_n_stats(20)
+    ]
+
+    decile_stats = []
+    if len(test_df_sorted) > 0:
+        n_rows = len(test_df_sorted)
+        chunk_size = n_rows // 10
+        chunks = []
+        for i in range(10):
+            start = i * chunk_size
+            end = (i + 1) * chunk_size if i < 9 else n_rows
+            chunks.append(test_df_sorted.iloc[start:end])
+            
+        for d, d_df in enumerate(chunks, start=1):
+            row_count = len(d_df)
+            win_count = len(d_df[d_df["outcome"] == "WIN"])
+            loss_count = len(d_df[d_df["outcome"] == "LOSS"])
+            timeout_count = len(d_df[d_df["outcome"] == "TIMEOUT"])
+            win_rate = win_count / row_count if row_count > 0 else 0.0
+            loss_rate = loss_count / row_count if row_count > 0 else 0.0
+            avg_score = d_df["prob"].mean() if row_count > 0 else 0.0
+            
+            # Additional worst-period risk indicator at decile level
+            expectancy = (win_rate * 7.0) - (loss_rate * 3.0)
+            
+            decile_stats.append(
+                f"D{d:02d} | Rows: {row_count:<5} | WIN: {win_count:<5} | LOSS: {loss_count:<5} | TO: {timeout_count:<4} | "
+                f"WIN%: {win_rate:.4f} | LOSS%: {loss_rate:.4f} | AvgProb: {avg_score:.4f} | Exp: {expectancy:+.4f}"
+            )
+
+    report_lines = [
+        "=== REGIME BASELINE TRAINING EXPERIMENT ===",
+        "Artifact status: EXPERIMENTAL V1.6 DIAGNOSTICS - not for live trading",
+        f"Input CSV:            {input_csv_path}",
+        f"Input row count:      {len(df)}",
+        f"Feature column count: {len(feature_cols)} (300 technical + 8 regime)",
+        f"Total column count:   {len(df.columns) - 1}",  # minus our temp target col
+        f"Train row count:      {len(train_df)}",
+        f"Test row count:       {len(test_df)}",
+        "",
+        "Label counts overall:",
+        str(df["outcome"].value_counts().to_dict()),
+        "",
+        "Label counts train:",
+        str(train_df["outcome"].value_counts().to_dict()),
+        "",
+        "Label counts test:",
+        str(test_df["outcome"].value_counts().to_dict()),
+        "",
+        "=== METRICS ===",
+        f"Dummy Baseline Acc:   {dummy_acc:.4f}",
+        f"Logistic Reg Acc:     {lr_acc:.4f}",
+        f"Logistic Bal Acc:     {lr_bal_acc:.4f}",
+        f"WIN Precision:        {precision:.4f}",
+        f"WIN Recall:           {recall:.4f}",
+        f"Overall test WIN rate:{overall_win_rate:.4f}",
+        "",
+        "Confusion Matrix (Test):",
+        f"TN: {cm[0][0]:<5} FP: {cm[0][1]:<5}",
+        f"FN: {cm[1][0]:<5} TP: {cm[1][1]:<5}",
+        "",
+        "=== RANKING DIAGNOSTICS vs STOCK-ONLY BASELINE ===",
+    ]
+    report_lines.extend(top_stats)
+    report_lines.extend([
+        "",
+        "--- DECILE ANALYSIS ---"
+    ])
+    report_lines.extend(decile_stats)
+
+    report_text = "\n".join(report_lines) + "\n"
+    print(report_text)
+
+    # Save report
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(report_text)
+
+    # Save model
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    joblib.dump(lr, model_path)
+
+    print(f"Report saved to: {report_path}")
+    print(f"Experimental model saved to: {model_path}")
+
+if __name__ == "__main__":
+    run_regime_training_experiment()
