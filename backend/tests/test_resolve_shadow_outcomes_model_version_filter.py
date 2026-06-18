@@ -1,13 +1,13 @@
 """Tests for V1.24 model-version filtering and dry-run safety in
 resolve_shadow_outcomes.py.
 
-All tests use a real in-memory / temp SQLite DB — no mocks of the DB layer.
-The token_store / candle layer IS mocked so we do not need the full Dhan DB.
+All tests use a real temp SQLite DB for the shadow_tracking table.
+The token_store / candle layer is patched at the _resolve_instrument,
+_fetch_entry_close, and _fetch_future_window level so plain dicts reach
+classify_outcome correctly — avoids the MagicMock __getitem__ / dict() pitfall.
 """
 
-import io
 import sqlite3
-import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -17,18 +17,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.shadow_tracking import (
-    DEFAULT_DB_PATH,
     init_db,
     get_observing_records_by_model,
     get_model_version_counts,
-    get_connection,
 )
 from app.scripts.resolve_shadow_outcomes import run_resolver
 from app.ml_foundation import ML_FUTURE_WINDOW_SESSIONS
 
 
 # ---------------------------------------------------------------------------
-# Fixtures / helpers
+# DB helpers
 # ---------------------------------------------------------------------------
 
 def _temp_shadow_db() -> str:
@@ -51,7 +49,6 @@ def _insert_row(
     """Insert a synthetic shadow row and return its id."""
     now = datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
     cur = conn.execute(
         """
         INSERT INTO shadow_tracking (
@@ -83,15 +80,24 @@ def _get_row(db_path: str, row_id: int) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Simulate future candle data
+# Candle mock helpers
+#
+# We patch _resolve_instrument, _fetch_entry_close, and _fetch_future_window
+# directly in the resolver module.  This avoids the sqlite3.Row / dict()
+# conversion issue that arises when mocking at the connection level.
 # ---------------------------------------------------------------------------
 
+ENTRY_CLOSE = 150.0  # entry price used by all tests
+
+
 def _make_future_window(sessions: int = ML_FUTURE_WINDOW_SESSIONS, win: bool = True):
-    """Return a list of fake candle dicts that resolve to WIN if win=True."""
+    """Return plain dicts that classify_outcome can consume.
+
+    If win=True, candle[2] has a very high price that breaches target.
+    """
     candles = []
     for i in range(sessions):
         if win and i == 2:
-            # high > target price (entry_close * 1.07)
             candles.append({"trading_date": f"2026-05-{20+i:02d}", "high": 9999.0, "low": 100.0})
         else:
             candles.append({"trading_date": f"2026-05-{20+i:02d}", "high": 200.0, "low": 190.0})
@@ -99,51 +105,37 @@ def _make_future_window(sessions: int = ML_FUTURE_WINDOW_SESSIONS, win: bool = T
 
 
 @contextmanager
-def _patch_token_store(future_window, entry_close=150.0):
-    """Context manager that patches the token_store connection used by the resolver.
+def _patch_candle_layer(future_window, instrument_id: int = 99):
+    """Patch _resolve_instrument, _fetch_entry_close, _fetch_future_window.
 
-    Injects fake instrument, entry candle, and future candle data.
+    This bypasses the SQLite token_store entirely so the tests do not need
+    a Dhan auth DB on disk.
     """
-    mock_inst_row = MagicMock()
-    mock_inst_row.__getitem__ = lambda self, key: 99 if key == "id" else None
-
-    mock_entry_row = MagicMock()
-    mock_entry_row.__getitem__ = lambda self, key: entry_close if key == "close" else None
-
-    mock_future_rows = [MagicMock() for _ in future_window]
-    for mock_row, candle in zip(mock_future_rows, future_window):
-        mock_row.__getitem__ = lambda self, key, c=candle: c[key]
-
-    mock_conn = MagicMock()
-    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-    mock_conn.__exit__ = MagicMock(return_value=False)
-    mock_conn.row_factory = None
-
-    def side_effect_execute(sql, params=()):
-        mock_cursor = MagicMock()
-        sql_upper = sql.strip().upper()
-        if "FROM INSTRUMENTS" in sql_upper:
-            mock_cursor.fetchone.return_value = mock_inst_row
-        elif "FROM DAILY_CANDLES" in sql_upper and "LIMIT" not in sql_upper:
-            mock_cursor.fetchone.return_value = mock_entry_row
-        elif "FROM DAILY_CANDLES" in sql_upper and "LIMIT" in sql_upper:
-            mock_cursor.fetchall.return_value = mock_future_rows
-        else:
-            mock_cursor.fetchone.return_value = None
-            mock_cursor.fetchall.return_value = []
-        return mock_cursor
-
-    mock_conn.execute = side_effect_execute
-
-    mock_token_store = MagicMock()
-    mock_token_store._connect.return_value = mock_conn
-
     mock_settings = MagicMock()
     mock_settings.database_path = ":memory:"
 
+    # TokenStore._connect() is still called; give it a no-op connection
+    mock_conn_ctx = MagicMock()
+    mock_conn_ctx.__enter__ = MagicMock(return_value=MagicMock())
+    mock_conn_ctx.__exit__ = MagicMock(return_value=False)
+    mock_ts = MagicMock()
+    mock_ts._connect.return_value = mock_conn_ctx
+
     with (
         patch("app.scripts.resolve_shadow_outcomes.get_settings", return_value=mock_settings),
-        patch("app.scripts.resolve_shadow_outcomes.TokenStore", return_value=mock_token_store),
+        patch("app.scripts.resolve_shadow_outcomes.TokenStore", return_value=mock_ts),
+        patch(
+            "app.scripts.resolve_shadow_outcomes._resolve_instrument",
+            return_value=instrument_id,
+        ),
+        patch(
+            "app.scripts.resolve_shadow_outcomes._fetch_entry_close",
+            return_value=ENTRY_CLOSE,
+        ),
+        patch(
+            "app.scripts.resolve_shadow_outcomes._fetch_future_window",
+            return_value=future_window,
+        ),
     ):
         yield
 
@@ -161,7 +153,7 @@ class TestDryRunDoesNotWrite:
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
 
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(shadow_db_path=db, model_version="stock_opportunity_hgb_regime_v1", execute=False)
 
         row = _get_row(db, 1)
@@ -180,7 +172,7 @@ class TestDryRunDoesNotWrite:
         counts_before = dict(get_model_version_counts(db))
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=False)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(shadow_db_path=db, model_version="stock_opportunity_hgb_regime_v1", execute=False)
 
         counts_after = dict(get_model_version_counts(db))
@@ -197,7 +189,7 @@ class TestDryRunPrintsExpectedOutput:
         _insert_row(db, "stock_opportunity_hgb_regime_v1", "DDDD", rank=1)
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(shadow_db_path=db, model_version="stock_opportunity_hgb_regime_v1", execute=False)
 
         captured = capsys.readouterr().out
@@ -225,7 +217,7 @@ class TestModelVersionFilterIsolation:
         lr_id  = _insert_row(db, "stock_opportunity_ohlcv_regime_v1", "FFFF", rank=1)
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(
                 shadow_db_path=db,
                 model_version="stock_opportunity_hgb_regime_v1",
@@ -248,7 +240,7 @@ class TestModelVersionFilterIsolation:
         lr_id = _insert_row(db, "stock_opportunity_ohlcv_regime_v1", "HHHH", rank=1)
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(
                 shadow_db_path=db,
                 model_version="stock_opportunity_hgb_regime_v1",
@@ -267,7 +259,7 @@ class TestModelVersionFilterIsolation:
         lr_id  = _insert_row(db, "stock_opportunity_ohlcv_regime_v1", "JJJJ", rank=1)
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(shadow_db_path=db, model_version=None, execute=True)
 
         hgb_row = _get_row(db, hgb_id)
@@ -286,7 +278,7 @@ class TestExecuteWritesOutcomes:
         row_id = _insert_row(db, "stock_opportunity_hgb_regime_v1", "KKKK", rank=1)
 
         future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(
                 shadow_db_path=db,
                 model_version="stock_opportunity_hgb_regime_v1",
@@ -303,7 +295,7 @@ class TestExecuteWritesOutcomes:
 
         # Only 5 future sessions — not enough
         future = _make_future_window(sessions=5, win=True)
-        with _patch_token_store(future):
+        with _patch_candle_layer(future):
             run_resolver(
                 shadow_db_path=db,
                 model_version="stock_opportunity_hgb_regime_v1",
