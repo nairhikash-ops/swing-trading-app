@@ -114,23 +114,34 @@ def _classify_record(conn, record: Dict[str, Any]) -> Dict[str, Any]:
 def run_resolver(
     shadow_db_path: str = DEFAULT_DB_PATH,
     model_version: Optional[str] = None,
+    scored_sample_date: Optional[str] = None,
     execute: bool = False,
 ) -> None:
     """Resolve shadow outcomes for the specified model_version.
 
     Args:
-        shadow_db_path: Path to the shadow tracking SQLite database.
-        model_version:  If provided, only OBSERVING rows for this model_version
-                        are considered.  If None, all OBSERVING rows are
-                        considered (backward-compatible behaviour).
-        execute:        If False (default), dry-run only — no DB writes.
-                        If True, outcomes are written to the DB.
+        shadow_db_path:      Path to the shadow tracking SQLite database.
+        model_version:       If provided, only OBSERVING rows for this model_version
+                             are considered. If None, all OBSERVING rows are
+                             considered (backward-compatible behaviour).
+        scored_sample_date:  If provided, further filter to only OBSERVING rows
+                             whose scored_sample_date matches this value (YYYY-MM-DD).
+                             If None, all OBSERVING rows for the model_version are
+                             processed (backward-compatible behaviour).
+        execute:             If False (default), dry-run only — no DB writes.
+                             If True, outcomes are written to the DB.
 
     V1.24 safety rules
     ------------------
     - Dry-run is the default.  Pass execute=True only after dry-run is verified.
-    - model_version should always be supplied for V1.24 runs so that HGB and
+    - model_version should always be supplied for V1.24+ runs so that HGB and
       LogisticRegression rows are never mixed.
+
+    V1.25 safety rules
+    ------------------
+    - scored_sample_date is optional but recommended when multiple shadow dates
+      exist for the same model_version.  It prevents accidentally resolving rows
+      from a different date in the same run.
     """
     settings = get_settings()
     token_store = TokenStore(settings.database_path)
@@ -143,7 +154,11 @@ def run_resolver(
         print("=== EXECUTE MODE: WRITING TO DB ===")
     else:
         print("=== RESOLVER DRY-RUN ===")
-    print(f"Model version filter : {model_version if model_version else '(none — all models)'}")
+    print(f"Model version filter      : {model_version if model_version else '(none — all models)'}")
+    if scored_sample_date:
+        print(f"Scored sample date filter : {scored_sample_date}")
+    else:
+        print(f"Scored sample date filter : (none — all dates for model_version)")
     print("=" * 70)
 
     # --- Fetch OBSERVING records --------------------------------------------
@@ -151,6 +166,10 @@ def run_resolver(
         records = get_observing_records_by_model(shadow_db_path, model_version)
     else:
         records = get_observing_records(shadow_db_path)
+
+    # V1.25: optional scored_sample_date filter applied after fetch.
+    if scored_sample_date:
+        records = [r for r in records if r.get("scored_sample_date") == scored_sample_date]
 
     print(f"Total OBSERVING rows : {len(records)}")
 
@@ -297,11 +316,23 @@ def main() -> None:
             "Without this flag the script runs in DRY-RUN mode and makes no DB changes."
         ),
     )
+    parser.add_argument(
+        "--scored-sample-date",
+        type=str,
+        default=None,
+        help=(
+            "V1.25: Further filter OBSERVING rows to this scored_sample_date (YYYY-MM-DD). "
+            "When supplied, only rows whose scored_sample_date matches are processed. "
+            "Without this flag all OBSERVING rows for --model-version are processed. "
+            "Example: --scored-sample-date 2026-05-21"
+        ),
+    )
     args = parser.parse_args()
 
     run_resolver(
         shadow_db_path=args.db_path,
         model_version=args.model_version,
+        scored_sample_date=args.scored_sample_date,
         execute=args.execute,
     )
 

@@ -3,6 +3,13 @@ track_shadow_hgb_shortlist.py
 
 Tracks HGB candidate picks in the shadow tracking database under
 the candidate model version stock_opportunity_hgb_regime_v1.
+
+V1.25 additions
+---------------
+- --ranked-csv PATH  : explicit path to ranked CSV (must be paired with --meta-json).
+- --meta-json PATH   : explicit path to meta JSON  (must be paired with --ranked-csv).
+  When both are supplied the script reads those files instead of the latest defaults.
+  Supplying only one raises ValueError immediately.
 """
 from __future__ import annotations
 import argparse
@@ -20,13 +27,34 @@ def run_track_shadow_hgb_shortlist(
     exports_dir: str = "/app/data/exports",
     db_path: str = DEFAULT_DB_PATH,
     allow_live_today: bool = False,
-    execute: bool = False
+    execute: bool = False,
+    ranked_csv: str | None = None,
+    meta_json: str | None = None,
 ):
-    csv_path = os.path.join(exports_dir, "latest_hgb_regime_rankings.csv")
-    meta_path = os.path.join(exports_dir, "latest_hgb_regime_rankings.meta.json")
+    # V1.25: explicit path support — both must be supplied together or both omitted.
+    _ranked_csv_supplied = ranked_csv is not None
+    _meta_json_supplied  = meta_json is not None
+    if _ranked_csv_supplied != _meta_json_supplied:
+        raise ValueError(
+            "--ranked-csv and --meta-json must be supplied together. "
+            "Supplying only one is not allowed. "
+            f"(ranked_csv={ranked_csv!r}, meta_json={meta_json!r})"
+        )
+
+    if ranked_csv is not None and meta_json is not None:
+        # Explicit paths supplied — use them directly.
+        csv_path  = ranked_csv
+        meta_path = meta_json
+    else:
+        # Default behaviour: read latest files.
+        csv_path  = os.path.join(exports_dir, "latest_hgb_regime_rankings.csv")
+        meta_path = os.path.join(exports_dir, "latest_hgb_regime_rankings.meta.json")
 
     if not os.path.exists(csv_path) or not os.path.exists(meta_path):
-        raise FileNotFoundError("HGB rankings or HGB rankings metadata not found.")
+        raise FileNotFoundError(
+            f"HGB rankings or HGB rankings metadata not found. "
+            f"(csv={csv_path!r}, meta={meta_path!r})"
+        )
 
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -127,7 +155,40 @@ def run_track_shadow_hgb_shortlist(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Track HGB shadow shortlist")
-    parser.add_argument("--execute", action="store_true", help="Perform actual DB insertion (default is dry-run)")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Track HGB shadow shortlist.\n\n"
+            "V1.25: Supply --ranked-csv and --meta-json together to use date-specific\n"
+            "archive files instead of the latest defaults. Supplying only one fails loudly."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Perform actual DB insertion (default is dry-run)",
+    )
+    parser.add_argument(
+        "--ranked-csv",
+        type=str,
+        default=None,
+        help=(
+            "Path to a specific ranked CSV file (e.g. hgb_regime_rankings_2026-05-21.csv). "
+            "Must be paired with --meta-json. Overrides the latest-file default."
+        ),
+    )
+    parser.add_argument(
+        "--meta-json",
+        type=str,
+        default=None,
+        help=(
+            "Path to a specific meta JSON file (e.g. hgb_regime_rankings_2026-05-21.meta.json). "
+            "Must be paired with --ranked-csv. Overrides the latest-file default."
+        ),
+    )
     args = parser.parse_args()
-    run_track_shadow_hgb_shortlist(execute=args.execute)
+    run_track_shadow_hgb_shortlist(
+        execute=args.execute,
+        ranked_csv=args.ranked_csv,
+        meta_json=args.meta_json,
+    )

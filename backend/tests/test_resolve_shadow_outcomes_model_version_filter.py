@@ -327,3 +327,117 @@ class TestGetObservingRecordsByModel:
         _insert_row(db, "model_a", "AAA", rank=1, tracking_status="RESOLVED")
         rows = get_observing_records_by_model(db, "model_a")
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# V1.25: --scored-sample-date filter tests
+# ---------------------------------------------------------------------------
+
+class TestScoredSampleDateFilter:
+    """scored_sample_date filter must restrict resolution to one date only."""
+
+    def test_only_target_date_rows_resolved(self):
+        """When --scored-sample-date D1 is supplied, rows for D2 are untouched."""
+        db = _temp_shadow_db()
+        hgb_d1 = _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "MMMM",
+            rank=1, scored_sample_date="2026-05-21",
+        )
+        hgb_d2 = _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "NNNN",
+            rank=2, scored_sample_date="2026-06-01",
+        )
+
+        future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
+        with _patch_candle_layer(future):
+            run_resolver(
+                shadow_db_path=db,
+                model_version="stock_opportunity_hgb_regime_v1",
+                scored_sample_date="2026-05-21",
+                execute=True,
+            )
+
+        d1_row = _get_row(db, hgb_d1)
+        d2_row = _get_row(db, hgb_d2)
+
+        assert d1_row["tracking_status"] == "RESOLVED", (
+            "D1 row must be resolved when --scored-sample-date D1 is supplied"
+        )
+        assert d2_row["tracking_status"] == "OBSERVING", (
+            "D2 row must remain OBSERVING — different date, must not be touched"
+        )
+
+    def test_without_scored_sample_date_resolves_all_dates_for_model(self):
+        """Without --scored-sample-date, all OBSERVING rows for model_version
+        are resolved (backward-compatible behaviour)."""
+        db = _temp_shadow_db()
+        hgb_d1 = _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "PPPP",
+            rank=1, scored_sample_date="2026-05-21",
+        )
+        hgb_d2 = _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "QQQQ",
+            rank=2, scored_sample_date="2026-06-01",
+        )
+
+        future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
+        with _patch_candle_layer(future):
+            run_resolver(
+                shadow_db_path=db,
+                model_version="stock_opportunity_hgb_regime_v1",
+                scored_sample_date=None,   # no date filter
+                execute=True,
+            )
+
+        d1_row = _get_row(db, hgb_d1)
+        d2_row = _get_row(db, hgb_d2)
+
+        assert d1_row["tracking_status"] == "RESOLVED", "D1 must be resolved"
+        assert d2_row["tracking_status"] == "RESOLVED", "D2 must also be resolved when no date filter"
+
+    def test_dry_run_with_scored_sample_date_does_not_write(self):
+        """Dry-run with --scored-sample-date never writes to DB regardless of filter."""
+        db = _temp_shadow_db()
+        row_id = _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "RRRR",
+            rank=1, scored_sample_date="2026-05-21",
+        )
+
+        future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
+        with _patch_candle_layer(future):
+            run_resolver(
+                shadow_db_path=db,
+                model_version="stock_opportunity_hgb_regime_v1",
+                scored_sample_date="2026-05-21",
+                execute=False,   # dry-run
+            )
+
+        row = _get_row(db, row_id)
+        assert row["tracking_status"] == "OBSERVING", (
+            "Dry-run with --scored-sample-date must not change tracking_status"
+        )
+        assert row["future_observed_outcome"] is None, (
+            "Dry-run with --scored-sample-date must not set future_observed_outcome"
+        )
+
+    def test_scored_sample_date_filter_shown_in_dry_run_output(self, capsys):
+        """When --scored-sample-date is supplied, the dry-run header shows it."""
+        db = _temp_shadow_db()
+        _insert_row(
+            db, "stock_opportunity_hgb_regime_v1", "SSSS",
+            rank=1, scored_sample_date="2026-05-21",
+        )
+
+        future = _make_future_window(ML_FUTURE_WINDOW_SESSIONS, win=True)
+        with _patch_candle_layer(future):
+            run_resolver(
+                shadow_db_path=db,
+                model_version="stock_opportunity_hgb_regime_v1",
+                scored_sample_date="2026-05-21",
+                execute=False,
+            )
+
+        captured = capsys.readouterr().out
+        assert "2026-05-21" in captured, "Scored sample date must appear in dry-run output"
+        assert "Scored sample date filter" in captured, "Header label must be present"
+
