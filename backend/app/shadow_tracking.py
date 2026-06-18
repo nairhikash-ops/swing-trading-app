@@ -137,3 +137,80 @@ def update_shadow_outcome(db_path: str, record_id: int, outcome_data: Dict[str, 
     ))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# V1.24: Model-version-isolated query helpers
+# These helpers filter by model_version so that HGB and LogisticRegression
+# rows are never mixed during resolution or reporting.
+# ---------------------------------------------------------------------------
+
+def get_observing_records_by_model(
+    db_path: str, model_version: str
+) -> List[Dict[str, Any]]:
+    """Return only OBSERVING rows for the specified model_version.
+
+    Used by the resolver when --model-version is passed to ensure that
+    records belonging to other model versions are never touched.
+    """
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM shadow_tracking WHERE tracking_status = 'OBSERVING' AND model_version = ?",
+        (model_version,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_resolved_records_by_model(
+    db_path: str, model_version: str
+) -> List[Dict[str, Any]]:
+    """Return only RESOLVED rows for the specified model_version.
+
+    Used by the performance reporter when --model-version is passed to ensure
+    that cross-model metrics are never mixed in one report.
+    """
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM shadow_tracking WHERE tracking_status = 'RESOLVED' AND model_version = ?",
+        (model_version,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_records_by_model(
+    db_path: str, model_version: str
+) -> List[Dict[str, Any]]:
+    """Return ALL rows (any tracking_status) for the specified model_version.
+
+    Used by the comparison script so it can report on both OBSERVING and
+    RESOLVED rows, enabling a premature-comparison warning.
+    """
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM shadow_tracking WHERE model_version = ?",
+        (model_version,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_model_version_counts(db_path: str) -> List[tuple]:
+    """Return (model_version, count) for every model_version in the DB.
+
+    Used by the dry-run resolver to print before/after DB counts without
+    performing any write.
+    """
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        "SELECT model_version, COUNT(1) FROM shadow_tracking GROUP BY model_version ORDER BY model_version"
+    ).fetchall()
+    conn.close()
+    return [(r[0], r[1]) for r in rows]
