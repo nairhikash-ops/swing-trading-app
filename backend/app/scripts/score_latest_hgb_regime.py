@@ -46,9 +46,29 @@ def _setup_logging() -> None:
 
 
 def _load_schema(schema_path: Path) -> list:
+    """Load feature names from a schema file.
+
+    Handles two formats:
+      - Bare JSON list:  ["c00_open_rel", "c00_high_rel", ...]  (real HGB model)
+      - Dict format:     {"features": [...]}  (test fixtures / LR model)
+    """
     with schema_path.open("r", encoding="utf-8") as f:
-        schema = json.load(f)
-    return schema.get("features", [])
+        raw = json.load(f)
+
+    if isinstance(raw, list):
+        return raw
+    elif isinstance(raw, dict):
+        return (
+            raw.get("features")
+            or raw.get("feature_order")
+            or raw.get("feature_names")
+            or []
+        )
+    else:
+        raise ValueError(
+            f"Unexpected schema format in {schema_path}: "
+            f"expected list or dict, got {type(raw).__name__}."
+        )
 
 
 def _resolve_sample_date(df: pd.DataFrame, requested: str | None) -> str:
