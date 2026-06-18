@@ -27,29 +27,20 @@ def run_batch(
         constituents = universe_service.nifty_500_constituents()
         candidate_symbols = [c["symbol"].upper() for c in constituents]
 
-    # 2. Get already generated symbols
-    already_generated = set()
-    with ml_store._connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT symbol
-            FROM ml_samples
-            WHERE model_name = ? AND label_name = ?
-            """,
-            (ML_MODEL_NAME, ML_LABEL_NAME)
-        ).fetchall()
-        already_generated = {row["symbol"].upper() for row in rows}
-
+    # 2. Skip already_generated check for incremental refreshing
+    # The batch generation now relies on generate_one's internal checking to
+    # skip existing samples efficiently without dropping the symbol.
+    
     summary: dict[str, Any] = {
         "dry_run": dry_run,
         "execute": not dry_run,
         "requested_symbol_count": len(candidate_symbols),
         "candidate_symbol_count": len(candidate_symbols),
-        "already_generated_count": 0,
         "attempted_count": 0,
         "succeeded_count": 0,
         "failed_count": 0,
-        "skipped_count": 0,
+        "total_skipped_locked": 0,
+        "total_rebuilt_insufficient_future": 0,
         "total_created": 0,
         "total_updated": 0,
         "total_would_create": 0,
@@ -58,11 +49,6 @@ def run_batch(
     }
 
     for symbol in candidate_symbols:
-        if symbol in already_generated:
-            summary["already_generated_count"] += 1
-            summary["skipped_count"] += 1
-            continue
-
         if limit is not None and summary["attempted_count"] >= limit:
             break
 
@@ -70,6 +56,8 @@ def run_batch(
         try:
             result = ml_service.generate_one(symbol=symbol, dry_run=dry_run)
             summary["succeeded_count"] += 1
+            summary["total_skipped_locked"] += result["samples_skipped_locked"]
+            summary["total_rebuilt_insufficient_future"] += result["samples_rebuilt_insufficient_future"]
             if dry_run:
                 summary["total_would_create"] += result["samples_created"]
                 summary["total_would_update"] += result["samples_updated"]

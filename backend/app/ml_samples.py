@@ -219,6 +219,25 @@ class MLSampleStore:
             ).fetchall()
         return {row["sample_date"] for row in rows}
 
+    def get_existing_sample_outcomes(
+        self,
+        instrument_id: int,
+        model_name: str,
+        label_name: str,
+    ) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sample_date, outcome
+                FROM ml_samples
+                WHERE instrument_id = ?
+                  AND model_name = ?
+                  AND label_name = ?
+                """,
+                (instrument_id, model_name, label_name),
+            ).fetchall()
+        return {row["sample_date"]: row["outcome"] for row in rows}
+
     def sample_count_for_instrument(self, instrument_id: int) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -282,17 +301,26 @@ class MLSampleService:
         candles = self.store.candles_for_instrument(int(instrument["id"]))
         created = 0
         updated = 0
+        skipped_locked = 0
+        rebuilt_insufficient = 0
 
-        existing_dates: set[str] = set()
-        if dry_run:
-            existing_dates = self.store.get_existing_sample_dates(
-                instrument_id=int(instrument["id"]),
-                model_name=ML_MODEL_NAME,
-                label_name=ML_LABEL_NAME,
-            )
+        # Always fetch existing outcomes for incremental logic
+        existing_outcomes = self.store.get_existing_sample_outcomes(
+            instrument_id=int(instrument["id"]),
+            model_name=ML_MODEL_NAME,
+            label_name=ML_LABEL_NAME,
+        )
 
         generated_samples: list[dict[str, Any]] = []
         for sample_index in range(lookback_sessions - 1, len(candles)):
+            sample_date = candles[sample_index]["trading_date"]
+            existing_outcome = existing_outcomes.get(sample_date)
+            
+            # Incremental skip rule
+            if existing_outcome is not None and existing_outcome != "INSUFFICIENT_FUTURE_DATA":
+                skipped_locked += 1
+                continue
+                
             input_window = candles[sample_index - lookback_sessions + 1 : sample_index + 1]
             future_window = candles[sample_index + 1 : sample_index + 1 + future_window_sessions]
             sample = build_sample(
@@ -303,14 +331,17 @@ class MLSampleService:
                 stop_percent=stop_percent,
                 future_window_sessions=future_window_sessions,
             )
+            
             if dry_run:
-                exists = sample["sample_date"] in existing_dates
-                action = "updated" if exists else "created"
+                action = "updated" if existing_outcome is not None else "created"
             else:
                 action = self.store.upsert_sample(sample)
+                
             if action == "created":
                 created += 1
             else:
+                if existing_outcome == "INSUFFICIENT_FUTURE_DATA":
+                    rebuilt_insufficient += 1
                 updated += 1
             generated_samples.append(sample)
 
@@ -321,6 +352,8 @@ class MLSampleService:
             "symbol": normalized_symbol,
             "instrument_id": int(instrument["id"]),
             "candles_available": len(candles),
+            "samples_skipped_locked": skipped_locked,
+            "samples_rebuilt_insufficient_future": rebuilt_insufficient,
             "samples_created": created,
             "samples_updated": updated,
             "outcome_counts": dict(sorted(outcome_counts.items())),
@@ -351,6 +384,8 @@ class MLSampleService:
         created = 0
         updated = 0
         trainable = 0
+        skipped = 0
+        rebuilt = 0
 
         for symbol in symbols:
             try:
@@ -359,6 +394,8 @@ class MLSampleService:
                 created += res["samples_created"]
                 updated += res["samples_updated"]
                 trainable += res["trainable_count"]
+                skipped += res["samples_skipped_locked"]
+                rebuilt += res["samples_rebuilt_insufficient_future"]
             except ValueError as e:
                 errors.append({"symbol": symbol, "error": str(e)})
 
@@ -366,6 +403,8 @@ class MLSampleService:
             "symbols_requested": len(symbols),
             "symbols_processed": len(results),
             "symbols_failed": len(errors),
+            "total_skipped_locked": skipped,
+            "total_rebuilt_insufficient_future": rebuilt,
             "total_samples_created": created,
             "total_samples_updated": updated,
             "total_trainable_count": trainable,
