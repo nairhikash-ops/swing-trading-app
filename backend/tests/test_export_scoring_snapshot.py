@@ -21,6 +21,7 @@ from app.scripts.export_scoring_snapshot import (
     _check_leakage_safety,
     _flatten_feature_json,
     _compute_regime_features,
+    _load_feature_schema,
     _ohlcv_col_names,
     REGIME_COLS,
     N_CANDLES,
@@ -114,15 +115,25 @@ def _make_test_db(
     return db_path
 
 
-def _make_model_root(tmp_path: Path) -> Path:
-    """Create a minimal model directory with a real feature_schema.json."""
+def _make_model_root(tmp_path: Path, bare_list: bool = False) -> Path:
+    """Create a minimal model directory with a real feature_schema.json.
+
+    Args:
+        bare_list: If True, write the schema as a bare JSON list (as the real
+                   HGB model does). If False, write as {"features": [...]}.
+    """
     model_root = tmp_path / "models" / "stock_opportunity_hgb_regime_v1"
-    model_root.mkdir(parents=True)
+    model_root.mkdir(parents=True, exist_ok=True)
     # Schema lists exactly the 300 OHLCV cols + 8 regime cols = 308 features
     ohlcv_cols = _ohlcv_col_names()
     all_features = ohlcv_cols + REGIME_COLS
-    schema = {"features": all_features}
-    (model_root / "feature_schema.json").write_text(json.dumps(schema))
+    if bare_list:
+        # Real HGB model format: a bare JSON list
+        (model_root / "feature_schema.json").write_text(json.dumps(all_features))
+    else:
+        # Test fixture / LR model format: {"features": [...]}
+        schema = {"features": all_features}
+        (model_root / "feature_schema.json").write_text(json.dumps(schema))
     return model_root
 
 
@@ -391,11 +402,39 @@ class TestExportScoringSnapshotOutputs:
         result, df, _, _, _ = successful_export
         model_root   = tmp_path / "models" / "stock_opportunity_hgb_regime_v1"
         schema_path  = model_root / "feature_schema.json"
-        schema       = json.loads(schema_path.read_text())
-        expected     = schema["features"]
+        # Use _load_feature_schema — handles both bare list and dict formats
+        expected = _load_feature_schema(schema_path)
         # All expected features must be present as columns in the CSV
         for feat in expected:
             assert feat in df.columns, f"Schema feature '{feat}' missing from CSV"
+
+    def test_bare_list_schema_format_works(self, tmp_path):
+        """Verify export works when feature_schema.json is a bare JSON list.
+
+        This is the actual format used by the real HGB model on the server.
+        The dict format {"features": [...]} is only used in test fixtures.
+        """
+        db_path    = _make_test_db(tmp_path, sample_date=CLEAN_DATE, n_symbols=3)
+        # Write schema as bare list (real HGB model format)
+        model_root = _make_model_root(tmp_path, bare_list=True)
+        out_dir    = tmp_path / "exports_barelist"
+
+        result = export_scoring_snapshot(
+            sample_date=CLEAN_DATE,
+            output_dir=out_dir,
+            training_cutoff_date=TRAINING_CUTOFF,
+            db_path=db_path,
+            model_root=model_root,
+        )
+
+        assert result["row_count"] == 3
+        assert result["feature_count"] == 308
+        out_csv = out_dir / f"ml_scoring_ohlcv_regime_{CLEAN_DATE}.csv"
+        assert out_csv.exists()
+        df = pd.read_csv(out_csv)
+        assert len(df) == 3
+        for col in _ohlcv_col_names() + REGIME_COLS:
+            assert col in df.columns, f"Missing feature col: {col}"
 
 
 class TestExportScoringSnapshotMetadata:

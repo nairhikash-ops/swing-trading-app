@@ -78,6 +78,39 @@ def _setup_logging() -> None:
 # Feature column helpers — match export_ml_dataset.py layout
 # ---------------------------------------------------------------------------
 
+def _load_feature_schema(schema_path: Path) -> list[str]:
+    """Load feature names from a schema file.
+
+    The HGB model writes a bare JSON list:   ["c00_open_rel", "c00_high_rel", ...]
+    Test fixtures and the LR model write:     {"features": [...]}
+    Both formats are handled transparently.
+    """
+    with schema_path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    if isinstance(raw, list):
+        features = raw
+    elif isinstance(raw, dict):
+        # Try common keys in priority order
+        features = (
+            raw.get("features")
+            or raw.get("feature_order")
+            or raw.get("feature_names")
+            or []
+        )
+    else:
+        raise ValueError(
+            f"Unexpected schema format in {schema_path}: "
+            f"expected list or dict, got {type(raw).__name__}."
+        )
+
+    if not features:
+        raise ValueError(
+            f"feature_schema.json at {schema_path} contains no feature names."
+        )
+    return list(features)
+
+
 def _ohlcv_col_names() -> list[str]:
     """Return the 300 OHLCV feature column names (c00_open_rel … c59_volume_rel)."""
     cols = []
@@ -281,15 +314,12 @@ def export_scoring_snapshot(
             "Refusing to overwrite. Remove the file manually if this is intentional."
         )
 
-    # Load feature schema
+    # Load feature schema — handles both bare list and {"features": [...]} formats
     schema_path = model_root / "feature_schema.json"
     if not schema_path.exists():
         raise FileNotFoundError(f"Feature schema not found: {schema_path}")
-    with schema_path.open("r", encoding="utf-8") as f:
-        schema = json.load(f)
-    expected_features: list[str] = schema.get("features", [])
-    if not expected_features:
-        raise ValueError(f"feature_schema.json contains no features: {schema_path}")
+    expected_features: list[str] = _load_feature_schema(schema_path)
+    logging.info("Feature schema loaded: %d features from %s", len(expected_features), schema_path)
 
     # Connect and run leakage safety checks
     conn = sqlite3.connect(db_path)
