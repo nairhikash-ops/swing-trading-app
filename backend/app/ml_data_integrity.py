@@ -197,7 +197,27 @@ def check_ml_sample_validity(main_db: str) -> CheckResult:
 
 
 def check_feature_json_validity(main_db: str, sample_limit: int = 5000) -> CheckResult:
-    """Check 4: Feature JSON is valid, has 300 keys, no null/NaN/inf, no forbidden keys."""
+    """Check 4: Validate raw nested feature_json structure stored in the DB.
+
+    The raw DB format is NOT 300 flat keys. It is:
+      {
+        "candles": [ <60 candle objects> ],
+        "symbol": ..., "sample_date": ..., "instrument_id": ...,
+        "input_window_sessions": 60, "future_window_sessions": 20,
+        "target_percent": 7.0, "stop_percent": 3.0, "entry_close": <float>
+      }
+    Each candle has exactly 5 numeric fields:
+      open_rel, high_rel, low_rel, close_rel, volume_rel
+    plus an optional trading_date string (not a model feature).
+    60 candles x 5 numeric fields = 300 model features total.
+    """
+    REQUIRED_CANDLE_NUMERIC_KEYS = {"open_rel", "high_rel", "low_rel", "close_rel", "volume_rel"}
+    EXPECTED_CANDLE_COUNT = 60
+    EXPECTED_INPUT_SESSIONS = 60
+    EXPECTED_FUTURE_SESSIONS = 20
+    EXPECTED_TARGET_PERCENT = 7.0
+    EXPECTED_STOP_PERCENT = 3.0
+
     errors: list[str] = []
     try:
         conn = sqlite3.connect(main_db)
@@ -209,10 +229,13 @@ def check_feature_json_validity(main_db: str, sample_limit: int = 5000) -> Check
         conn.close()
 
         bad_json_count = 0
-        wrong_key_count = 0
+        missing_candles_key = 0
+        wrong_candle_count = 0
+        missing_candle_field = 0
         null_val_count = 0
         nan_inf_count = 0
         forbidden_key_count = 0
+        bad_metadata_count = 0
 
         for row in rows:
             row_id, symbol, sample_date, fj = row
@@ -222,41 +245,98 @@ def check_feature_json_validity(main_db: str, sample_limit: int = 5000) -> Check
                 bad_json_count += 1
                 continue
 
-            if len(feat) != EXPECTED_FEATURE_COUNT:
-                wrong_key_count += 1
+            if not isinstance(feat, dict):
+                bad_json_count += 1
+                continue
 
-            for k, v in feat.items():
-                # Forbidden key check (substring match)
+            # Check forbidden keys anywhere in top-level
+            for k in feat.keys():
                 k_upper = k.upper()
                 for fk in FORBIDDEN_FEATURE_KEYS:
                     if fk.upper() in k_upper:
                         forbidden_key_count += 1
                         break
 
-                if v is None:
-                    null_val_count += 1
-                elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                    nan_inf_count += 1
+            # candles key required
+            if "candles" not in feat:
+                missing_candles_key += 1
+                continue
+
+            candles = feat["candles"]
+            if not isinstance(candles, list) or len(candles) != EXPECTED_CANDLE_COUNT:
+                wrong_candle_count += 1
+                continue
+
+            # Validate each candle
+            for candle in candles:
+                if not isinstance(candle, dict):
+                    missing_candle_field += 1
+                    continue
+                for num_key in REQUIRED_CANDLE_NUMERIC_KEYS:
+                    if num_key not in candle:
+                        missing_candle_field += 1
+                    else:
+                        v = candle[num_key]
+                        if v is None:
+                            null_val_count += 1
+                        elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                            nan_inf_count += 1
+                # Also check candle keys for forbidden substrings
+                for ck in candle.keys():
+                    if ck == "trading_date":
+                        continue
+                    ck_upper = ck.upper()
+                    for fk in FORBIDDEN_FEATURE_KEYS:
+                        if fk.upper() in ck_upper:
+                            forbidden_key_count += 1
+                            break
+
+            # Metadata sanity checks
+            meta_errors = []
+            if not feat.get("symbol") or str(feat.get("symbol", "")).strip() == "":
+                meta_errors.append("symbol blank")
+            if not feat.get("sample_date") or str(feat.get("sample_date", "")).strip() == "":
+                meta_errors.append("sample_date blank")
+            if feat.get("instrument_id") is None:
+                meta_errors.append("instrument_id missing")
+            if feat.get("input_window_sessions") != EXPECTED_INPUT_SESSIONS:
+                meta_errors.append(f"input_window_sessions={feat.get('input_window_sessions')} expected {EXPECTED_INPUT_SESSIONS}")
+            if feat.get("future_window_sessions") != EXPECTED_FUTURE_SESSIONS:
+                meta_errors.append(f"future_window_sessions={feat.get('future_window_sessions')} expected {EXPECTED_FUTURE_SESSIONS}")
+            if feat.get("target_percent") != EXPECTED_TARGET_PERCENT:
+                meta_errors.append(f"target_percent={feat.get('target_percent')} expected {EXPECTED_TARGET_PERCENT}")
+            if feat.get("stop_percent") != EXPECTED_STOP_PERCENT:
+                meta_errors.append(f"stop_percent={feat.get('stop_percent')} expected {EXPECTED_STOP_PERCENT}")
+            entry_close = feat.get("entry_close")
+            if entry_close is None or not isinstance(entry_close, (int, float)) or entry_close <= 0:
+                meta_errors.append(f"entry_close={entry_close} must be numeric and positive")
+            if meta_errors:
+                bad_metadata_count += 1
 
         if bad_json_count:
             errors.append(f"{bad_json_count} row(s) have invalid/unparseable feature_json")
-        if wrong_key_count:
-            errors.append(f"{wrong_key_count} row(s) have != {EXPECTED_FEATURE_COUNT} feature keys")
+        if missing_candles_key:
+            errors.append(f"{missing_candles_key} row(s) are missing the 'candles' key")
+        if wrong_candle_count:
+            errors.append(f"{wrong_candle_count} row(s) have candles length != {EXPECTED_CANDLE_COUNT}")
+        if missing_candle_field:
+            errors.append(f"{missing_candle_field} missing numeric field occurrence(s) in candle objects")
         if null_val_count:
-            errors.append(f"{null_val_count} null value(s) found in feature_json")
+            errors.append(f"{null_val_count} null value(s) in candle numeric fields")
         if nan_inf_count:
-            errors.append(f"{nan_inf_count} NaN/Inf value(s) found in feature_json")
+            errors.append(f"{nan_inf_count} NaN/Inf value(s) in candle numeric fields")
         if forbidden_key_count:
-            errors.append(f"{forbidden_key_count} occurrence(s) of forbidden feature key substrings")
+            errors.append(f"{forbidden_key_count} forbidden feature key occurrence(s)")
+        if bad_metadata_count:
+            errors.append(f"{bad_metadata_count} row(s) have metadata sanity failures")
 
     except Exception as exc:
         errors.append(f"DB error: {exc}")
 
-    checked_count = min(sample_limit, len(errors) + (len(rows) if 'rows' in dir() else 0))
     return CheckResult(
         name="feature_json_validity",
         status="PASS" if not errors else "FAIL",
-        detail=f"Checked up to {sample_limit} trainable samples.",
+        detail=f"Validated nested candle format across up to {sample_limit} trainable samples.",
         errors=errors,
     )
 

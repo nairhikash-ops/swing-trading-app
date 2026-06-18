@@ -28,9 +28,43 @@ from app.ml_data_integrity import (
     run_all_checks,
     EXPECTED_BASE_CSV_COLUMNS,
     EXPECTED_REGIME_CSV_COLUMNS,
-    EXPECTED_FEATURE_COUNT,
 )
 from app.scripts.audit_ml_data_integrity import run_audit
+
+
+# ---------------------------------------------------------------------------
+# Feature JSON builders — nested candle format (matching the real DB schema)
+# ---------------------------------------------------------------------------
+
+def make_candle(open_rel=0.01, high_rel=0.02, low_rel=-0.01, close_rel=0.015,
+                volume_rel=0.005, trading_date="2026-01-01") -> dict:
+    return {
+        "open_rel": open_rel,
+        "high_rel": high_rel,
+        "low_rel": low_rel,
+        "close_rel": close_rel,
+        "volume_rel": volume_rel,
+        "trading_date": trading_date,
+    }
+
+
+def make_valid_feature_json(symbol="REALSYM", instrument_id=1,
+                             sample_date="2026-03-01") -> str:
+    """Build a valid nested feature_json matching real DB schema."""
+    candles = [make_candle(trading_date=f"2026-{(i // 30 + 1):02d}-{(i % 28 + 1):02d}")
+               for i in range(60)]
+    feature = {
+        "candles": candles,
+        "symbol": symbol,
+        "sample_date": sample_date,
+        "instrument_id": instrument_id,
+        "input_window_sessions": 60,
+        "future_window_sessions": 20,
+        "target_percent": 7.0,
+        "stop_percent": 3.0,
+        "entry_close": 1234.5,
+    }
+    return json.dumps(feature)
 
 
 # ---------------------------------------------------------------------------
@@ -78,12 +112,12 @@ def make_main_db(tmp_path, symbol="REALSYM", outcome="WIN", trainable=1,
         " VALUES (1, '2026-03-01', 100, 105, 95, 102, 1000)"
     )
 
-    feature = feature_override or {f"c{i:02d}_close_rel": 0.01 * i for i in range(EXPECTED_FEATURE_COUNT)}
+    feature_str = feature_override if feature_override is not None else make_valid_feature_json(symbol)
     conn.execute(
         "INSERT INTO ml_samples (model_name, label_name, instrument_id, symbol, sample_date,"
         " outcome, trainable, feature_json)"
         " VALUES ('stock_opportunity_ohlcv_v1','hit_7pct',1,?,'2026-03-01',?,?,?)",
-        (symbol, outcome, trainable, json.dumps(feature))
+        (symbol, outcome, trainable, feature_str)
     )
 
     if inject_testsym:
@@ -278,41 +312,134 @@ def test_sample_validity_passes_insufficient_future(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Check 4: Feature JSON validity
+# Check 4: Feature JSON validity (nested candle format)
 # ---------------------------------------------------------------------------
 
-def test_feature_json_passes_valid_features(tmp_path):
+def test_feature_json_passes_valid_nested_format(tmp_path):
+    """Valid nested feature_json with 60 candles x 5 fields must PASS."""
     db = make_main_db(tmp_path, outcome="WIN", trainable=1)
     result = check_feature_json_validity(db)
-    assert result.status == "PASS"
+    assert result.status == "PASS", f"Expected PASS but got errors: {result.errors}"
 
 
-def test_feature_json_fails_wrong_count(tmp_path):
-    bad_feature = {f"feat_{i}": 0.1 for i in range(50)}  # only 50, not 300
-    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=bad_feature)
+def test_feature_json_fails_wrong_candle_count(tmp_path):
+    """candles array with != 60 entries must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["candles"] = feature["candles"][:30]  # only 30 candles
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
     result = check_feature_json_validity(db)
     assert result.status == "FAIL"
-    assert any("feature keys" in e for e in result.errors)
+    assert any("candles length" in e for e in result.errors)
 
 
-def test_feature_json_fails_with_nan(tmp_path):
-    feature = {f"c{i:02d}_close_rel": 0.01 for i in range(EXPECTED_FEATURE_COUNT)}
-    feature["c00_close_rel"] = float("nan")
-    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=feature)
+def test_feature_json_fails_missing_candle_field(tmp_path):
+    """Candle missing open_rel must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    del feature["candles"][0]["open_rel"]
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
     result = check_feature_json_validity(db)
     assert result.status == "FAIL"
-    assert any("NaN" in e for e in result.errors)
+    assert any("missing numeric field" in e for e in result.errors)
 
 
-def test_feature_json_fails_with_forbidden_key(tmp_path):
-    feature = {f"c{i:02d}_close_rel": 0.01 for i in range(EXPECTED_FEATURE_COUNT)}
-    # Replace one key with a forbidden name
-    feature["RSI_14"] = 0.5
-    del feature[f"c{EXPECTED_FEATURE_COUNT-1:02d}_close_rel"]
-    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=feature)
+def test_feature_json_fails_null_candle_value(tmp_path):
+    """Null in a numeric candle field must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["candles"][5]["close_rel"] = None
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("null value" in e for e in result.errors)
+
+
+def test_feature_json_fails_nan_candle_value(tmp_path):
+    """NaN in a numeric candle field must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["candles"][0]["volume_rel"] = float("nan")
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("NaN/Inf" in e for e in result.errors)
+
+
+def test_feature_json_fails_inf_candle_value(tmp_path):
+    """Inf in a numeric candle field must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["candles"][10]["high_rel"] = float("inf")
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("NaN/Inf" in e for e in result.errors)
+
+
+def test_feature_json_fails_forbidden_key_in_candle(tmp_path):
+    """Forbidden key (e.g. RSI) in candle dict must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["candles"][0]["RSI_14"] = 50.0
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
     result = check_feature_json_validity(db)
     assert result.status == "FAIL"
     assert any("forbidden" in e for e in result.errors)
+
+
+def test_feature_json_fails_wrong_input_window_sessions(tmp_path):
+    """input_window_sessions != 60 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["input_window_sessions"] = 30
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
+
+
+def test_feature_json_fails_wrong_future_window_sessions(tmp_path):
+    """future_window_sessions != 20 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["future_window_sessions"] = 10
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
+
+
+def test_feature_json_fails_wrong_target_percent(tmp_path):
+    """target_percent != 7.0 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["target_percent"] = 5.0
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
+
+
+def test_feature_json_fails_wrong_stop_percent(tmp_path):
+    """stop_percent != 3.0 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["stop_percent"] = 5.0
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
+
+
+def test_feature_json_fails_entry_close_zero(tmp_path):
+    """entry_close <= 0 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["entry_close"] = 0
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
+
+
+def test_feature_json_fails_entry_close_negative(tmp_path):
+    """entry_close < 0 must FAIL."""
+    feature = json.loads(make_valid_feature_json())
+    feature["entry_close"] = -100.0
+    db = make_main_db(tmp_path, outcome="WIN", trainable=1, feature_override=json.dumps(feature))
+    result = check_feature_json_validity(db)
+    assert result.status == "FAIL"
+    assert any("metadata" in e for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
