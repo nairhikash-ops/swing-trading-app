@@ -35,6 +35,18 @@ def init_db(db_path: str = DEFAULT_DB_PATH):
             UNIQUE(model_version, scored_sample_date, symbol)
         )
     ''')
+    # Safe migrations
+    columns = [row["name"] for row in cursor.execute("PRAGMA table_info(shadow_tracking)").fetchall()]
+    
+    if "barrier_hit_date" not in columns:
+        cursor.execute("ALTER TABLE shadow_tracking ADD COLUMN barrier_hit_date TEXT")
+    if "barrier_hit_type" not in columns:
+        cursor.execute("ALTER TABLE shadow_tracking ADD COLUMN barrier_hit_type TEXT")
+    if "days_to_outcome" not in columns:
+        cursor.execute("ALTER TABLE shadow_tracking ADD COLUMN days_to_outcome INTEGER")
+    if "resolved_at" not in columns:
+        cursor.execute("ALTER TABLE shadow_tracking ADD COLUMN resolved_at TEXT")
+        
     conn.commit()
     conn.close()
 
@@ -86,3 +98,42 @@ def insert_shadow_records(db_path: str, records: List[Dict[str, Any]]) -> int:
     conn.close()
     
     return inserted_count
+
+def get_observing_records(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM shadow_tracking 
+        WHERE tracking_status = 'OBSERVING'
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def update_shadow_outcome(db_path: str, record_id: int, outcome_data: Dict[str, Any]):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    cursor.execute('''
+        UPDATE shadow_tracking
+        SET tracking_status = ?,
+            future_observed_outcome = ?,
+            barrier_hit_date = ?,
+            barrier_hit_type = ?,
+            days_to_outcome = ?,
+            resolved_at = ?,
+            updated_at = ?
+        WHERE id = ?
+    ''', (
+        "RESOLVED",
+        outcome_data["outcome"],
+        outcome_data.get("barrier_hit_date"),
+        outcome_data.get("barrier_hit_type"),
+        outcome_data.get("days_to_outcome"),
+        now,
+        now,
+        record_id
+    ))
+    conn.commit()
+    conn.close()
