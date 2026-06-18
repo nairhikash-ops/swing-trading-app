@@ -36,6 +36,8 @@ def run_resolver(
     skipped_count = 0
     
     with token_store._connect() as conn:
+        import sqlite3
+        conn.row_factory = sqlite3.Row
         for record in records:
             symbol = record["symbol"]
             scored_sample_date = record["scored_sample_date"]
