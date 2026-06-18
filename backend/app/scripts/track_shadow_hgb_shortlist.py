@@ -5,6 +5,9 @@ Tracks HGB candidate picks in the shadow tracking database under
 the candidate model version stock_opportunity_hgb_regime_v1.
 """
 from __future__ import annotations
+import argparse
+import math
+import sqlite3
 
 import json
 import os
@@ -16,7 +19,8 @@ from app.shadow_tracking import init_db, insert_shadow_records, DEFAULT_DB_PATH
 def run_track_shadow_hgb_shortlist(
     exports_dir: str = "/app/data/exports",
     db_path: str = DEFAULT_DB_PATH,
-    allow_live_today: bool = False
+    allow_live_today: bool = False,
+    execute: bool = False
 ):
     csv_path = os.path.join(exports_dir, "latest_hgb_regime_rankings.csv")
     meta_path = os.path.join(exports_dir, "latest_hgb_regime_rankings.meta.json")
@@ -33,12 +37,14 @@ def run_track_shadow_hgb_shortlist(
     df = pd.read_csv(csv_path)
     total_rows = len(df)
 
-    # Calculate cutoff counts
-    top_1_count = max(1, int(round(0.01 * total_rows)))
-    top_5_count = max(1, int(round(0.05 * total_rows)))
+    # Calculate cutoff counts using ceil as per specification
+    top_1_count = max(1, math.ceil(0.01 * total_rows))
+    top_5_count = max(1, math.ceil(0.05 * total_rows))
 
-    # Filter to Top 5% HGB shortlist
-    df_tracked = df[df["rank"] <= top_5_count].copy()
+    # Ensure dataframe is sorted by rank ascending (1-indexed)
+    df = df.sort_values(by="rank", ascending=True).reset_index(drop=True)
+    # Take top 5% rows based on position
+    df_tracked = df.head(top_5_count).copy()
 
     # Hard correction 5: Set model_version to stock_opportunity_hgb_regime_v1
     model_version = meta.get("model_version", "stock_opportunity_hgb_regime_v1")
@@ -58,9 +64,11 @@ def run_track_shadow_hgb_shortlist(
     ]
 
     records = []
-    for _, row in df_tracked.iterrows():
+    for idx, row in df_tracked.iterrows():
+        # idx is zero‑based; position = idx + 1
+        position = idx + 1
         rank = row["rank"]
-        bucket = "PRIMARY_TOP_1" if rank <= top_1_count else "WATCH_TOP_5"
+        bucket = "PRIMARY_TOP_1" if position <= top_1_count else "WATCH_TOP_5"
 
         regime_dict = {col: row[col] for col in regime_cols if col in row}
         regime_json = json.dumps(regime_dict)
@@ -78,21 +86,48 @@ def run_track_shadow_hgb_shortlist(
             "tracking_status": "OBSERVING"
         })
 
-    # Initialize shadow DB if not exists
-    init_db(db_path)
+        if execute:
+        # Initialize shadow DB if not exists
+        init_db(db_path)
+        # Count existing rows for this model_version before insertion
+        conn = sqlite3.connect(db_path)
+        before = conn.execute("SELECT COUNT(1) FROM shadow_tracking WHERE model_version = ?", (model_version,)).fetchone()[0]
+        conn.close()
 
-    # Insert HGB records safely (database unique constraint prevents duplicate key conflicts)
-    inserted_count = insert_shadow_records(db_path, records)
-    skipped_count = len(records) - inserted_count
+        # Insert HGB records safely (database unique constraint prevents duplicate key conflicts)
+        inserted_count = insert_shadow_records(db_path, records)
+        skipped_count = len(records) - inserted_count
+
+        # Count after insertion
+        conn = sqlite3.connect(db_path)
+        after = conn.execute("SELECT COUNT(1) FROM shadow_tracking WHERE model_version = ?", (model_version,)).fetchone()[0]
+        conn.close()
+    else:
+        inserted_count = 0
+        skipped_count = len(records)
+        before = "N/A"
+        after = "N/A"
 
     print(f"HGB Scored sample date: {scored_sample_date}")
     print(f"HGB Ranking rows: {total_rows}")
     print(f"HGB Top 5% tracked: {top_5_count}")
     print(f"HGB Primary Top 1%: {top_1_count}")
-    print(f"HGB records inserted: {inserted_count}")
-    print(f"HGB duplicate records skipped: {skipped_count}")
+    # Also report WATCH_TOP_5 count for clarity
+    watch_top_5_count = top_5_count - top_1_count
+    print(f"HGB WATCH_TOP_5 rows: {watch_top_5_count}")
+    if execute:
+        print(f"Existing records before insertion for model_version {model_version}: {before}")
+        print(f"HGB records inserted: {inserted_count}")
+        print(f"HGB duplicate records skipped: {skipped_count}")
+        print(f"Existing records after insertion: {after}")
+    else:
+        print(f"[DRY-RUN] HGB records that would be inserted: {len(records)}")
+        print(f"[DRY-RUN] Duplicate records that would be skipped: {skipped_count}")
     print("Status: OBSERVING")
 
 
 if __name__ == "__main__":
-    run_track_shadow_hgb_shortlist()
+    parser = argparse.ArgumentParser(description="Track HGB shadow shortlist")
+    parser.add_argument("--execute", action="store_true", help="Perform actual DB insertion (default is dry-run)")
+    args = parser.parse_args()
+    run_track_shadow_hgb_shortlist(execute=args.execute)
