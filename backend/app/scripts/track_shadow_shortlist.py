@@ -6,7 +6,8 @@ from app.shadow_tracking import init_db, insert_shadow_records, DEFAULT_DB_PATH
 
 def run_track_shadow_shortlist(
     exports_dir: str = "/app/data/exports",
-    db_path: str = DEFAULT_DB_PATH
+    db_path: str = DEFAULT_DB_PATH,
+    allow_live_today: bool = False
 ):
     csv_path = os.path.join(exports_dir, "latest_regime_rankings.csv")
     meta_path = os.path.join(exports_dir, "latest_regime_rankings.meta.json")
@@ -17,10 +18,8 @@ def run_track_shadow_shortlist(
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
         
-    if meta.get("is_live_today", True):
-        # We are currently validating offline/historical data tracking.
-        # User explicitly requested to confirm is_live_today == false for now.
-        print("Warning: is_live_today is true. Proceeding as instructed but note this was originally designed for offline shadow tracking.")
+    if meta.get("is_live_today", True) and not allow_live_today:
+        raise ValueError("is_live_today is true, but allow_live_today is False. Failing closed for offline shadow tracking.")
         
     df = pd.read_csv(csv_path)
     total_rows = len(df)

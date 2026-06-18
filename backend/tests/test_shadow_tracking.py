@@ -128,3 +128,23 @@ def test_run_track_shadow_shortlist(temp_db_env, capsys):
     captured2 = capsys.readouterr().out
     assert "Inserted: 0" in captured2
     assert "Skipped duplicates: 5" in captured2
+
+def test_run_track_shadow_shortlist_live_today_fails_closed(temp_db_env):
+    exports_dir = temp_db_env["exports_dir"]
+    db_path = temp_db_env["db_path"]
+    
+    # Modify meta to simulate live_today
+    meta_path = os.path.join(exports_dir, "latest_regime_rankings.meta.json")
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
+    meta["is_live_today"] = True
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+        
+    # Should raise ValueError
+    with pytest.raises(ValueError, match="is_live_today is true"):
+        run_track_shadow_shortlist(exports_dir=exports_dir, db_path=db_path)
+        
+    # Should pass with override
+    run_track_shadow_shortlist(exports_dir=exports_dir, db_path=db_path, allow_live_today=True)
+
