@@ -5,11 +5,14 @@ import sqlite3
 import subprocess
 from app.shadow_tracking import DEFAULT_DB_PATH
 
-def run_module(module_name: str) -> None:
+def run_module(module_name: str, args: list = None) -> None:
+    if args is None:
+        args = []
+    cmd_str = " ".join([module_name] + args)
     print(f"\n============================================================")
-    print(f"RUNNING: {module_name}")
+    print(f"RUNNING: {cmd_str}")
     print(f"============================================================")
-    result = subprocess.run([sys.executable, "-m", module_name])
+    result = subprocess.run([sys.executable, "-m", module_name] + args)
     if result.returncode != 0:
         print(f"ERROR: {module_name} failed with return code {result.returncode}")
         sys.exit(result.returncode)
@@ -61,7 +64,16 @@ def run_pipeline() -> None:
     count_before = get_shadow_db_count()
     status_before = get_shadow_db_status_counts()
     
-    # 2. Score Latest Regime
+    # 1. Generate Samples Batch
+    run_module("app.scripts.generate_samples_batch", ["--execute", "--limit", "500"])
+    
+    # 2. Export ML Dataset
+    run_module("app.scripts.export_ml_dataset")
+    
+    # 3. Export ML Dataset Regime
+    run_module("app.scripts.export_ml_dataset_regime")
+    
+    # 4. Score Latest Regime
     run_module("app.scripts.score_latest_regime")
     
     # Extract metadata about what was scored
@@ -77,13 +89,13 @@ def run_pipeline() -> None:
     ranking_rows = meta.get("ranking_count", 0)
     top_5_count = max(1, int(round(0.05 * ranking_rows)))
     
-    # 3. Track Shadow Shortlist
+    # 5. Track Shadow Shortlist
     run_module("app.scripts.track_shadow_shortlist")
     
-    # 4. Resolve Shadow Outcomes
+    # 6. Resolve Shadow Outcomes
     run_module("app.scripts.resolve_shadow_outcomes")
     
-    # 5. Report Shadow Performance
+    # 7. Report Shadow Performance
     run_module("app.scripts.report_shadow_performance")
     
     # Record state after running

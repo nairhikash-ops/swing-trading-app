@@ -49,10 +49,38 @@ def test_pipeline_successful_execution(mock_open, mock_exists, mock_get_status, 
     run_pipeline()
     
     # Verify scripts were called
-    assert mock_run.call_count == 4
+    assert mock_run.call_count == 7
     
     calls = mock_run.call_args_list
-    assert "app.scripts.score_latest_regime" in calls[0][0][0]
-    assert "app.scripts.track_shadow_shortlist" in calls[1][0][0]
-    assert "app.scripts.resolve_shadow_outcomes" in calls[2][0][0]
-    assert "app.scripts.report_shadow_performance" in calls[3][0][0]
+    # Verify generate_samples_batch was called with execution arguments
+    assert "app.scripts.generate_samples_batch" in calls[0][0][0]
+    assert "--execute" in calls[0][0][0]
+    assert "--limit" in calls[0][0][0]
+    assert "500" in calls[0][0][0]
+    
+    assert "app.scripts.export_ml_dataset" in calls[1][0][0]
+    assert "app.scripts.export_ml_dataset_regime" in calls[2][0][0]
+    assert "app.scripts.score_latest_regime" in calls[3][0][0]
+    assert "app.scripts.track_shadow_shortlist" in calls[4][0][0]
+    assert "app.scripts.resolve_shadow_outcomes" in calls[5][0][0]
+    assert "app.scripts.report_shadow_performance" in calls[6][0][0]
+
+@patch('app.scripts.daily_shadow_pipeline.subprocess.run')
+@patch('app.scripts.daily_shadow_pipeline.get_shadow_db_count')
+@patch('app.scripts.daily_shadow_pipeline.get_shadow_db_status_counts')
+@patch('os.path.exists')
+def test_pipeline_stops_on_subprocess_failure(mock_exists, mock_get_status, mock_get_count, mock_run):
+    mock_exists.return_value = True
+    mock_get_count.return_value = 0
+    mock_get_status.return_value = {"OBSERVING": 0, "RESOLVED": 0}
+    
+    # Simulate generate_samples_batch failing
+    mock_run_result = MagicMock()
+    mock_run_result.returncode = 1
+    mock_run.return_value = mock_run_result
+    
+    with pytest.raises(SystemExit) as excinfo:
+        run_pipeline()
+        
+    assert excinfo.value.code == 1
+    assert mock_run.call_count == 1 # Only the first module should have been attempted
