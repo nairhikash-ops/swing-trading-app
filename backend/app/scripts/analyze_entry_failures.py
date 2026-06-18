@@ -31,6 +31,18 @@ INTRADAY_STOP = "INTRADAY_STOP"
 NOT_CLASSIFIED = "NOT_CLASSIFIED"
 UNCLASSIFIED_MISSING_ML_SAMPLE = "UNCLASSIFIED_MISSING_ML_SAMPLE"
 UNCLASSIFIED_MISSING_NEXT_CANDLE = "UNCLASSIFIED_MISSING_NEXT_CANDLE"
+UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE = "UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE"
+
+
+def is_day1_loss(stop_mech: str) -> bool:
+    return stop_mech in (
+        GAP_DOWN_STOP,
+        INTRADAY_STOP,
+        UNCLASSIFIED_MISSING_ML_SAMPLE,
+        UNCLASSIFIED_MISSING_NEXT_CANDLE,
+        UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE,
+    )
+
 
 
 def load_resolved_records(shadow_db: str) -> list[dict[str, Any]]:
@@ -123,8 +135,7 @@ def classify_stop_mechanisms(
         elif nc_low <= stop_price:
             r["stop_mechanism"] = INTRADAY_STOP
         else:
-            # Fallback if both low and open were somehow above stop_price
-            r["stop_mechanism"] = INTRADAY_STOP
+            r["stop_mechanism"] = UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE
 
     conn.close()
     return records
@@ -138,13 +149,14 @@ def compute_overall_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_resolved = len(records)
     total_losses = sum(1 for r in records if r["future_observed_outcome"] == "LOSS")
     
-    day1_losses = [r for r in records if r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE)]
+    day1_losses = [r for r in records if is_day1_loss(r["stop_mechanism"])]
     day1_count = len(day1_losses)
 
     gap_down_count = sum(1 for r in records if r["stop_mechanism"] == GAP_DOWN_STOP)
     intraday_count = sum(1 for r in records if r["stop_mechanism"] == INTRADAY_STOP)
     missing_sample_count = sum(1 for r in records if r["stop_mechanism"] == UNCLASSIFIED_MISSING_ML_SAMPLE)
     missing_candle_count = sum(1 for r in records if r["stop_mechanism"] == UNCLASSIFIED_MISSING_NEXT_CANDLE)
+    not_seen_count = sum(1 for r in records if r["stop_mechanism"] == UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE)
 
     return {
         "total_resolved": total_resolved,
@@ -158,6 +170,7 @@ def compute_overall_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         "intraday_pct_of_day1": round(intraday_count / day1_count, 4) if day1_count else 0.0,
         "unclassified_missing_sample_count": missing_sample_count,
         "unclassified_missing_candle_count": missing_candle_count,
+        "unclassified_stop_not_seen_count": not_seen_count,
     }
 
 
@@ -171,7 +184,7 @@ def compute_date_concentration(records: list[dict[str, Any]]) -> list[dict[str, 
         grp = by_date[date]
         total = len(grp)
         losses = sum(1 for r in grp if r["future_observed_outcome"] == "LOSS")
-        day1 = sum(1 for r in grp if r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE))
+        day1 = sum(1 for r in grp if is_day1_loss(r["stop_mechanism"]))
         gap_downs = sum(1 for r in grp if r["stop_mechanism"] == GAP_DOWN_STOP)
         intradays = sum(1 for r in grp if r["stop_mechanism"] == INTRADAY_STOP)
         
@@ -202,7 +215,7 @@ def _rank_band(rank: int) -> str:
 
 def compute_rank_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
     # 1. Average probabilities
-    day1_probs = [r["win_probability"] for r in records if r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE)]
+    day1_probs = [r["win_probability"] for r in records if is_day1_loss(r["stop_mechanism"])]
     other_loss_probs = [r["win_probability"] for r in records if r["future_observed_outcome"] == "LOSS" and r["stop_mechanism"] == NOT_CLASSIFIED]
     win_probs = [r["win_probability"] for r in records if r["future_observed_outcome"] == "WIN"]
 
@@ -221,7 +234,7 @@ def compute_rank_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
         if not grp:
             continue
         total = len(grp)
-        day1 = sum(1 for r in grp if r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE))
+        day1 = sum(1 for r in grp if is_day1_loss(r["stop_mechanism"]))
         band_results.append({
             "rank_band": band,
             "total_picks": total,
@@ -246,7 +259,7 @@ def compute_bucket_diagnostics(records: list[dict[str, Any]]) -> list[dict[str, 
     for bucket in sorted(by_bucket.keys()):
         grp = by_bucket[bucket]
         total = len(grp)
-        day1 = sum(1 for r in grp if r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE))
+        day1 = sum(1 for r in grp if is_day1_loss(r["stop_mechanism"]))
         results.append({
             "bucket": bucket,
             "total_picks": total,
@@ -297,7 +310,7 @@ def compute_regime_comparison(records: list[dict[str, Any]]) -> list[dict[str, A
 def get_high_confidence_failures(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     failures = []
     for r in records:
-        is_day1 = r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE)
+        is_day1 = is_day1_loss(r["stop_mechanism"])
         if is_day1 and r["win_probability"] >= 0.50:
             failures.append({
                 "symbol": r["symbol"],
@@ -313,7 +326,7 @@ def get_repeat_symbol_offenders(records: list[dict[str, Any]]) -> list[dict[str,
     counts = defaultdict(int)
     details = defaultdict(list)
     for r in records:
-        is_day1 = r["stop_mechanism"] in (GAP_DOWN_STOP, INTRADAY_STOP, UNCLASSIFIED_MISSING_ML_SAMPLE, UNCLASSIFIED_MISSING_NEXT_CANDLE)
+        is_day1 = is_day1_loss(r["stop_mechanism"])
         if is_day1:
             counts[r["symbol"]] += 1
             details[r["symbol"]].append(f"{r['scored_sample_date']}(Rank {r['rank']})")
@@ -445,6 +458,7 @@ def format_txt_report(report: dict[str, Any]) -> str:
         f"   INTRADAY_STOP          : {ov['intraday_count']} ({ov['intraday_pct_of_day1']:.2%} of Day-1 losses)",
         f"   UNCLASSIFIED_MISSING_ML_SAMPLE  : {ov['unclassified_missing_sample_count']}",
         f"   UNCLASSIFIED_MISSING_NEXT_CANDLE: {ov['unclassified_missing_candle_count']}",
+        f"   UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE: {ov['unclassified_stop_not_seen_count']}",
         "",
     ]
 

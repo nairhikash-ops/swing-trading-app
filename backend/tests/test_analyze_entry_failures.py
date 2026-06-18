@@ -21,6 +21,7 @@ from app.scripts.analyze_entry_failures import (
     NOT_CLASSIFIED,
     UNCLASSIFIED_MISSING_ML_SAMPLE,
     UNCLASSIFIED_MISSING_NEXT_CANDLE,
+    UNCLASSIFIED_STOP_NOT_SEEN_IN_NEXT_CANDLE,
 )
 
 
@@ -353,3 +354,18 @@ def test_report_txt_written(tmp_path):
     assert "7. HIGH-CONFIDENCE DAY-1 FAILURES" in content
     assert "8. REPEAT SYMBOL OFFENDERS" in content
     assert "9. PLAIN-ENGLISH DIAGNOSTIC OBSERVATIONS" in content
+
+
+def test_unclassified_stop_not_seen_in_next_candle(tmp_path):
+    s_row = {"outcome": "LOSS", "days_to_outcome": 1, "symbol": "NOTSEENSYM", "scored_sample_date": "2026-05-15", "barrier_hit_date": "2026-05-18"}
+    s_db = make_shadow_db(tmp_path, [s_row])
+    
+    sample = {"symbol": "NOTSEENSYM", "sample_date": "2026-05-15", "entry_close": 100.0, "stop_price": 97.0, "instrument_id": 1}
+    candle = {"instrument_id": 1, "trading_date": "2026-05-18", "open": 98.0, "high": 99.0, "low": 98.0, "close": 98.5}
+    d_db = make_dhan_db(tmp_path, [sample], [candle])
+    
+    report = build_report(shadow_db=s_db, dhan_db=d_db)
+    assert report["status"] == "OK"
+    assert report["overall"]["gap_down_count"] == 0
+    assert report["overall"]["intraday_count"] == 0
+    assert report["overall"]["unclassified_stop_not_seen_count"] == 1
