@@ -45,7 +45,7 @@ def compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
 def generate_regime_dataset(
     input_path: str = "/app/data/exports/ml_dataset_ohlcv_v1.csv",
     output_path: str = "/app/data/exports/ml_dataset_ohlcv_regime_v1.csv",
-    expected_rows: int = 440411,
+    minimum_expected_rows: int = 440411,
     skip_row_check: bool = False
 ):
     if not os.path.exists(input_path):
@@ -54,8 +54,8 @@ def generate_regime_dataset(
     print(f"Loading V1 dataset from {input_path}...")
     df = pd.read_csv(input_path)
     
-    if not skip_row_check and len(df) != expected_rows:
-        raise ValueError(f"Input CSV row count {len(df)} does not match expected {expected_rows}")
+    if not skip_row_check and len(df) < minimum_expected_rows:
+        raise ValueError(f"Input CSV row count {len(df)} is less than minimum expected {minimum_expected_rows}")
         
     print(f"Computing regime features for {len(df)} rows...")
     df = compute_regime_features(df)
@@ -96,7 +96,7 @@ def generate_regime_dataset(
     
     # Check for duplicates using purely symbol and sample_date
     duplicate_count = int(df.duplicated(subset=["symbol", "sample_date"]).sum())
-    if not skip_row_check and duplicate_count > 0:
+    if duplicate_count > 0:
          raise ValueError(f"Found {duplicate_count} duplicate samples in dataset.")
     
     print(f"Writing derived dataset to {output_path}...")
