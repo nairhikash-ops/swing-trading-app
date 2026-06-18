@@ -24,12 +24,35 @@ class MockIndexUniverseService:
 
 @pytest.fixture
 def mock_settings(tmp_path):
+    db_path = str(tmp_path / "test_incremental.sqlite3")
+
+    # SAFETY GUARD: never allow this test to accidentally use the production database.
+    # The leak that occurred previously: during manual V1.13 server verification,
+    # the test file was copied into the container with `docker cp` and then pytest
+    # was run inside the container. The container's tmp_path resolved inside /tmp,
+    # which was fine for pytest isolation, but the generate_samples_batch script was
+    # also run manually outside pytest in the same container session, and it used
+    # the real DB (/app/data/dhan_auth.sqlite3) via the live Settings. This caused
+    # TESTSYM instrument + 62 daily_candles rows to be inserted into the real dev DB.
+    #
+    # Mitigation:
+    # 1. This fixture now asserts the DB path is not the production path.
+    # 2. The ml_service fixture patches _enforce_healthy_quality_gate so no quality
+    #    gate touches real instrument data.
+    # 3. The cleanup_testsym.py script removes any leaked rows from production.
+    PROD_DB_MARKERS = ["/app/data/dhan_auth.sqlite3", "dhan_auth.sqlite3"]
+    for marker in PROD_DB_MARKERS:
+        assert marker not in db_path, (
+            f"SAFETY: test DB path '{db_path}' must not reference the production database!"
+        )
+
     return Settings(
-        database_path=str(tmp_path / "test_incremental.sqlite3"),
+        database_path=db_path,
         secret_key="test",
         dhan_client_id="test",
         dhan_access_token="test",
     )
+
 
 
 @pytest.fixture
