@@ -57,15 +57,22 @@ def mock_dhan_db(tmp_path):
     
     def mock_get_settings():
         settings = original_get_settings()
-        settings.database_path = db_path
         return settings
         
     import app.scripts.resolve_shadow_outcomes as resolver_module
-    resolver_module.get_settings = mock_get_settings
+    
+    original_token_store = resolver_module.TokenStore
+    class MockTokenStore:
+        def __init__(self, _):
+            self.db_path = db_path
+        def _connect(self):
+            return sqlite3.connect(self.db_path)
+            
+    resolver_module.TokenStore = MockTokenStore
     
     yield db_path
     
-    resolver_module.get_settings = original_get_settings
+    resolver_module.TokenStore = original_token_store
 
 
 @pytest.fixture
