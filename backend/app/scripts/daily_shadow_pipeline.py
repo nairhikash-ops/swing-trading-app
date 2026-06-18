@@ -43,7 +43,7 @@ def get_shadow_db_status_counts(db_path: str = DEFAULT_DB_PATH) -> dict:
     return status_counts
 
 def run_pipeline() -> None:
-    print("V1.12 GUARDED MANUAL SHADOW PIPELINE RUNNER")
+    print("V1.15 GUARDED MANUAL SHADOW PIPELINE RUNNER")
     print("Starting pipeline execution...\n")
     
     # 1. Verify required artifacts
@@ -111,7 +111,7 @@ def run_pipeline() -> None:
     resolved_count_delta = status_after.get("RESOLVED", 0) - status_before.get("RESOLVED", 0)
     
     print(f"\n============================================================")
-    print("FINAL SUMMARY: V1.12 DAILY SHADOW PIPELINE")
+    print("FINAL SUMMARY: V1.15 DAILY SHADOW PIPELINE")
     print(f"============================================================")
     print(f"Scored sample date:  {scored_sample_date}")
     print(f"Ranking rows scored: {ranking_rows}")
