@@ -26,6 +26,9 @@ WHAT_IF_DIAGNOSTIC = "what-if diagnostic"
 SHADOW_ONLY_HYPOTHESIS = "shadow-only hypothesis"
 DIAGNOSTIC_OBSERVATION = "diagnostic observation"
 
+REPORT_JSON_PATH = "/app/data/exports/training_reproducibility_audit.json"
+REPORT_TXT_PATH = "/app/data/exports/training_reproducibility_audit.txt"
+
 
 def generate_expected_features() -> tuple[list[str], list[str]]:
     technical_cols = []
