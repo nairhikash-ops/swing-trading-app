@@ -86,7 +86,7 @@ def run_track_shadow_hgb_shortlist(
             "tracking_status": "OBSERVING"
         })
 
-        if execute:
+    if execute:
         # Initialize shadow DB if not exists
         init_db(db_path)
         # Count existing rows for this model_version before insertion

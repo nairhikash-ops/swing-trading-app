@@ -84,8 +84,8 @@ def test_execute_inserts_and_duplicate_safe(tmp_path):
     # add dummy LR row
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO shadow_tracking (date_scored, scored_sample_date, model_version, model_commit, rank, bucket, symbol, win_probability, regime_context_json, tracking_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("2026-05-18T00:00:00Z", "2026-05-18", "stock_opportunity_ohlcv_regime_v1", "dummy", 1, "PRIMARY_TOP_1", "SYM001", 0.6, "{}", "OBSERVING"),
+        "INSERT INTO shadow_tracking (date_scored, scored_sample_date, model_version, model_commit, rank, bucket, symbol, win_probability, regime_context_json, tracking_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("2026-05-18T00:00:00Z", "2026-05-18", "stock_opportunity_ohlcv_regime_v1", "dummy", 1, "PRIMARY_TOP_1", "SYM001", 0.6, "{}", "OBSERVING", "now", "now"),
     )
     conn.commit()
     lr_cnt = conn.execute("SELECT COUNT(1) FROM shadow_tracking WHERE model_version=?", ("stock_opportunity_ohlcv_regime_v1",)).fetchone()[0]
