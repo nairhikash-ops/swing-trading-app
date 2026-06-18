@@ -277,3 +277,122 @@ class TestOutputSchema:
         )
         meta = json.loads(e["ranking_meta"].read_text())
         assert meta.get("model_version") == "stock_opportunity_hgb_regime_v1"
+
+
+# ---------------------------------------------------------------------------
+# V1.26: --dataset-csv override tests
+# ---------------------------------------------------------------------------
+
+class TestDatasetCsvOverride:
+    """Verify scorer reads from a custom CSV when --dataset-csv is supplied.
+
+    These tests simulate the V1.26 workflow where export_scoring_snapshot.py
+    produces a feature-only CSV (ml_scoring_ohlcv_regime_YYYY-MM-DD.csv) and
+    the scorer is invoked with --dataset-csv pointing to that file.
+    """
+
+    def _make_scoring_csv(
+        self,
+        path: Path,
+        dates: list[str],
+        include_outcome: bool = False,
+    ) -> None:
+        """Write a custom dataset CSV as if produced by export_scoring_snapshot.py.
+
+        Includes or excludes an 'outcome' column to test that the scorer
+        ignores it either way (scorer only reads feature_order + symbol + sample_date).
+        """
+        rows = []
+        for date in dates:
+            for sym in SYMBOLS:
+                row = {"symbol": sym, "sample_date": date, "f1": 0.1, "f2": 0.2}
+                if include_outcome:
+                    row["outcome"] = "INSUFFICIENT_FUTURE_DATA"
+                rows.append(row)
+        pd.DataFrame(rows).to_csv(path, index=False)
+
+    def test_scorer_reads_from_custom_dataset_csv(self, tmp_path):
+        """When --dataset-csv is supplied, scorer reads from that file,
+        not from the default ml_dataset_ohlcv_regime_v1.csv."""
+        model_root   = tmp_path / "models" / "stock_opportunity_hgb_regime_v1"
+        exports_dir  = tmp_path / "exports"
+        exports_dir.mkdir(parents=True)
+        _make_model_dir(model_root)
+
+        # Custom scoring CSV — only contains 2026-05-19 (not in default CSV)
+        custom_csv = exports_dir / "ml_scoring_ohlcv_regime_2026-05-19.csv"
+        self._make_scoring_csv(custom_csv, dates=["2026-05-19"])
+
+        score(
+            dataset_csv=custom_csv,              # ← custom path
+            model_root=model_root,
+            ranking_csv=exports_dir / "latest_hgb_regime_rankings.csv",
+            ranking_meta=exports_dir / "latest_hgb_regime_rankings.meta.json",
+            exports_dir=exports_dir,
+            sample_date="2026-05-19",
+        )
+
+        df_out = pd.read_csv(exports_dir / "latest_hgb_regime_rankings.csv")
+        assert set(df_out["sample_date"].unique()) == {"2026-05-19"}, (
+            "Scorer must produce output for the custom CSV's date, not a default date"
+        )
+        assert "win_probability" in df_out.columns
+
+    def test_scorer_ignores_outcome_column_in_custom_csv(self, tmp_path):
+        """Scorer must succeed even if 'outcome' column is present in the custom CSV.
+
+        export_scoring_snapshot.py writes outcome='INSUFFICIENT_FUTURE_DATA' as a
+        passthrough label. The scorer must never read it and must not fail if it exists.
+        """
+        model_root   = tmp_path / "models" / "stock_opportunity_hgb_regime_v1"
+        exports_dir  = tmp_path / "exports"
+        exports_dir.mkdir(parents=True)
+        _make_model_dir(model_root)
+
+        # Custom CSV with 'outcome' column included
+        custom_csv = exports_dir / "ml_scoring_ohlcv_regime_2026-05-19.csv"
+        self._make_scoring_csv(custom_csv, dates=["2026-05-19"], include_outcome=True)
+
+        # Must not raise even though outcome column is present
+        score(
+            dataset_csv=custom_csv,
+            model_root=model_root,
+            ranking_csv=exports_dir / "latest_hgb_regime_rankings.csv",
+            ranking_meta=exports_dir / "latest_hgb_regime_rankings.meta.json",
+            exports_dir=exports_dir,
+            sample_date="2026-05-19",
+        )
+
+        df_out = pd.read_csv(exports_dir / "latest_hgb_regime_rankings.csv")
+        assert len(df_out) == len(SYMBOLS), "All symbols must be scored"
+        # Output ranking CSV must NOT contain the 'outcome' column
+        assert "outcome" not in df_out.columns, (
+            "Scorer must not pass 'outcome' through to the ranking output CSV"
+        )
+
+    def test_scorer_fails_loudly_if_date_missing_in_custom_csv(self, tmp_path):
+        """If --sample-date is not present in the custom CSV, scorer raises ValueError.
+
+        This prevents silently scoring the wrong date when using a dated
+        scoring snapshot CSV.
+        """
+        model_root  = tmp_path / "models" / "stock_opportunity_hgb_regime_v1"
+        exports_dir = tmp_path / "exports"
+        exports_dir.mkdir(parents=True)
+        _make_model_dir(model_root)
+
+        # CSV only has 2026-05-19 rows
+        custom_csv = exports_dir / "ml_scoring_ohlcv_regime_2026-05-19.csv"
+        self._make_scoring_csv(custom_csv, dates=["2026-05-19"])
+
+        # Requesting a different date — must fail loudly
+        with pytest.raises(ValueError, match="not present in the dataset"):
+            score(
+                dataset_csv=custom_csv,
+                model_root=model_root,
+                ranking_csv=exports_dir / "latest_hgb_regime_rankings.csv",
+                ranking_meta=exports_dir / "latest_hgb_regime_rankings.meta.json",
+                exports_dir=exports_dir,
+                sample_date="2026-05-21",   # ← not in the custom CSV
+            )
+
