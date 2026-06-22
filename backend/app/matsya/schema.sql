@@ -73,6 +73,23 @@ CREATE TABLE IF NOT EXISTS matsya.dhan_profile_snapshots (
     UNIQUE (provider_code, access_token_hash, profile_hash)
 );
 
+CREATE TABLE IF NOT EXISTS matsya.dhan_token_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider_code TEXT NOT NULL DEFAULT 'dhan' REFERENCES matsya.providers(provider_code),
+    dhan_client_id TEXT NOT NULL,
+    encrypted_access_token TEXT NOT NULL,
+    access_token_hash TEXT NOT NULL,
+    token_source TEXT NOT NULL,
+    expiry_time TIMESTAMPTZ,
+    profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_status_check_at TIMESTAMPTZ,
+    last_renew_attempt_at TIMESTAMPTZ,
+    last_renew_success_at TIMESTAMPTZ,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS matsya.dhan_token_renewal_runs (
     id BIGSERIAL PRIMARY KEY,
     provider_code TEXT NOT NULL DEFAULT 'dhan' REFERENCES matsya.providers(provider_code),

@@ -1,0 +1,28 @@
+services:
+  matsya-api:
+    build:
+      context: ../../backend
+    command: ["uvicorn", "app.matsya_api:app", "--host", "0.0.0.0", "--port", "8020"]
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8020:8020"
+    networks:
+      - matsya-db
+    restart: unless-stopped
+
+  matsya-ui:
+    build:
+      context: ../../frontend-matsya
+      args:
+        VITE_MATSYA_API_BASE_URL: ${VITE_MATSYA_API_BASE_URL:-http://localhost:8020}
+    ports:
+      - "127.0.0.1:5190:80"
+    depends_on:
+      - matsya-api
+    restart: unless-stopped
+
+networks:
+  matsya-db:
+    external: true
+    name: matsya-db_default

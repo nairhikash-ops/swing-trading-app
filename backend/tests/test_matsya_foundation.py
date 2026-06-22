@@ -27,6 +27,7 @@ def test_matsya_schema_is_additive_and_idempotent() -> None:
     assert "create table if not exists matsya.raw_import_errors" in schema
     assert "create table if not exists matsya.raw_dhan_responses" in schema
     assert "create table if not exists matsya.dhan_profile_snapshots" in schema
+    assert "create table if not exists matsya.dhan_token_state" in schema
     assert "create table if not exists matsya.dhan_token_renewal_runs" in schema
     assert "create table if not exists matsya.instruments" in schema
     assert "create table if not exists matsya.market_universe_members" in schema

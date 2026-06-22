@@ -12,6 +12,9 @@ DEFAULT_SCHEMA = "matsya"
 class MatsyaSettings:
     database_url: str
     schema_name: str = DEFAULT_SCHEMA
+    app_secret_key: str = ""
+    cors_origins_raw: str = "http://localhost:5190,http://127.0.0.1:5190"
+    dhan_api_base_url: str = "https://api.dhan.co"
     instrument_master_url: str = "https://images.dhan.co/api-data/api-scrip-master.csv"
     nifty_500_url: str = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
 
@@ -32,6 +35,12 @@ class MatsyaSettings:
         return cls(
             database_url=database_url,
             schema_name=os.getenv("MATSYA_SCHEMA", DEFAULT_SCHEMA),
+            app_secret_key=os.getenv("MATSYA_APP_SECRET_KEY", os.getenv("APP_SECRET_KEY", "")),
+            cors_origins_raw=os.getenv(
+                "MATSYA_CORS_ORIGINS",
+                "http://localhost:5190,http://127.0.0.1:5190",
+            ),
+            dhan_api_base_url=os.getenv("MATSYA_DHAN_API_BASE_URL", "https://api.dhan.co"),
             instrument_master_url=os.getenv(
                 "MATSYA_INSTRUMENT_MASTER_URL",
                 "https://images.dhan.co/api-data/api-scrip-master.csv",
@@ -51,3 +60,7 @@ class MatsyaSettings:
         port = f":{parsed.port}" if parsed.port else ""
         netloc = f"{username}:***@{hostname}{port}"
         return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
