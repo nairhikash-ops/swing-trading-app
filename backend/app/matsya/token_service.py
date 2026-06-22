@@ -15,9 +15,6 @@ from app.matsya.settings import MatsyaSettings
 from app.timezone import now_utc, to_utc
 
 
-RENEW_BEFORE_MINUTES = 180
-
-
 @dataclass(frozen=True)
 class MatsyaStoredToken:
     dhan_client_id: str
@@ -328,7 +325,7 @@ class MatsyaDhanTokenService:
     def _status_from_token(self, token: MatsyaStoredToken | None) -> dict[str, Any]:
         if token is None:
             return _empty_status()
-        state = _token_state(token)
+        state = _token_state(token, self.settings.renew_before_minutes)
         if not self.settings.app_secret_key:
             state = "config_error"
         profile = token.profile or {}
@@ -346,7 +343,7 @@ class MatsyaDhanTokenService:
         }
 
 
-def _token_state(token: MatsyaStoredToken) -> str:
+def _token_state(token: MatsyaStoredToken, renew_before_minutes: int) -> str:
     if token.last_error and token.last_renew_attempt_at:
         return "renew_failed"
     if token.expiry_time is None:
@@ -354,7 +351,7 @@ def _token_state(token: MatsyaStoredToken) -> str:
     current = now_utc()
     if token.expiry_time <= current:
         return "expired"
-    if token.expiry_time <= current + timedelta(minutes=RENEW_BEFORE_MINUTES):
+    if token.expiry_time <= current + timedelta(minutes=renew_before_minutes):
         return "expiring_soon"
     return "active"
 

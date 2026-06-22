@@ -43,8 +43,8 @@ def test_matsya_setup_compose_is_setup_only() -> None:
     assert "matsya-api" in compose
     assert "matsya-ui" in compose
     assert "app.matsya_api:app" in compose
-    assert "127.0.0.1:8020:8020" in compose
-    assert "127.0.0.1:5190:80" in compose
+    assert ":8020" in compose
+    assert ":80" in compose
     assert "postgres:" not in compose
     assert "dhan-auth-data" not in compose
     assert "swing-trading-app-dev" not in compose

@@ -22,6 +22,18 @@ services:
       - matsya-api
     restart: unless-stopped
 
+  matsya-renewal-worker:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "scripts.matsya_renewal_worker"]
+    env_file:
+      - .env
+    networks:
+      - matsya-db
+    restart: unless-stopped
+    depends_on:
+      - matsya-api
+
 networks:
   matsya-db:
     external: true

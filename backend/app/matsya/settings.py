@@ -17,6 +17,7 @@ class MatsyaSettings:
     dhan_api_base_url: str = "https://api.dhan.co"
     instrument_master_url: str = "https://images.dhan.co/api-data/api-scrip-master.csv"
     nifty_500_url: str = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
+    renew_before_minutes: int = 180
 
     @classmethod
     def from_env(cls) -> "MatsyaSettings":
@@ -49,6 +50,7 @@ class MatsyaSettings:
                 "MATSYA_NIFTY_500_URL",
                 "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
             ),
+            renew_before_minutes=int(os.getenv("MATSYA_RENEW_BEFORE_MINUTES", "180")),
         )
 
     def safe_database_url(self) -> str:
