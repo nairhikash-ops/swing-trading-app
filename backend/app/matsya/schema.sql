@@ -197,3 +197,73 @@ CREATE TABLE IF NOT EXISTS matsya.ohlcv_daily (
 
 CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_security_date
 ON matsya.ohlcv_daily(provider_code, security_id, trading_date DESC);
+
+CREATE TABLE IF NOT EXISTS matsya.ohlcv_fetch_runs (
+    id BIGSERIAL PRIMARY KEY,
+    universe_name TEXT NOT NULL,
+    lookback_calendar_days INTEGER NOT NULL,
+    from_date TEXT NOT NULL,
+    to_date_exclusive TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total_symbols INTEGER NOT NULL DEFAULT 0,
+    mapped_symbols INTEGER NOT NULL DEFAULT 0,
+    skipped_symbols INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_fetch_runs_status
+ON matsya.ohlcv_fetch_runs(status);
+
+CREATE TABLE IF NOT EXISTS matsya.ohlcv_fetch_items (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES matsya.ohlcv_fetch_runs(id) ON DELETE CASCADE,
+    universe_member_id BIGINT REFERENCES matsya.market_universe_members(id),
+    instrument_id BIGINT REFERENCES matsya.instruments(id),
+    company_name TEXT NOT NULL DEFAULT '',
+    industry TEXT NOT NULL DEFAULT '',
+    symbol TEXT NOT NULL DEFAULT '',
+    isin TEXT NOT NULL DEFAULT '',
+    security_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    candles_received INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    request_from_date TEXT,
+    request_to_date TEXT,
+    archive_status TEXT NOT NULL DEFAULT '',
+    source_floor_reason TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(run_id, universe_member_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_fetch_items_run_status
+ON matsya.ohlcv_fetch_items(run_id, status);
+
+CREATE TABLE IF NOT EXISTS matsya.ohlcv_instrument_archive (
+    instrument_id BIGINT NOT NULL REFERENCES matsya.instruments(id),
+    security_id TEXT NOT NULL DEFAULT '',
+    symbol TEXT NOT NULL DEFAULT '',
+    source_provider TEXT NOT NULL DEFAULT 'dhan',
+    interval TEXT NOT NULL DEFAULT 'daily',
+    first_stored_candle_date TEXT,
+    latest_stored_candle_date TEXT,
+    source_floor_reached INTEGER NOT NULL DEFAULT 0,
+    source_floor_date TEXT,
+    source_floor_reason TEXT NOT NULL DEFAULT 'unknown',
+    complete_available_history INTEGER NOT NULL DEFAULT 0,
+    last_successful_fetch_at TIMESTAMPTZ,
+    last_no_new_data_at TIMESTAMPTZ,
+    next_retry_after TIMESTAMPTZ,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (instrument_id, source_provider, interval)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_instrument_archive_latest
+ON matsya.ohlcv_instrument_archive(latest_stored_candle_date);

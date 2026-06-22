@@ -34,6 +34,18 @@ services:
     depends_on:
       - matsya-api
 
+  matsya-ohlcv-worker:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "scripts.matsya_ohlcv_worker"]
+    env_file:
+      - .env
+    networks:
+      - matsya-db
+    restart: unless-stopped
+    depends_on:
+      - matsya-api
+
 networks:
   matsya-db:
     external: true

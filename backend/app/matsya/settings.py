@@ -18,6 +18,16 @@ class MatsyaSettings:
     instrument_master_url: str = "https://images.dhan.co/api-data/api-scrip-master.csv"
     nifty_500_url: str = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
     renew_before_minutes: int = 180
+    ohlcv_worker_enabled: bool = True
+    ohlcv_loop: bool = False
+    ohlcv_check_interval_seconds: int = 3600
+    historical_lookback_calendar_days: int = 1825
+    dhan_historical_daily_supported_years: int = 5
+    dhan_historical_rps: float = 2.0
+    dhan_historical_max_retries: int = 3
+    dhan_historical_exchange_segment: str = "NSE_EQ"
+    dhan_historical_instrument: str = "EQUITY"
+    ohlcv_universe_name: str = "NIFTY_500"
 
     @classmethod
     def from_env(cls) -> "MatsyaSettings":
@@ -51,6 +61,16 @@ class MatsyaSettings:
                 "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
             ),
             renew_before_minutes=int(os.getenv("MATSYA_RENEW_BEFORE_MINUTES", "180")),
+            ohlcv_worker_enabled=os.getenv("MATSYA_OHLCV_WORKER_ENABLED", "true").lower() == "true",
+            ohlcv_loop=os.getenv("MATSYA_OHLCV_LOOP", "false").lower() == "true",
+            ohlcv_check_interval_seconds=int(os.getenv("MATSYA_OHLCV_CHECK_INTERVAL_SECONDS", "3600")),
+            historical_lookback_calendar_days=int(os.getenv("MATSYA_HISTORICAL_LOOKBACK_CALENDAR_DAYS", "1825")),
+            dhan_historical_daily_supported_years=int(os.getenv("MATSYA_DHAN_HISTORICAL_DAILY_SUPPORTED_YEARS", "5")),
+            dhan_historical_rps=float(os.getenv("MATSYA_DHAN_HISTORICAL_RPS", "2")),
+            dhan_historical_max_retries=int(os.getenv("MATSYA_DHAN_HISTORICAL_MAX_RETRIES", "3")),
+            dhan_historical_exchange_segment=os.getenv("MATSYA_DHAN_HISTORICAL_EXCHANGE_SEGMENT", "NSE_EQ"),
+            dhan_historical_instrument=os.getenv("MATSYA_DHAN_HISTORICAL_INSTRUMENT", "EQUITY"),
+            ohlcv_universe_name=os.getenv("MATSYA_OHLCV_UNIVERSE_NAME", "NIFTY_500"),
         )
 
     def safe_database_url(self) -> str:
