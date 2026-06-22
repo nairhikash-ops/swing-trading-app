@@ -24,4 +24,3 @@ python scripts/matsya_status.py
 ```
 
 The `.env` file contains secrets. Do not print it and do not commit it.
-

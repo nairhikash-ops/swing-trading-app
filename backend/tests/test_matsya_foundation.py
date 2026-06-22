@@ -119,4 +119,3 @@ def test_universe_and_candle_helpers_are_deterministic() -> None:
     assert candles[0]["open_price"] == 100.0
     assert sha256_payload(payload) == sha256_payload(payload)
     assert canonical_json({"b": 1, "a": 2}) == '{"a":2,"b":1}'
-

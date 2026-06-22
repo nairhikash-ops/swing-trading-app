@@ -180,4 +180,3 @@ CREATE TABLE IF NOT EXISTS matsya.ohlcv_daily (
 
 CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_security_date
 ON matsya.ohlcv_daily(provider_code, security_id, trading_date DESC);
-

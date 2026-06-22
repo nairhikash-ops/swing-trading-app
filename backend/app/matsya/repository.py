@@ -229,4 +229,3 @@ def upsert_ohlcv_daily(conn: Any, row: JsonDict, *, run_id: int | None = None) -
         """,
         {**row, "raw_candle": _json(row.get("raw_candle")), "run_id": run_id},
     )
-

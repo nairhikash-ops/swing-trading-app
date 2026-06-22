@@ -19,4 +19,3 @@ services:
 volumes:
   matsya-postgres-data:
     name: matsya-postgres-data
-

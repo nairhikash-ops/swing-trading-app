@@ -52,4 +52,3 @@ python scripts/matsya_fetch_ohlcv.py --security-id 1333 --from-date 2026-01-01 -
 
 Secrets must stay in environment variables or the server `.env`; they should not
 be printed, committed, or copied into docs.
-

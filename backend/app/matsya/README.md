@@ -14,4 +14,3 @@ Owned areas:
 
 Required secret material must come from environment variables or the server-side
 `.env` file. Do not print or commit those values.
-

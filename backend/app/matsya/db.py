@@ -30,4 +30,3 @@ def health_check(conn: psycopg.Connection[Any]) -> dict[str, str]:
         "SELECT current_database() AS database_name, current_user AS user_name"
     ).fetchone()
     return {"database": row[0], "user": row[1]}
-
