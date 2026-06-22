@@ -17,12 +17,26 @@ def test_matsya_renewal_worker_exists_and_is_safe() -> None:
     
     assert "class MatsyaRenewalWorker:" in worker
     
-    # Secret printing patterns
+    # 1. Worker only calls renew for "expiring_soon"
+    assert 'if token_state == "expiring_soon":' in worker
+    assert "await self.service.renew()" in worker.split('if token_state == "expiring_soon":')[1].split('elif')[0]
+    
+    # 2. Worker source does not contain bad patterns
+    assert "[\"expiring_soon\", \"expired\", \"renew_failed\"]" not in worker
+    assert "new_status.get(\"last_error\")" not in worker
+    assert "new_status.get('last_error')" not in worker
     assert "print(os.environ" not in worker
-    assert "print(settings.database_url" not in worker
     assert "print(access_token" not in worker
     assert not re.search(r"logger\..*access_token", worker)
     assert "cat .env" not in worker
+    assert not re.search(r"docker exec.*env", worker)
+    
+    # 3. Worker has explicit safe handling for edge cases
+    assert 'elif token_state == "expired":' in worker
+    assert 'elif token_state == "renew_failed":' in worker
+    assert 'elif token_state == "config_error":' in worker
+    assert 'elif token_state == "unknown":' in worker
+    assert 'elif token_state == "active":' in worker
 
 
 def test_matsya_setup_compose_has_worker_service() -> None:

@@ -35,13 +35,13 @@ class MatsyaRenewalWorker:
             signal.signal(signal.SIGINT, self.handle_shutdown)
             signal.signal(signal.SIGTERM, self.handle_shutdown)
 
-        logger.info(f"Matsya renewal worker started. Interval: {self.check_interval_seconds}s")
+        logger.info("Matsya renewal worker started. Interval: %ss", self.check_interval_seconds)
 
         while not self._shutdown:
             try:
                 await self._check_and_renew()
-            except Exception as e:
-                logger.error(f"Unexpected error in renewal worker: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Unexpected error in renewal worker loop.")
             
             # Sleep in small increments to allow responsive shutdown
             for _ in range(self.check_interval_seconds):
@@ -60,16 +60,25 @@ class MatsyaRenewalWorker:
         token_state = status.get("token_state")
         expiry = status.get("expiry_time")
         
-        logger.info(f"Token status: {token_state}, expiry: {expiry}")
+        logger.info("Token status: %s, expiry: %s", token_state, expiry)
 
-        if token_state in ["expiring_soon", "expired", "renew_failed"]:
-            logger.info(f"Token is {token_state}. Attempting renewal...")
+        if token_state == "expiring_soon":
+            logger.info("Token is expiring_soon. Attempting auto-renewal...")
             success, new_status, message = await self.service.renew()
             
             if success:
-                new_expiry = new_status.get("expiry_time")
-                logger.info(f"Renewal successful: {message}. New expiry: {new_expiry}")
+                logger.info("Renewal successful: %s. New expiry: %s", message, new_status.get("expiry_time"))
             else:
-                logger.error(f"Renewal failed: {message}. Error: {new_status.get('last_error')}")
+                logger.error("Renewal failed: %s", message)
+        elif token_state == "expired":
+            logger.warning("Token expired; manual update required.")
+        elif token_state == "renew_failed":
+            logger.warning("Previous renewal failed; manual intervention required.")
+        elif token_state == "config_error":
+            logger.error("Token config_error; auto-renewal aborted.")
+        elif token_state == "unknown":
+            logger.warning("Token state unknown; manual verification required.")
+        elif token_state == "active":
+            logger.debug("Token state is active, no renewal needed.")
         else:
-            logger.debug(f"Token state is {token_state}, no renewal needed.")
+            logger.debug("Unhandled token state: %s", token_state)
