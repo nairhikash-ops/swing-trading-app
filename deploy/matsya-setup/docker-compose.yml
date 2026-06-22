@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:8020:8020"
+      - "${MATSYA_BIND_HOST:-127.0.0.1}:${MATSYA_API_PORT:-8020}:8020"
     networks:
       - matsya-db
     restart: unless-stopped
@@ -17,7 +17,7 @@ services:
       args:
         VITE_MATSYA_API_BASE_URL: ${VITE_MATSYA_API_BASE_URL:-http://localhost:8020}
     ports:
-      - "127.0.0.1:5190:80"
+      - "${MATSYA_BIND_HOST:-127.0.0.1}:${MATSYA_UI_PORT:-5190}:80"
     depends_on:
       - matsya-api
     restart: unless-stopped
