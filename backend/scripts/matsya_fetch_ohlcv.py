@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--instrument", default="EQUITY")
     parser.add_argument("--from-date", required=True)
     parser.add_argument("--to-date", required=True)
-    parser.add_argument("--access-token-env", default="DHAN_ACCESS_TOKEN")
+    parser.add_argument("--access-token-env", default="MATSYA_MANUAL_DHAN_TOKEN")
     parser.add_argument("--dry-run", action="store_true", help="Fetch only; do not write to PostgreSQL.")
     return parser.parse_args()
 

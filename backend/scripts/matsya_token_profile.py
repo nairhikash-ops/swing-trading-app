@@ -13,7 +13,7 @@ from app.matsya.settings import MatsyaSettings
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture a Dhan profile snapshot without printing tokens.")
-    parser.add_argument("--access-token-env", default="DHAN_ACCESS_TOKEN")
+    parser.add_argument("--access-token-env", default="MATSYA_PROFILE_DHAN_TOKEN")
     parser.add_argument("--dry-run", action="store_true", help="Call profile endpoint but do not write to PostgreSQL.")
     return parser.parse_args()
 

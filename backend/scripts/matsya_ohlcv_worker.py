@@ -1,5 +1,6 @@
 import asyncio
 import logging
+
 from app.matsya.ohlcv_worker import MatsyaOHLCVWorker
 
 logging.basicConfig(
