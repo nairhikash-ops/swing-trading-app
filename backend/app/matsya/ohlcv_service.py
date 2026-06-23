@@ -13,6 +13,7 @@ import httpx
 from app.crypto import TokenCrypto
 from app.dhan_client import DhanClient
 from app.matsya.db import connect, run_schema
+from app.matsya.market_calendar import expected_latest_candle_date, is_trading_day, previous_trading_day
 from app.matsya.settings import MatsyaSettings
 from app.matsya.token_service import MatsyaDhanTokenService, MatsyaStoredToken, _token_state
 from app.timezone import IST, now_utc
@@ -21,8 +22,8 @@ from app.timezone import IST, now_utc
 ARCHIVE_PROVIDER = "dhan"
 ARCHIVE_INTERVAL = "daily"
 REUSABLE_TERMINAL_FETCH_STATUSES = {"completed", "completed_with_errors"}
-START_COVERAGE_GRACE_DAYS = 7
-END_FRESHNESS_GRACE_DAYS = 5
+START_COVERAGE_GRACE_DAYS = 10
+END_FRESHNESS_GRACE_DAYS = 3
 INACTIVE_DATA_PLAN_VALUES = {
     "",
     "inactive",
@@ -724,6 +725,62 @@ class MatsyaOHLCVStore:
                 )
             )
 
+    def trading_holidays(self, market_code: str) -> set[date]:
+        with self._connect() as conn:
+            rows = _all(
+                conn.execute(
+                    """
+                    SELECT holiday_date
+                    FROM matsya.trading_holidays
+                    WHERE market_code = %s
+                    """,
+                    (market_code,),
+                )
+            )
+        return {_date_value(row["holiday_date"]) for row in rows}
+
+    def latest_stored_candle_date_for_symbol(
+        self,
+        *,
+        symbol: str | None = None,
+        security_id: str | None = None,
+        instrument: str | None = None,
+    ) -> date | None:
+        if not symbol and not security_id:
+            raise ValueError("Either symbol or security_id is required.")
+        with self._connect() as conn:
+            if security_id:
+                row = _one(
+                    conn.execute(
+                        """
+                        SELECT MAX(trading_date) AS latest_stored_candle_date
+                        FROM matsya.ohlcv_daily
+                        WHERE provider_code = 'dhan'
+                          AND security_id = %s
+                          AND (%s IS NULL OR instrument = %s)
+                        """,
+                        (security_id, instrument, instrument),
+                    )
+                )
+            else:
+                row = _one(
+                    conn.execute(
+                        """
+                        SELECT MAX(dc.trading_date) AS latest_stored_candle_date
+                        FROM matsya.ohlcv_daily dc
+                        JOIN matsya.instruments i ON i.provider_code = 'dhan'
+                          AND i.security_id = dc.security_id
+                          AND i.active = true
+                        WHERE dc.provider_code = 'dhan'
+                          AND (UPPER(i.symbol_name) = UPPER(%s) OR UPPER(i.underlying_symbol) = UPPER(%s))
+                          AND (%s IS NULL OR dc.instrument = %s)
+                        """,
+                        (symbol, symbol, instrument, instrument),
+                    )
+                )
+        value = (row or {}).get("latest_stored_candle_date")
+        return _date_value(value) if value else None
+
     def _touch_run(self, conn: Any, item_id: int, timestamp: datetime) -> None:
         conn.execute(
             """
@@ -791,6 +848,93 @@ class MatsyaOHLCVService:
 
     def items(self, run_id: int, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         return self.store.items(run_id, status, limit)
+
+    def latest_stored_candle_date_for_symbol(
+        self,
+        *,
+        symbol: str | None = None,
+        security_id: str | None = None,
+        instrument: str | None = None,
+    ) -> date | None:
+        return self.store.latest_stored_candle_date_for_symbol(
+            symbol=symbol,
+            security_id=security_id,
+            instrument=instrument,
+        )
+
+    def prediction_freshness_status(
+        self,
+        *,
+        symbol: str | None = None,
+        security_id: str | None = None,
+        instrument: str | None = None,
+        now_ist: datetime | None = None,
+    ) -> dict[str, Any]:
+        resolved_now = now_ist.astimezone(IST) if now_ist else datetime.now(tz=IST)
+        holidays = self.store.trading_holidays(self.settings.market_code)
+        expected_date = expected_latest_candle_date(
+            resolved_now,
+            self.settings.historical_finalized_after_hour_ist,
+            holidays,
+        )
+        latest_stored = self.latest_stored_candle_date_for_symbol(
+            symbol=symbol,
+            security_id=security_id,
+            instrument=instrument,
+        )
+        today_is_trading = is_trading_day(resolved_now.date(), holidays)
+        previous_session = previous_trading_day(resolved_now.date(), holidays)
+
+        if latest_stored is None:
+            state = "NO_OHLCV_DATA"
+            reason = "No stored OHLCV candle is available for this instrument."
+            fresh = False
+        elif latest_stored >= expected_date:
+            fresh = True
+            if not today_is_trading and expected_date == previous_session:
+                state = "NON_TRADING_DAY_USING_PREVIOUS_TRADING_DAY"
+                reason = "Current IST date is not a trading day; using the previous completed trading day."
+            else:
+                state = "FRESH"
+                reason = "Stored OHLCV data includes the expected latest completed trading day."
+        elif (
+            today_is_trading
+            and resolved_now.hour >= self.settings.historical_finalized_after_hour_ist
+            and expected_date == resolved_now.date()
+            and latest_stored >= previous_session
+        ):
+            fresh = False
+            state = "WAITING_FOR_DHAN_DATA"
+            reason = "The latest completed trading day is expected, but the stored Dhan candle has not arrived yet."
+        else:
+            fresh = False
+            state = "STALE_OHLCV_DATA"
+            reason = "Stored OHLCV data is older than the expected latest completed trading day."
+
+        return {
+            "fresh": fresh,
+            "latest_stored_candle_date": latest_stored.isoformat() if latest_stored else None,
+            "expected_latest_candle_date": expected_date.isoformat(),
+            "state": state,
+            "reason": reason,
+        }
+
+    def is_prediction_data_fresh(
+        self,
+        *,
+        symbol: str | None = None,
+        security_id: str | None = None,
+        instrument: str | None = None,
+        now_ist: datetime | None = None,
+    ) -> bool:
+        return bool(
+            self.prediction_freshness_status(
+                symbol=symbol,
+                security_id=security_id,
+                instrument=instrument,
+                now_ist=now_ist,
+            )["fresh"]
+        )
 
     async def _run_fetch(self, run_id: int) -> None:
         self.store.prepare_run(run_id)
@@ -1121,3 +1265,9 @@ def _date_text(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
+
+
+def _date_value(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))

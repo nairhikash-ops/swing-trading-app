@@ -267,3 +267,16 @@ CREATE TABLE IF NOT EXISTS matsya.ohlcv_instrument_archive (
 
 CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_instrument_archive_latest
 ON matsya.ohlcv_instrument_archive(latest_stored_candle_date);
+
+CREATE TABLE IF NOT EXISTS matsya.trading_holidays (
+    id BIGSERIAL PRIMARY KEY,
+    market_code TEXT NOT NULL DEFAULT 'NSE',
+    holiday_date DATE NOT NULL,
+    holiday_name TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (market_code, holiday_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matsya_trading_holidays_market_date
+ON matsya.trading_holidays(market_code, holiday_date);

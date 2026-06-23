@@ -18,11 +18,14 @@ def read(path: str) -> str:
 
 def test_ohlcv_service_is_meaningful_and_not_blank() -> None:
     service = read("backend/app/matsya/ohlcv_service.py")
+    market_calendar = read("backend/app/matsya/market_calendar.py")
 
     assert len(service.strip().splitlines()) > 200
+    assert len(market_calendar.strip().splitlines()) > 30
     assert "class MatsyaOHLCVStore:" in service
     assert "class MatsyaOHLCVService:" in service
     assert "def parse_historical_payload" in service
+    assert "def expected_latest_candle_date" in market_calendar
     assert "DhanClient" in service
 
 
@@ -69,6 +72,9 @@ def test_ohlcv_path_does_not_use_raw_token_env_or_secret_logging() -> None:
 def test_ohlcv_historical_helpers_and_statuses_exist() -> None:
     service = read("backend/app/matsya/ohlcv_service.py")
 
+    assert "START_COVERAGE_GRACE_DAYS = 10" in service
+    assert "END_FRESHNESS_GRACE_DAYS = 3" in service
+
     for helper in (
         "historical_window",
         "dhan_earliest_supported_date",
@@ -100,6 +106,24 @@ def test_ohlcv_historical_helpers_and_statuses_exist() -> None:
         assert status in service
 
 
+def test_prediction_freshness_gate_is_separate_from_ingestion_grace() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+
+    assert "def latest_stored_candle_date_for_symbol" in service
+    assert "def prediction_freshness_status" in service
+    assert "def is_prediction_data_fresh" in service
+    assert "expected_latest_candle_date" in service
+    assert "FRESH" in service
+    assert "STALE_OHLCV_DATA" in service
+    assert "NO_OHLCV_DATA" in service
+    assert "WAITING_FOR_DHAN_DATA" in service
+    assert "NON_TRADING_DAY_USING_PREVIOUS_TRADING_DAY" in service
+
+    gate_body = service.split("def prediction_freshness_status", 1)[1].split("async def _run_fetch", 1)[0]
+    assert "START_COVERAGE_GRACE_DAYS" not in gate_body
+    assert "END_FRESHNESS_GRACE_DAYS" not in gate_body
+
+
 def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
     schema = read("backend/app/matsya/schema.sql")
     compose = read("deploy/matsya-setup/docker-compose.yml")
@@ -109,6 +133,7 @@ def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
     assert "CREATE TABLE IF NOT EXISTS matsya.ohlcv_fetch_items" in schema
     assert "CREATE TABLE IF NOT EXISTS matsya.ohlcv_instrument_archive" in schema
     assert "CREATE TABLE IF NOT EXISTS matsya.ohlcv_daily" in schema
+    assert "CREATE TABLE IF NOT EXISTS matsya.trading_holidays" in schema
     assert "DROP TABLE" not in schema.upper()
     assert "sqlite" not in schema.lower()
     assert "PRAGMA" not in schema
@@ -132,6 +157,8 @@ def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
         "MATSYA_DHAN_HISTORICAL_EXCHANGE_SEGMENT=NSE_EQ",
         "MATSYA_DHAN_HISTORICAL_INSTRUMENT=EQUITY",
         "MATSYA_OHLCV_UNIVERSE_NAME=NIFTY_500",
+        "MATSYA_HISTORICAL_FINALIZED_AFTER_HOUR_IST=18",
+        "MATSYA_MARKET_CODE=NSE",
     ):
         assert key in env_example
 

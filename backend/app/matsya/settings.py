@@ -28,6 +28,8 @@ class MatsyaSettings:
     dhan_historical_exchange_segment: str = "NSE_EQ"
     dhan_historical_instrument: str = "EQUITY"
     ohlcv_universe_name: str = "NIFTY_500"
+    historical_finalized_after_hour_ist: int = 18
+    market_code: str = "NSE"
 
     @classmethod
     def from_env(cls) -> "MatsyaSettings":
@@ -71,6 +73,8 @@ class MatsyaSettings:
             dhan_historical_exchange_segment=os.getenv("MATSYA_DHAN_HISTORICAL_EXCHANGE_SEGMENT", "NSE_EQ"),
             dhan_historical_instrument=os.getenv("MATSYA_DHAN_HISTORICAL_INSTRUMENT", "EQUITY"),
             ohlcv_universe_name=os.getenv("MATSYA_OHLCV_UNIVERSE_NAME", "NIFTY_500"),
+            historical_finalized_after_hour_ist=int(os.getenv("MATSYA_HISTORICAL_FINALIZED_AFTER_HOUR_IST", "18")),
+            market_code=os.getenv("MATSYA_MARKET_CODE", "NSE"),
         )
 
     def safe_database_url(self) -> str:
