@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
-from app.matsya.ohlcv_service import parse_historical_payload
+from app.matsya.ohlcv_service import (
+    HistoricalWindow,
+    MatsyaOHLCVService,
+    latest_returned_candle_date,
+    parse_historical_payload,
+    reusable_current_window_run,
+    returned_candles_are_trailing_stale,
+)
+from app.timezone import IST
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +121,8 @@ def test_prediction_freshness_gate_is_separate_from_ingestion_grace() -> None:
     assert "def latest_stored_candle_date_for_symbol" in service
     assert "def prediction_freshness_status" in service
     assert "def is_prediction_data_fresh" in service
+    assert "mark_item_waiting_for_latest_candle" in service
+    assert "waiting_for_dhan_latest_candle" in service
     assert "expected_latest_candle_date" in service
     assert "FRESH" in service
     assert "STALE_OHLCV_DATA" in service
@@ -122,6 +133,14 @@ def test_prediction_freshness_gate_is_separate_from_ingestion_grace() -> None:
     gate_body = service.split("def prediction_freshness_status", 1)[1].split("async def _run_fetch", 1)[0]
     assert "START_COVERAGE_GRACE_DAYS" not in gate_body
     assert "END_FRESHNESS_GRACE_DAYS" not in gate_body
+
+
+def test_latest_stored_lookup_avoids_untyped_optional_null_sql() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+
+    lookup_body = service.split("def latest_stored_candle_date_for_symbol", 1)[1].split("def _touch_run", 1)[0]
+    assert "%s IS NULL OR" not in lookup_body
+    assert "params.append(instrument)" in lookup_body
 
 
 def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
@@ -200,3 +219,68 @@ def test_parse_historical_payload_rejects_mismatched_arrays() -> None:
 
     with pytest.raises(ValueError, match="mismatched lengths"):
         parse_historical_payload(payload)
+
+
+def test_trailing_stale_detection_uses_latest_returned_candle_date() -> None:
+    candles = [
+        {"trading_date": "2026-06-18"},
+        {"trading_date": "2026-06-19"},
+    ]
+
+    assert latest_returned_candle_date(candles) == date(2026, 6, 19)
+    assert returned_candles_are_trailing_stale(candles, date(2026, 6, 22)) is True
+    assert returned_candles_are_trailing_stale(candles, date(2026, 6, 19)) is False
+    assert returned_candles_are_trailing_stale([], date(2026, 6, 22)) is False
+
+
+def test_completed_stale_run_is_not_reusable_but_fresh_run_is() -> None:
+    window = HistoricalWindow(from_date=date(2021, 6, 24), to_date_exclusive=date(2026, 6, 23))
+    base_run = {
+        "status": "completed",
+        "failed_count": 0,
+        "lookback_calendar_days": 1825,
+        "from_date": "2021-06-24",
+        "to_date_exclusive": "2026-06-23",
+        "next_retry_after": None,
+    }
+
+    stale_run = {**base_run, "latest_stored_candle_date": "2026-06-19"}
+    fresh_run = {**base_run, "latest_stored_candle_date": "2026-06-22"}
+    retry_wait_run = {**fresh_run, "next_retry_after": datetime(2026, 6, 23, tzinfo=IST)}
+
+    assert reusable_current_window_run(stale_run, 1825, window) is False
+    assert reusable_current_window_run(retry_wait_run, 1825, window) is False
+    assert reusable_current_window_run(fresh_run, 1825, window) is True
+
+
+def test_prediction_freshness_waiting_and_stale_states_are_not_fresh() -> None:
+    class Settings:
+        market_code = "NSE"
+        historical_finalized_after_hour_ist = 18
+
+    class Store:
+        def trading_holidays(self, market_code: str) -> set[date]:
+            return set()
+
+    service = MatsyaOHLCVService.__new__(MatsyaOHLCVService)
+    service.settings = Settings()
+    service.store = Store()
+
+    service.latest_stored_candle_date_for_symbol = lambda **_: date(2026, 6, 23)  # type: ignore[method-assign]
+    waiting = service.prediction_freshness_status(
+        symbol="RELIANCE",
+        instrument="EQUITY",
+        now_ist=datetime(2026, 6, 24, 18, 0, tzinfo=IST),
+    )
+
+    service.latest_stored_candle_date_for_symbol = lambda **_: date(2026, 6, 22)  # type: ignore[method-assign]
+    stale = service.prediction_freshness_status(
+        symbol="RELIANCE",
+        instrument="EQUITY",
+        now_ist=datetime(2026, 6, 24, 18, 0, tzinfo=IST),
+    )
+
+    assert waiting["fresh"] is False
+    assert waiting["state"] == "WAITING_FOR_DHAN_DATA"
+    assert stale["fresh"] is False
+    assert stale["state"] == "STALE_OHLCV_DATA"

@@ -377,6 +377,22 @@ class MatsyaOHLCVStore:
             )
             self._touch_run(conn, item_id, timestamp)
 
+    def mark_item_waiting_for_latest_candle(self, item_id: int, candles_received: int, reason: str) -> None:
+        timestamp = now_utc()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE matsya.ohlcv_fetch_items
+                SET status = 'skipped_no_new_data', candles_received = %s, error_message = %s,
+                    archive_status = 'waiting_for_next_session',
+                    source_floor_reason = %s,
+                    finished_at = %s, updated_at = %s
+                WHERE id = %s
+                """,
+                (candles_received, reason[:1000], reason, timestamp, timestamp, item_id),
+            )
+            self._touch_run(conn, item_id, timestamp)
+
     def mark_item_failed(self, item_id: int, error: str) -> None:
         timestamp = now_utc()
         with self._connect() as conn:
@@ -531,6 +547,10 @@ class MatsyaOHLCVStore:
                     complete_available_history = True
                     source_floor_date = request_from.isoformat()
                     source_floor_reason = "dhan_5_year_limit"
+                if returned_candles_are_trailing_stale(candles, request_to):
+                    last_no_new_data_at = timestamp
+                    next_retry_after = retry_after
+                    source_floor_reason = "waiting_for_dhan_latest_candle"
             else:
                 last_no_new_data_at = timestamp
                 if item.get("archive_status") == "older_history_backfill" and first_stored:
@@ -750,33 +770,35 @@ class MatsyaOHLCVStore:
             raise ValueError("Either symbol or security_id is required.")
         with self._connect() as conn:
             if security_id:
+                query = """
+                    SELECT MAX(trading_date) AS latest_stored_candle_date
+                    FROM matsya.ohlcv_daily
+                    WHERE provider_code = 'dhan'
+                      AND security_id = %s
+                """
+                params: list[Any] = [security_id]
+                if instrument:
+                    query += " AND instrument = %s"
+                    params.append(instrument)
                 row = _one(
-                    conn.execute(
-                        """
-                        SELECT MAX(trading_date) AS latest_stored_candle_date
-                        FROM matsya.ohlcv_daily
-                        WHERE provider_code = 'dhan'
-                          AND security_id = %s
-                          AND (%s IS NULL OR instrument = %s)
-                        """,
-                        (security_id, instrument, instrument),
-                    )
+                    conn.execute(query, tuple(params))
                 )
             else:
+                query = """
+                    SELECT MAX(dc.trading_date) AS latest_stored_candle_date
+                    FROM matsya.ohlcv_daily dc
+                    JOIN matsya.instruments i ON i.provider_code = 'dhan'
+                      AND i.security_id = dc.security_id
+                      AND i.active = true
+                    WHERE dc.provider_code = 'dhan'
+                      AND (UPPER(i.symbol_name) = UPPER(%s) OR UPPER(i.underlying_symbol) = UPPER(%s))
+                """
+                params = [symbol, symbol]
+                if instrument:
+                    query += " AND dc.instrument = %s"
+                    params.append(instrument)
                 row = _one(
-                    conn.execute(
-                        """
-                        SELECT MAX(dc.trading_date) AS latest_stored_candle_date
-                        FROM matsya.ohlcv_daily dc
-                        JOIN matsya.instruments i ON i.provider_code = 'dhan'
-                          AND i.security_id = dc.security_id
-                          AND i.active = true
-                        WHERE dc.provider_code = 'dhan'
-                          AND (UPPER(i.symbol_name) = UPPER(%s) OR UPPER(i.underlying_symbol) = UPPER(%s))
-                          AND (%s IS NULL OR dc.instrument = %s)
-                        """,
-                        (symbol, symbol, instrument, instrument),
-                    )
+                    conn.execute(query, tuple(params))
                 )
         value = (row or {}).get("latest_stored_candle_date")
         return _date_value(value) if value else None
@@ -983,8 +1005,11 @@ class MatsyaOHLCVService:
                             self.settings.dhan_historical_exchange_segment,
                             self.settings.dhan_historical_instrument,
                         )
-                        self.store.record_fetch_outcome(item, candles, request_from, request_to)
-                        self.store.mark_item_done(int(item["id"]), len(candles))
+                        reason = self.store.record_fetch_outcome(item, candles, request_from, request_to)
+                        if returned_candles_are_trailing_stale(candles, request_to):
+                            self.store.mark_item_waiting_for_latest_candle(int(item["id"]), len(candles), reason)
+                        else:
+                            self.store.mark_item_done(int(item["id"]), len(candles))
                     else:
                         reason = self.store.record_fetch_outcome(item, candles, request_from, request_to)
                         self.store.mark_item_no_new_data(int(item["id"]), reason)
@@ -1061,6 +1086,12 @@ def reusable_current_window_run(
     if not run or run.get("status") not in REUSABLE_TERMINAL_FETCH_STATUSES:
         return False
     if int(run.get("failed_count") or 0) > 0:
+        return False
+    if run.get("next_retry_after"):
+        return False
+    latest_expected = window.to_date_exclusive - timedelta(days=1)
+    latest_stored = run.get("latest_stored_candle_date")
+    if not latest_stored or _date_value(latest_stored) < latest_expected:
         return False
     return (
         int(run.get("lookback_calendar_days") or 0) == lookback_days
@@ -1209,6 +1240,16 @@ def parse_historical_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return candles
+
+
+def latest_returned_candle_date(candles: list[dict[str, Any]]) -> date | None:
+    dates = [_date_value(candle["trading_date"]) for candle in candles if candle.get("trading_date")]
+    return max(dates, default=None)
+
+
+def returned_candles_are_trailing_stale(candles: list[dict[str, Any]], request_to: date) -> bool:
+    returned_latest = latest_returned_candle_date(candles)
+    return returned_latest is not None and returned_latest < request_to
 
 
 def is_retryable_error(exc: Exception) -> bool:
