@@ -9,6 +9,7 @@ import pytest
 from app.matsya.ohlcv_service import (
     HistoricalWindow,
     MatsyaOHLCVService,
+    dhan_exclusive_to_date,
     latest_returned_candle_date,
     parse_historical_payload,
     reusable_current_window_run,
@@ -123,6 +124,7 @@ def test_prediction_freshness_gate_is_separate_from_ingestion_grace() -> None:
     assert "def is_prediction_data_fresh" in service
     assert "mark_item_waiting_for_latest_candle" in service
     assert "waiting_for_dhan_latest_candle" in service
+    assert "dhan_exclusive_to_date" in service
     assert "expected_latest_candle_date" in service
     assert "FRESH" in service
     assert "STALE_OHLCV_DATA" in service
@@ -231,6 +233,19 @@ def test_trailing_stale_detection_uses_latest_returned_candle_date() -> None:
     assert returned_candles_are_trailing_stale(candles, date(2026, 6, 22)) is True
     assert returned_candles_are_trailing_stale(candles, date(2026, 6, 19)) is False
     assert returned_candles_are_trailing_stale([], date(2026, 6, 22)) is False
+
+
+def test_dhan_historical_to_date_is_exclusive() -> None:
+    assert dhan_exclusive_to_date(date(2026, 6, 23)) == date(2026, 6, 24)
+
+
+def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+    fetch_body = service.split("async def _run_fetch", 1)[1].split("def _access_token", 1)[0]
+
+    assert "dhan_to_date_text = dhan_exclusive_to_date(request_to).isoformat()" in fetch_body
+    assert "to_date=dhan_to_date_text" in fetch_body
+    assert "to_date=request_to_text" not in fetch_body
 
 
 def test_completed_stale_run_is_not_reusable_but_fresh_run_is() -> None:

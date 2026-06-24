@@ -987,17 +987,18 @@ class MatsyaOHLCVService:
                         raise ValueError("Historical fetch run no longer exists.")
                     request_from_text = str(item.get("request_from_date") or run["from_date"])
                     request_to_text = str(item.get("request_to_date") or run["to_date_exclusive"])
+                    request_to = date.fromisoformat(request_to_text)
+                    dhan_to_date_text = dhan_exclusive_to_date(request_to).isoformat()
                     payload = await self.dhan_client.historical_daily(
                         access_token=access_token,
                         security_id=str(item["security_id"]),
                         exchange_segment=self.settings.dhan_historical_exchange_segment,
                         instrument=self.settings.dhan_historical_instrument,
                         from_date=request_from_text,
-                        to_date=request_to_text,
+                        to_date=dhan_to_date_text,
                     )
                     candles = parse_historical_payload(payload)
                     request_from = date.fromisoformat(request_from_text)
-                    request_to = date.fromisoformat(request_to_text)
                     if candles:
                         self.store.upsert_candles(
                             item,
@@ -1250,6 +1251,10 @@ def latest_returned_candle_date(candles: list[dict[str, Any]]) -> date | None:
 def returned_candles_are_trailing_stale(candles: list[dict[str, Any]], request_to: date) -> bool:
     returned_latest = latest_returned_candle_date(candles)
     return returned_latest is not None and returned_latest < request_to
+
+
+def dhan_exclusive_to_date(request_to: date) -> date:
+    return request_to + timedelta(days=1)
 
 
 def is_retryable_error(exc: Exception) -> bool:
