@@ -40,6 +40,24 @@ NORMALIZED_COLUMNS = [
 ]
 
 
+CURRENT_DHAN_COLUMN_ALIASES = {
+    "SEM_EXM_EXCH_ID": "EXCH_ID",
+    "SEM_SEGMENT": "SEGMENT",
+    "SEM_SMST_SECURITY_ID": "SECURITY_ID",
+    "SEM_INSTRUMENT_NAME": "INSTRUMENT",
+    "SEM_TRADING_SYMBOL": "SYMBOL_NAME",
+    "SM_SYMBOL_NAME": "DISPLAY_NAME",
+    "SEM_EXCH_INSTRUMENT_TYPE": "INSTRUMENT_TYPE",
+    "SEM_SERIES": "SERIES",
+    "SEM_LOT_UNITS": "LOT_SIZE",
+    "SEM_EXPIRY_DATE": "SM_EXPIRY_DATE",
+    "SEM_STRIKE_PRICE": "STRIKE_PRICE",
+    "SEM_OPTION_TYPE": "OPTION_TYPE",
+    "SEM_TICK_SIZE": "TICK_SIZE",
+    "SEM_EXPIRY_FLAG": "EXPIRY_FLAG",
+}
+
+
 @dataclass(frozen=True)
 class ImportStats:
     run_id: int
@@ -365,6 +383,7 @@ def parse_instrument_csv(csv_text: str, exchange_filter: str, segment_filter: st
             for key, value in raw.items()
             if key is not None and clean_column(key)
         }
+        normalized = normalize_instrument_master_columns(normalized)
         if (
             normalized.get("EXCH_ID", "").upper() == exchange_filter.upper()
             and normalized.get("SEGMENT", "").upper() == segment_filter.upper()
@@ -383,8 +402,25 @@ def clean_value(value: Any) -> str:
     return str(value).strip()
 
 
+def normalize_instrument_master_columns(raw: dict[str, str]) -> dict[str, str]:
+    normalized = dict(raw)
+    for source_column, target_column in CURRENT_DHAN_COLUMN_ALIASES.items():
+        if not normalized.get(target_column) and source_column in normalized:
+            normalized[target_column] = normalized[source_column]
+    if not normalized.get("DISPLAY_NAME") and normalized.get("SEM_CUSTOM_SYMBOL"):
+        normalized["DISPLAY_NAME"] = normalized["SEM_CUSTOM_SYMBOL"]
+    if not normalized.get("UNDERLYING_SYMBOL") and normalized.get("SYMBOL_NAME"):
+        normalized["UNDERLYING_SYMBOL"] = normalized["SYMBOL_NAME"]
+    if not normalized.get("UNDERLYING_SECURITY_ID"):
+        normalized["UNDERLYING_SECURITY_ID"] = normalized.get("SECURITY_ID", "")
+    for column in NORMALIZED_COLUMNS:
+        normalized.setdefault(column, "")
+    return normalized
+
+
 def normalize_row(raw: dict[str, str]) -> dict[str, str]:
-    return {column: raw.get(column, "") for column in set(raw) | set(NORMALIZED_COLUMNS)}
+    normalized = normalize_instrument_master_columns(raw)
+    return {column: normalized.get(column, "") for column in set(normalized) | set(NORMALIZED_COLUMNS)}
 
 
 def build_natural_key(row: dict[str, str]) -> str:

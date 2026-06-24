@@ -40,6 +40,52 @@ INACTIVE_DATA_PLAN_VALUES = {
     "null",
 }
 
+INSTRUMENT_MATCH_ORDER_SQL = """
+CASE
+  WHEN BTRIM(i.isin) <> ''
+   AND BTRIM(m.isin) <> ''
+   AND UPPER(BTRIM(i.isin)) = UPPER(BTRIM(m.isin))
+  THEN 0
+  ELSE 1
+END,
+CASE WHEN i.series = 'EQ' THEN 0 ELSE 1 END,
+CASE WHEN UPPER(BTRIM(i.symbol_name)) = UPPER(BTRIM(m.symbol)) THEN 0 ELSE 1 END,
+i.id
+"""
+
+INSTRUMENT_MATCH_CONDITION_SQL = """
+(
+  BTRIM(i.isin) <> ''
+  AND BTRIM(m.isin) <> ''
+  AND UPPER(BTRIM(i.isin)) = UPPER(BTRIM(m.isin))
+)
+OR (
+  (
+    BTRIM(i.isin) = ''
+    OR BTRIM(m.isin) = ''
+  )
+  AND (
+    UPPER(BTRIM(i.symbol_name)) = UPPER(BTRIM(m.symbol))
+    OR UPPER(BTRIM(i.underlying_symbol)) = UPPER(BTRIM(m.symbol))
+  )
+)
+"""
+
+INSTRUMENT_LATERAL_JOIN_SQL = f"""
+LEFT JOIN LATERAL (
+    SELECT i.id, i.security_id
+    FROM matsya.instruments i
+    WHERE i.provider_code = 'dhan'
+      AND i.active = true
+      AND i.exchange_id = 'NSE'
+      AND i.segment = 'E'
+      AND i.instrument = 'EQUITY'
+      AND ({INSTRUMENT_MATCH_CONDITION_SQL})
+    ORDER BY {INSTRUMENT_MATCH_ORDER_SQL}
+    LIMIT 1
+) mi ON true
+"""
+
 
 @dataclass(frozen=True)
 class HistoricalWindow:
@@ -103,18 +149,13 @@ class MatsyaOHLCVStore:
         with self._connect() as conn:
             total = _one(
                 conn.execute(
-                    """
+                    f"""
                     SELECT
                         COUNT(*) AS total_symbols,
-                        SUM(CASE WHEN i.id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_symbols,
-                        SUM(CASE WHEN i.id IS NULL THEN 1 ELSE 0 END) AS skipped_symbols
+                        SUM(CASE WHEN mi.id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_symbols,
+                        SUM(CASE WHEN mi.id IS NULL THEN 1 ELSE 0 END) AS skipped_symbols
                     FROM matsya.market_universe_members m
-                    LEFT JOIN matsya.instruments i ON i.provider_code = 'dhan'
-                      AND i.active = true
-                      AND i.exchange_id = 'NSE'
-                      AND i.segment = 'E'
-                      AND i.instrument = 'EQUITY'
-                      AND i.isin = m.isin
+                    {INSTRUMENT_LATERAL_JOIN_SQL}
                     WHERE m.universe_name = %s AND m.active = true
                     """,
                     (universe_name,),
@@ -122,23 +163,18 @@ class MatsyaOHLCVStore:
             )
             complete_symbols = _one(
                 conn.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS complete_symbols
                     FROM (
-                        SELECT i.id AS instrument_id
+                        SELECT m.id AS universe_member_id, mi.id AS instrument_id
                         FROM matsya.market_universe_members m
-                        JOIN matsya.instruments i ON i.provider_code = 'dhan'
-                          AND i.active = true
-                          AND i.exchange_id = 'NSE'
-                          AND i.segment = 'E'
-                          AND i.instrument = 'EQUITY'
-                          AND i.isin = m.isin
+                        {INSTRUMENT_LATERAL_JOIN_SQL}
                         JOIN matsya.ohlcv_daily dc ON dc.provider_code = 'dhan'
-                          AND dc.security_id = i.security_id
+                          AND dc.security_id = mi.security_id
                           AND dc.trading_date >= %s
                           AND dc.trading_date < %s
-                        WHERE m.universe_name = %s AND m.active = true
-                        GROUP BY i.id
+                        WHERE m.universe_name = %s AND m.active = true AND mi.id IS NOT NULL
+                        GROUP BY m.id, mi.id
                         HAVING MIN(dc.trading_date) <= %s AND MAX(dc.trading_date) >= %s
                     ) covered
                     """,
@@ -147,22 +183,17 @@ class MatsyaOHLCVStore:
             )
             stored_candles = _one(
                 conn.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS stored_candle_count
                     FROM matsya.ohlcv_daily dc
                     WHERE dc.provider_code = 'dhan'
                       AND dc.trading_date >= %s
                       AND dc.trading_date < %s
                       AND dc.security_id IN (
-                        SELECT i.security_id
+                        SELECT mi.security_id
                         FROM matsya.market_universe_members m
-                        JOIN matsya.instruments i ON i.provider_code = 'dhan'
-                          AND i.active = true
-                          AND i.exchange_id = 'NSE'
-                          AND i.segment = 'E'
-                          AND i.instrument = 'EQUITY'
-                          AND i.isin = m.isin
-                        WHERE m.universe_name = %s AND m.active = true
+                        {INSTRUMENT_LATERAL_JOIN_SQL}
+                        WHERE m.universe_name = %s AND m.active = true AND mi.id IS NOT NULL
                       )
                     """,
                     (window.from_date, window.to_date_exclusive, universe_name),
@@ -233,19 +264,13 @@ class MatsyaOHLCVStore:
             for member in members:
                 instrument = _one(
                     conn.execute(
-                        """
-                        SELECT id, security_id
-                        FROM matsya.instruments
-                        WHERE provider_code = 'dhan'
-                          AND active = true
-                          AND exchange_id = 'NSE'
-                          AND segment = 'E'
-                          AND instrument = 'EQUITY'
-                          AND isin = %s
-                        ORDER BY CASE WHEN series = 'EQ' THEN 0 ELSE 1 END, id
-                        LIMIT 1
+                        f"""
+                        SELECT mi.id, mi.security_id
+                        FROM (SELECT %s::text AS symbol, %s::text AS isin) m
+                        {INSTRUMENT_LATERAL_JOIN_SQL}
+                        WHERE mi.id IS NOT NULL
                         """,
-                        (member["isin"],),
+                        (member["symbol"], member["isin"]),
                     )
                 )
                 if instrument:
@@ -268,7 +293,7 @@ class MatsyaOHLCVStore:
                     instrument_id = None
                     security_id = ""
                     status = "skipped_unmapped"
-                    error = "No active Dhan NSE equity instrument matched this Nifty 500 ISIN."
+                    error = "No active Dhan NSE equity instrument matched this Nifty 500 ISIN or symbol."
                     plan = {
                         "request_from_date": None,
                         "request_to_date": None,
@@ -1363,6 +1388,41 @@ def _historical_fetch_gate(token: MatsyaStoredToken, settings: MatsyaSettings) -
     if normalized in INACTIVE_DATA_PLAN_VALUES or "deactive" in normalized or "inactive" in normalized:
         return state, False, "Dhan data API is inactive or pending renewal."
     return state, True, ""
+
+
+def normalized_mapping_symbol(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def is_nse_equity_instrument(row: dict[str, Any]) -> bool:
+    return (
+        str(row.get("provider_code", "dhan")).lower() == "dhan"
+        and row.get("active", True) is True
+        and normalized_mapping_symbol(row.get("exchange_id")) == "NSE"
+        and normalized_mapping_symbol(row.get("segment")) == "E"
+        and normalized_mapping_symbol(row.get("instrument")) == "EQUITY"
+    )
+
+
+def instrument_matches_universe_member(
+    instrument: dict[str, Any],
+    *,
+    member_symbol: str,
+    member_isin: str,
+) -> bool:
+    if not is_nse_equity_instrument(instrument):
+        return False
+    instrument_isin = normalized_mapping_symbol(instrument.get("isin"))
+    universe_isin = normalized_mapping_symbol(member_isin)
+    if instrument_isin and universe_isin and instrument_isin == universe_isin:
+        return True
+    if instrument_isin and universe_isin:
+        return False
+    universe_symbol = normalized_mapping_symbol(member_symbol)
+    return universe_symbol in {
+        normalized_mapping_symbol(instrument.get("symbol_name")),
+        normalized_mapping_symbol(instrument.get("underlying_symbol")),
+    }
 
 
 def _one(cursor: Any) -> dict[str, Any] | None:

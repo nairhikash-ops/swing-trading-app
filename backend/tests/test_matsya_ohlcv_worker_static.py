@@ -12,8 +12,10 @@ from app.matsya.ohlcv_service import (
     dhan_exclusive_to_date,
     inclusive_request_to_date,
     incremental_request_from_date,
+    instrument_matches_universe_member,
     latest_candle_retry_delay,
     latest_returned_candle_date,
+    normalized_mapping_symbol,
     parse_historical_payload,
     reusable_current_window_run,
     returned_candles_are_trailing_stale,
@@ -99,6 +101,8 @@ def test_ohlcv_historical_helpers_and_statuses_exist() -> None:
         "is_no_data_error",
         "is_fatal_error",
         "readable_error",
+        "normalized_mapping_symbol",
+        "instrument_matches_universe_member",
     ):
         assert f"def {helper}" in service
 
@@ -300,6 +304,70 @@ def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
     assert "to_date=dhan_to_date_text" in fetch_body
     assert "to_date=request_to_text" not in fetch_body
     assert "timedelta(hours=12)" not in service
+
+
+def test_nifty_mapping_prefers_isin_then_exact_symbol_fallback_only_for_equity() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+
+    assert "LEFT JOIN LATERAL" in service
+    assert "BTRIM(i.isin) <> ''" in service
+    assert "UPPER(BTRIM(i.isin)) = UPPER(BTRIM(m.isin))" in service
+    assert "UPPER(BTRIM(i.symbol_name)) = UPPER(BTRIM(m.symbol))" in service
+    assert "UPPER(BTRIM(i.underlying_symbol)) = UPPER(BTRIM(m.symbol))" in service
+    assert "i.exchange_id = 'NSE'" in service
+    assert "i.segment = 'E'" in service
+    assert "i.instrument = 'EQUITY'" in service
+    assert "LIMIT 1" in service
+    assert "UPPER(BTRIM(i.display_name)) = UPPER(BTRIM(m.symbol))" not in service
+    assert "No active Dhan NSE equity instrument matched this Nifty 500 ISIN or symbol." in service
+
+
+def test_normalized_mapping_symbol_is_exact_and_preserves_special_characters() -> None:
+    assert normalized_mapping_symbol(" bajaj-auto ") == "BAJAJ-AUTO"
+    assert normalized_mapping_symbol("m&m") == "M&M"
+    assert normalized_mapping_symbol("ARE&M") == "ARE&M"
+    assert normalized_mapping_symbol("") == ""
+    assert normalized_mapping_symbol(None) == ""
+
+
+def test_instrument_mapping_rule_keeps_isin_primary_and_symbol_fallback_safe() -> None:
+    base = {
+        "provider_code": "dhan",
+        "active": True,
+        "exchange_id": "NSE",
+        "segment": "E",
+        "instrument": "EQUITY",
+        "isin": "",
+        "symbol_name": "BAJAJ-AUTO",
+        "underlying_symbol": "BAJAJ-AUTO",
+    }
+
+    assert instrument_matches_universe_member(
+        {**base, "isin": "INE000000001", "symbol_name": "WRONG"},
+        member_symbol="BAJAJ-AUTO",
+        member_isin="INE000000001",
+    )
+    assert not instrument_matches_universe_member(
+        {**base, "isin": "INE000000002", "symbol_name": "BAJAJ-AUTO"},
+        member_symbol="BAJAJ-AUTO",
+        member_isin="INE000000001",
+    )
+    assert instrument_matches_universe_member(base, member_symbol="bajaj-auto", member_isin="INE000000001")
+    assert instrument_matches_universe_member(
+        {**base, "symbol_name": "M&M", "underlying_symbol": "M&M"},
+        member_symbol="m&m",
+        member_isin="INE000000003",
+    )
+    assert not instrument_matches_universe_member(
+        {**base, "exchange_id": "BSE"},
+        member_symbol="BAJAJ-AUTO",
+        member_isin="INE000000001",
+    )
+    assert not instrument_matches_universe_member(
+        {**base, "segment": "D", "instrument": "FUTSTK"},
+        member_symbol="BAJAJ-AUTO",
+        member_isin="INE000000001",
+    )
 
 
 def test_completed_stale_run_is_not_reusable_but_fresh_run_is() -> None:

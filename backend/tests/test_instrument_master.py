@@ -17,6 +17,13 @@ NSE,E,1333,INE040A01034,EQUITY,NA,NA,HDFCBANKNEW,HDFC BANK RENAMED,EQUITY,EQ,1.0
 """
 
 
+CSV_CURRENT_DHAN = """SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_EXPIRY_CODE,SEM_TRADING_SYMBOL,SEM_LOT_UNITS,SEM_CUSTOM_SYMBOL,SEM_EXPIRY_DATE,SEM_STRIKE_PRICE,SEM_OPTION_TYPE,SEM_TICK_SIZE,SEM_EXPIRY_FLAG,SEM_EXCH_INSTRUMENT_TYPE,SEM_SERIES,SM_SYMBOL_NAME
+NSE,E,100,EQUITY,0,ARE&M,1.0,Amara Raja Energy & Mobility,, , ,5.0000,NA,ES,EQ,AMARA RAJA ENERGY MOB LTD
+BSE,E,500180,EQUITY,0,HDFCBANK,1.0,HDFC Bank,, , ,5.0000,NA,ES,A,HDFC BANK LTD
+NSE,D,35000,OPTSTK,0,RELIANCE-OPT,250.0,Reliance Option,2026-07-30 14:30:00,1400.00000,CE,5.0000,M,OPTSTK,,RELIANCE
+"""
+
+
 class FakeDhanClient:
     def __init__(self, csv_text: str) -> None:
         self.csv_text = csv_text
@@ -39,6 +46,32 @@ def test_parse_filters_nse_and_preserves_live_extra_columns():
     assert "SM_UPPER_LIMIT" in columns
     assert rows[0]["SM_UPPER_LIMIT"] == "100.00"
     assert all(row["EXCH_ID"] == "NSE" for row in rows)
+
+
+def test_parse_maps_current_dhan_sem_columns_to_normalized_fields():
+    columns, total_rows, rows = parse_instrument_csv(CSV_CURRENT_DHAN, "NSE")
+
+    assert total_rows == 3
+    assert len(rows) == 1
+    assert "SEM_EXM_EXCH_ID" in columns
+    row = rows[0]
+    assert row["EXCH_ID"] == "NSE"
+    assert row["SEGMENT"] == "E"
+    assert row["SECURITY_ID"] == "100"
+    assert row["INSTRUMENT"] == "EQUITY"
+    assert row["SYMBOL_NAME"] == "ARE&M"
+    assert row["UNDERLYING_SYMBOL"] == "ARE&M"
+    assert row["DISPLAY_NAME"] == "AMARA RAJA ENERGY MOB LTD"
+    assert row["INSTRUMENT_TYPE"] == "ES"
+    assert row["SERIES"] == "EQ"
+    assert row["LOT_SIZE"] == "1.0"
+    assert row["SM_EXPIRY_DATE"] == ""
+    assert row["STRIKE_PRICE"] == ""
+    assert row["OPTION_TYPE"] == ""
+    assert row["TICK_SIZE"] == "5.0000"
+    assert row["EXPIRY_FLAG"] == "NA"
+    assert row["ISIN"] == ""
+    assert row["SEM_CUSTOM_SYMBOL"] == "Amara Raja Energy & Mobility"
 
 
 @pytest.mark.asyncio

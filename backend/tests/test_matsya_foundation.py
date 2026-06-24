@@ -88,6 +88,40 @@ def test_ingest_helpers_preserve_raw_payload_and_hash_tokens() -> None:
     assert token_hash("plain-token") != "plain-token"
 
 
+def test_instrument_record_accepts_current_dhan_sem_columns() -> None:
+    raw_instrument = {
+        "SEM_EXM_EXCH_ID": "NSE",
+        "SEM_SEGMENT": "E",
+        "SEM_SMST_SECURITY_ID": "100",
+        "SEM_INSTRUMENT_NAME": "EQUITY",
+        "SEM_TRADING_SYMBOL": "ARE&M",
+        "SEM_LOT_UNITS": "1.0",
+        "SEM_CUSTOM_SYMBOL": "Amara Raja Energy & Mobility",
+        "SEM_EXPIRY_DATE": "",
+        "SEM_STRIKE_PRICE": "",
+        "SEM_OPTION_TYPE": "",
+        "SEM_TICK_SIZE": "5.0000",
+        "SEM_EXPIRY_FLAG": "NA",
+        "SEM_EXCH_INSTRUMENT_TYPE": "ES",
+        "SEM_SERIES": "EQ",
+        "SM_SYMBOL_NAME": "AMARA RAJA ENERGY MOB LTD",
+    }
+
+    record = instrument_record(raw_instrument)
+
+    assert record["exchange_id"] == "NSE"
+    assert record["segment"] == "E"
+    assert record["security_id"] == "100"
+    assert record["instrument"] == "EQUITY"
+    assert record["symbol_name"] == "ARE&M"
+    assert record["display_name"] == "AMARA RAJA ENERGY MOB LTD"
+    assert record["instrument_type"] == "ES"
+    assert record["series"] == "EQ"
+    assert record["lot_size"] == 1.0
+    assert record["isin"] == ""
+    assert record["raw_row"] == raw_instrument
+
+
 def test_universe_and_candle_helpers_are_deterministic() -> None:
     raw_universe = {
         "Company Name": "Reliance Industries Ltd.",
