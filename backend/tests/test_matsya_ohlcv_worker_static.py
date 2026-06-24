@@ -23,11 +23,13 @@ from app.matsya.ohlcv_service import (
     returned_candles_are_trailing_stale,
 )
 from app.matsya.ohlcv_worker import (
-    initial_last_attempt_date,
-    next_daily_eod_run_at,
-    retry_after_ist,
-    should_retry_daily_eod,
-    should_run_daily_eod,
+    ScheduleKey,
+    datetime_value_ist,
+    due_schedule_stage,
+    initial_completed_schedule_stages,
+    next_scheduled_run_at,
+    ready_deadline_time,
+    schedule_stages,
 )
 from app.matsya.settings import MatsyaSettings
 from app.timezone import IST
@@ -190,9 +192,18 @@ def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
         "MATSYA_OHLCV_CHECK_INTERVAL_SECONDS=3600",
         "MATSYA_HISTORICAL_LOOKBACK_CALENDAR_DAYS=1825",
         "MATSYA_OHLCV_VALIDATION_TRADING_DAYS=60",
+        "MATSYA_OHLCV_PRIMARY_RUN_HOUR_IST=5",
+        "MATSYA_OHLCV_PRIMARY_RUN_MINUTE_IST=30",
+        "MATSYA_OHLCV_REPAIR_RUN_HOUR_IST=6",
+        "MATSYA_OHLCV_REPAIR_RUN_MINUTE_IST=30",
+        "MATSYA_OHLCV_FINAL_CHECK_HOUR_IST=7",
+        "MATSYA_OHLCV_FINAL_CHECK_MINUTE_IST=30",
+        "MATSYA_OHLCV_READY_DEADLINE_HOUR_IST=8",
+        "MATSYA_OHLCV_READY_DEADLINE_MINUTE_IST=0",
         "MATSYA_DHAN_HISTORICAL_DAILY_SUPPORTED_YEARS=5",
         "MATSYA_DHAN_HISTORICAL_RPS=2",
         "MATSYA_DHAN_HISTORICAL_MAX_RETRIES=3",
+        "MATSYA_DHAN_LATEST_CANDLE_RETRY_HOURS=1",
         "MATSYA_DHAN_HISTORICAL_EXCHANGE_SEGMENT=NSE_EQ",
         "MATSYA_DHAN_HISTORICAL_INSTRUMENT=EQUITY",
         "MATSYA_OHLCV_UNIVERSE_NAME=NIFTY_500",
@@ -217,45 +228,67 @@ def test_matsya_ohlcv_worker_compose_is_restartable_but_not_public() -> None:
     assert 'command: ["python", "-m", "scripts.matsya_ohlcv_worker"]' in worker_section
 
 
-def test_matsya_ohlcv_worker_loop_is_daily_eod_after_18_ist() -> None:
-    before_eod = datetime(2026, 6, 24, 17, 59, tzinfo=IST)
-    at_eod = datetime(2026, 6, 24, 18, 0, tzinfo=IST)
-    after_eod = datetime(2026, 6, 24, 20, 30, tzinfo=IST)
+def test_matsya_ohlcv_worker_loop_uses_explicit_morning_schedule() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example")
+    stages = schedule_stages(settings)
+    deadline = ready_deadline_time(settings)
 
-    assert should_run_daily_eod(before_eod, 18, None) is False
-    assert should_run_daily_eod(at_eod, 18, None) is True
-    assert should_run_daily_eod(after_eod, 18, date(2026, 6, 24)) is False
-    assert next_daily_eod_run_at(before_eod, 18, None) == datetime(2026, 6, 24, 18, 0, tzinfo=IST)
-    assert next_daily_eod_run_at(after_eod, 18, date(2026, 6, 24)) == datetime(2026, 6, 25, 18, 0, tzinfo=IST)
+    assert [(stage.name, stage.run_at.strftime("%H:%M"), stage.action) for stage in stages] == [
+        ("primary", "05:30", "fetch"),
+        ("repair", "06:30", "fetch"),
+        ("final_check", "07:30", "validate"),
+    ]
+    assert ready_deadline_time(settings).strftime("%H:%M") == "08:00"
+    assert due_schedule_stage(datetime(2026, 6, 25, 5, 29, tzinfo=IST), stages, set(), deadline) is None
+    assert due_schedule_stage(datetime(2026, 6, 25, 5, 30, tzinfo=IST), stages, set(), deadline).name == "primary"
+    assert due_schedule_stage(
+        datetime(2026, 6, 25, 6, 30, tzinfo=IST),
+        stages,
+        {ScheduleKey(date(2026, 6, 25), "primary")},
+        deadline,
+    ).name == "repair"
+    assert due_schedule_stage(
+        datetime(2026, 6, 25, 7, 30, tzinfo=IST),
+        stages,
+        {ScheduleKey(date(2026, 6, 25), "primary"), ScheduleKey(date(2026, 6, 25), "repair")},
+        deadline,
+    ).name == "final_check"
+    assert due_schedule_stage(datetime(2026, 6, 25, 8, 0, tzinfo=IST), stages, set(), deadline) is None
 
 
-def test_matsya_ohlcv_worker_honors_same_day_retry_after_window() -> None:
-    now_ist = datetime(2026, 6, 24, 21, 30, tzinfo=IST)
-    retry_due = datetime(2026, 6, 24, 21, 0, tzinfo=IST)
-    retry_future = datetime(2026, 6, 24, 22, 0, tzinfo=IST)
+def test_matsya_ohlcv_worker_next_schedule_is_before_8_and_not_evening_or_midnight() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example")
+    stages = schedule_stages(settings)
+    deadline = ready_deadline_time(settings)
 
-    assert should_retry_daily_eod(now_ist, retry_due) is True
-    assert should_retry_daily_eod(now_ist, retry_future) is False
-    assert next_daily_eod_run_at(now_ist, 18, date(2026, 6, 24), retry_future) == retry_future
-    assert next_daily_eod_run_at(now_ist, 18, date(2026, 6, 24), retry_due) == now_ist
-    assert retry_after_ist("2026-06-24T15:30:00+00:00") == datetime(2026, 6, 24, 21, 0, tzinfo=IST)
+    assert next_scheduled_run_at(datetime(2026, 6, 24, 21, 30, tzinfo=IST), stages, set(), deadline) == datetime(
+        2026, 6, 25, 5, 30, tzinfo=IST
+    )
+    assert next_scheduled_run_at(
+        datetime(2026, 6, 25, 5, 45, tzinfo=IST),
+        stages,
+        {ScheduleKey(date(2026, 6, 25), "primary")},
+        deadline,
+    ) == datetime(2026, 6, 25, 6, 30, tzinfo=IST)
 
 
-def test_matsya_ohlcv_worker_seeds_same_day_terminal_attempt_after_restart() -> None:
-    now_ist = datetime(2026, 6, 24, 22, 0, tzinfo=IST)
+def test_matsya_ohlcv_worker_seeds_completed_morning_stages_after_restart() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example")
+    stages = schedule_stages(settings)
+    now_ist = datetime(2026, 6, 25, 7, 0, tzinfo=IST)
 
-    assert initial_last_attempt_date(
+    assert initial_completed_schedule_stages(
         now_ist,
-        {"status": "completed", "completed_at": datetime(2026, 6, 24, 15, 46, tzinfo=IST)},
-    ) == date(2026, 6, 24)
-    assert initial_last_attempt_date(
+        {"status": "completed", "completed_at": datetime(2026, 6, 25, 5, 45, tzinfo=IST)},
+        stages,
+    ) == {ScheduleKey(date(2026, 6, 25), "primary")}
+    assert initial_completed_schedule_stages(
         now_ist,
-        {"status": "running", "updated_at": datetime(2026, 6, 24, 15, 46, tzinfo=IST)},
-    ) is None
-    assert initial_last_attempt_date(
-        now_ist,
-        {"status": "completed", "completed_at": datetime(2026, 6, 23, 15, 46, tzinfo=IST)},
-    ) is None
+        {"status": "completed", "completed_at": datetime(2026, 6, 25, 6, 45, tzinfo=IST)},
+        stages,
+    ) == {ScheduleKey(date(2026, 6, 25), "primary"), ScheduleKey(date(2026, 6, 25), "repair")}
+    assert initial_completed_schedule_stages(now_ist, {"status": "running"}, stages) == set()
+    assert datetime_value_ist("2026-06-25T00:15:00+00:00") == datetime(2026, 6, 25, 5, 45, tzinfo=IST)
 
 
 def test_matsya_ohlcv_validation_contract_is_present_and_non_destructive() -> None:
@@ -388,10 +421,26 @@ def test_historical_window_uses_eod_finalized_trading_day() -> None:
 
     before_eod = historical_window(settings, as_of=datetime(2026, 6, 24, 17, 59, tzinfo=IST), holidays=set())
     after_eod = historical_window(settings, as_of=datetime(2026, 6, 24, 18, 0, tzinfo=IST), holidays=set())
+    next_morning = historical_window(settings, as_of=datetime(2026, 6, 25, 5, 30, tzinfo=IST), holidays=set())
 
     assert before_eod.to_date_exclusive == date(2026, 6, 24)
     assert after_eod.to_date_exclusive == date(2026, 6, 25)
+    assert next_morning.to_date_exclusive == date(2026, 6, 25)
     assert after_eod.from_date == date(2026, 6, 20)
+
+
+def test_historical_window_weekend_and_holiday_use_previous_completed_trading_day() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example", historical_lookback_calendar_days=5)
+
+    saturday = historical_window(settings, as_of=datetime(2026, 6, 27, 5, 30, tzinfo=IST), holidays=set())
+    holiday = historical_window(
+        settings,
+        as_of=datetime(2026, 6, 27, 5, 30, tzinfo=IST),
+        holidays={date(2026, 6, 26)},
+    )
+
+    assert saturday.to_date_exclusive == date(2026, 6, 27)
+    assert holiday.to_date_exclusive == date(2026, 6, 26)
 
 
 def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
