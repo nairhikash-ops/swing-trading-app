@@ -45,7 +45,7 @@ class MatsyaOHLCVWorker:
             "Matsya OHLCV worker loop started. Daily EOD hour IST: %s",
             self.settings.historical_finalized_after_hour_ist,
         )
-        last_attempt_date: date | None = None
+        last_attempt_date = initial_last_attempt_date(datetime.now(tz=IST), self.service.latest_status())
         while not self._stop.is_set():
             now_ist = datetime.now(tz=IST)
             retry_after = self._retry_after_ist(now_ist, last_attempt_date)
@@ -124,6 +124,17 @@ def should_run_daily_eod(now_ist: datetime, finalized_after_hour_ist: int, last_
     if resolved_now.hour < finalized_after_hour_ist:
         return False
     return last_attempt_date != resolved_now.date()
+
+
+def initial_last_attempt_date(now_ist: datetime, latest_status: dict[str, Any] | None) -> date | None:
+    if not latest_status or latest_status.get("status") not in {"completed", "completed_with_errors", "failed"}:
+        return None
+    resolved_now = now_ist.astimezone(IST) if now_ist.tzinfo else now_ist.replace(tzinfo=IST)
+    for key in ("completed_at", "updated_at", "started_at"):
+        attempted_at = retry_after_ist(latest_status.get(key))
+        if attempted_at and attempted_at.date() == resolved_now.date():
+            return resolved_now.date()
+    return None
 
 
 def should_retry_daily_eod(now_ist: datetime, retry_after: datetime | None) -> bool:
