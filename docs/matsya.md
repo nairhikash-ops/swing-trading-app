@@ -52,3 +52,28 @@ python scripts/matsya_fetch_ohlcv.py --security-id 1333 --from-date 2026-01-01 -
 
 Secrets must stay in environment variables or the server `.env`; they should not
 be printed, committed, or copied into docs.
+
+## Read-Only Market Data API
+
+Matsya owns the PostgreSQL market-data tables. Other modules must consume
+Matsya data through read-only HTTP endpoints instead of connecting to or writing
+Matsya tables directly.
+
+All market-data endpoints are `GET` only:
+
+```text
+GET /api/matsya/market-data/status
+GET /api/matsya/market-data/symbols?universe=NIFTY_500&limit=50&offset=0
+GET /api/matsya/market-data/ohlcv?symbol=RELIANCE&from=2026-01-01&to=2026-06-23&limit=250&order=asc
+GET /api/matsya/market-data/ohlcv?security_id=2885&limit=5&order=desc
+GET /api/matsya/market-data/ohlcv/latest?symbol=RELIANCE&days=365
+GET /api/matsya/market-data/validation
+```
+
+Responses include normalized instruments, universe membership, OHLCV candles,
+and safe validation/status summaries. They do not include token values,
+encrypted tokens, raw candle payloads, database URLs, or secret-bearing fields.
+
+Consumers should treat the API as the only supported contract for Matsya market
+data. Only Matsya ingestion, renewal, and OHLCV worker services may write to
+Matsya tables.
