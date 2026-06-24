@@ -194,7 +194,14 @@ class MatsyaOHLCVStore:
             "completed_at": timestamp,
         }
 
-    def create_run(self, universe_name: str, lookback_days: int, window: HistoricalWindow) -> int:
+    def create_run(
+        self,
+        universe_name: str,
+        lookback_days: int,
+        window: HistoricalWindow,
+        incremental_overlap_sessions: int = 0,
+        trading_holidays: set[date] | None = None,
+    ) -> int:
         timestamp = now_utc()
         with self._connect() as conn:
             run = _one(
@@ -245,7 +252,15 @@ class MatsyaOHLCVStore:
                     mapped_symbols += 1
                     instrument_id = int(instrument["id"])
                     security_id = str(instrument["security_id"])
-                    plan = fetch_plan_for_instrument(conn, instrument_id, security_id, str(member["symbol"]), window)
+                    plan = fetch_plan_for_instrument(
+                        conn,
+                        instrument_id,
+                        security_id,
+                        str(member["symbol"]),
+                        window,
+                        incremental_overlap_sessions=incremental_overlap_sessions,
+                        trading_holidays=trading_holidays,
+                    )
                     status = plan["status"]
                     error = plan["error"]
                 else:
@@ -490,9 +505,10 @@ class MatsyaOHLCVStore:
         candles: list[dict[str, Any]],
         request_from: date,
         request_to: date,
+        retry_hours: int = 3,
     ) -> str:
         timestamp = now_utc()
-        retry_after = now_utc() + timedelta(hours=12)
+        retry_after = now_utc() + latest_candle_retry_delay(retry_hours)
         instrument_id = int(item["instrument_id"])
         security_id = str(item["security_id"])
         symbol = str(item["symbol"])
@@ -846,6 +862,8 @@ class MatsyaOHLCVService:
                 self.settings.ohlcv_universe_name,
                 self.settings.historical_lookback_calendar_days,
                 window,
+                self.settings.ohlcv_incremental_overlap_sessions,
+                self.store.trading_holidays(self.settings.market_code),
             )
         else:
             run_id = int(active_run["id"])
@@ -1010,13 +1028,25 @@ class MatsyaOHLCVService:
                             self.settings.dhan_historical_exchange_segment,
                             self.settings.dhan_historical_instrument,
                         )
-                        reason = self.store.record_fetch_outcome(item, candles, request_from, request_to)
+                        reason = self.store.record_fetch_outcome(
+                            item,
+                            candles,
+                            request_from,
+                            request_to,
+                            self.settings.dhan_latest_candle_retry_hours,
+                        )
                         if returned_candles_are_trailing_stale(candles, request_to):
                             self.store.mark_item_waiting_for_latest_candle(int(item["id"]), len(candles), reason)
                         else:
                             self.store.mark_item_done(int(item["id"]), len(candles))
                     else:
-                        reason = self.store.record_fetch_outcome(item, candles, request_from, request_to)
+                        reason = self.store.record_fetch_outcome(
+                            item,
+                            candles,
+                            request_from,
+                            request_to,
+                            self.settings.dhan_latest_candle_retry_hours,
+                        )
                         self.store.mark_item_no_new_data(int(item["id"]), reason)
                     break
                 except FatalHistoricalError as exc:
@@ -1028,7 +1058,13 @@ class MatsyaOHLCVService:
                     if is_no_data_error(exc):
                         request_from = date.fromisoformat(request_from_text)
                         request_to = date.fromisoformat(request_to_text)
-                        reason = self.store.record_fetch_outcome(item, [], request_from, request_to)
+                        reason = self.store.record_fetch_outcome(
+                            item,
+                            [],
+                            request_from,
+                            request_to,
+                            self.settings.dhan_latest_candle_retry_hours,
+                        )
                         self.store.mark_item_no_new_data(int(item["id"]), reason)
                         break
                     if is_fatal_error(exc):
@@ -1083,6 +1119,22 @@ def clamp_window_to_dhan_floor(
     return HistoricalWindow(from_date=max(window.from_date, floor), to_date_exclusive=window.to_date_exclusive)
 
 
+def incremental_request_from_date(
+    latest_stored: date,
+    window: HistoricalWindow,
+    overlap_sessions: int,
+    holidays: set[date] | None = None,
+) -> date:
+    request_from = latest_stored
+    for _ in range(max(0, overlap_sessions)):
+        request_from = previous_trading_day(request_from, holidays)
+    return max(window.from_date, request_from)
+
+
+def latest_candle_retry_delay(retry_hours: int) -> timedelta:
+    return timedelta(hours=max(1, retry_hours))
+
+
 def reusable_current_window_run(
     run: dict[str, Any] | None,
     lookback_days: int,
@@ -1111,6 +1163,9 @@ def fetch_plan_for_instrument(
     security_id: str,
     symbol: str,
     window: HistoricalWindow,
+    *,
+    incremental_overlap_sessions: int = 0,
+    trading_holidays: set[date] | None = None,
 ) -> dict[str, Any]:
     stored = _one(
         conn.execute(
@@ -1187,7 +1242,12 @@ def fetch_plan_for_instrument(
         }
 
     if latest_stored:
-        request_from = max(window.from_date, date.fromisoformat(latest_stored) + timedelta(days=1))
+        request_from = incremental_request_from_date(
+            date.fromisoformat(latest_stored),
+            window,
+            incremental_overlap_sessions,
+            trading_holidays,
+        )
         archive_status = "incremental_update"
     else:
         request_from = window.from_date

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,11 +11,14 @@ from app.matsya.ohlcv_service import (
     MatsyaOHLCVService,
     dhan_exclusive_to_date,
     inclusive_request_to_date,
+    incremental_request_from_date,
+    latest_candle_retry_delay,
     latest_returned_candle_date,
     parse_historical_payload,
     reusable_current_window_run,
     returned_candles_are_trailing_stale,
 )
+from app.matsya.settings import MatsyaSettings
 from app.timezone import IST
 
 
@@ -240,6 +243,40 @@ def test_dhan_historical_to_date_is_exclusive() -> None:
     assert dhan_exclusive_to_date(date(2026, 6, 23)) == date(2026, 6, 24)
 
 
+def test_incremental_overlap_uses_trading_sessions() -> None:
+    window = HistoricalWindow(from_date=date(2026, 6, 1), to_date_exclusive=date(2026, 6, 25))
+
+    assert incremental_request_from_date(date(2026, 6, 24), window, 2, set()) == date(2026, 6, 22)
+
+
+def test_incremental_overlap_zero_uses_latest_stored_date() -> None:
+    window = HistoricalWindow(from_date=date(2026, 6, 1), to_date_exclusive=date(2026, 6, 25))
+
+    assert incremental_request_from_date(date(2026, 6, 24), window, 0, set()) == date(2026, 6, 24)
+
+
+def test_incremental_overlap_clamps_to_window_from_date() -> None:
+    window = HistoricalWindow(from_date=date(2026, 6, 23), to_date_exclusive=date(2026, 6, 25))
+
+    assert incremental_request_from_date(date(2026, 6, 24), window, 3, set()) == date(2026, 6, 23)
+
+
+def test_fetch_plan_uses_overlap_without_changing_request_to_date() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+    plan_body = service.split("def fetch_plan_for_instrument", 1)[1].split("def parse_historical_payload", 1)[0]
+
+    assert "incremental_request_from_date(" in plan_body
+    assert '"request_to_date": latest_expected.isoformat()' in plan_body
+
+
+def test_latest_candle_retry_delay_clamps_and_defaults_to_three_hours() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example")
+
+    assert settings.dhan_latest_candle_retry_hours == 3
+    assert latest_candle_retry_delay(settings.dhan_latest_candle_retry_hours) == timedelta(hours=3)
+    assert latest_candle_retry_delay(0) == timedelta(hours=1)
+
+
 def test_inclusive_request_to_uses_item_date_when_present() -> None:
     assert inclusive_request_to_date("2026-06-23", "2026-06-24") == date(2026, 6, 23)
 
@@ -262,6 +299,7 @@ def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
     assert "dhan_to_date_text = dhan_exclusive_to_date(request_to).isoformat()" in fetch_body
     assert "to_date=dhan_to_date_text" in fetch_body
     assert "to_date=request_to_text" not in fetch_body
+    assert "timedelta(hours=12)" not in service
 
 
 def test_completed_stale_run_is_not_reusable_but_fresh_run_is() -> None:
