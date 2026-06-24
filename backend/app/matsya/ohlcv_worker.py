@@ -48,7 +48,12 @@ class MatsyaOHLCVWorker:
         last_attempt_date: date | None = None
         while not self._stop.is_set():
             now_ist = datetime.now(tz=IST)
-            if should_run_daily_eod(now_ist, self.settings.historical_finalized_after_hour_ist, last_attempt_date):
+            retry_after = self._retry_after_ist(now_ist, last_attempt_date)
+            if should_run_daily_eod(
+                now_ist,
+                self.settings.historical_finalized_after_hour_ist,
+                last_attempt_date,
+            ) or should_retry_daily_eod(now_ist, retry_after):
                 await self.run_once()
                 last_attempt_date = now_ist.date()
             else:
@@ -59,6 +64,7 @@ class MatsyaOHLCVWorker:
                         now_ist,
                         self.settings.historical_finalized_after_hour_ist,
                         last_attempt_date,
+                        retry_after,
                     ).isoformat(),
                 )
             try:
@@ -69,6 +75,7 @@ class MatsyaOHLCVWorker:
                         self.settings.historical_finalized_after_hour_ist,
                         self.settings.ohlcv_check_interval_seconds,
                         last_attempt_date,
+                        retry_after,
                     ),
                 )
             except TimeoutError:
@@ -104,6 +111,13 @@ class MatsyaOHLCVWorker:
         )
         return status
 
+    def _retry_after_ist(self, now_ist: datetime, last_attempt_date: date | None) -> datetime | None:
+        resolved_now = now_ist.astimezone(IST) if now_ist.tzinfo else now_ist.replace(tzinfo=IST)
+        if last_attempt_date != resolved_now.date():
+            return None
+        status = self.service.latest_status() or {}
+        return retry_after_ist(status.get("next_retry_after"))
+
 
 def should_run_daily_eod(now_ist: datetime, finalized_after_hour_ist: int, last_attempt_date: date | None) -> bool:
     resolved_now = now_ist.astimezone(IST) if now_ist.tzinfo else now_ist.replace(tzinfo=IST)
@@ -112,7 +126,17 @@ def should_run_daily_eod(now_ist: datetime, finalized_after_hour_ist: int, last_
     return last_attempt_date != resolved_now.date()
 
 
-def next_daily_eod_run_at(now_ist: datetime, finalized_after_hour_ist: int, last_attempt_date: date | None) -> datetime:
+def should_retry_daily_eod(now_ist: datetime, retry_after: datetime | None) -> bool:
+    resolved_now = now_ist.astimezone(IST) if now_ist.tzinfo else now_ist.replace(tzinfo=IST)
+    return retry_after is not None and resolved_now >= retry_after
+
+
+def next_daily_eod_run_at(
+    now_ist: datetime,
+    finalized_after_hour_ist: int,
+    last_attempt_date: date | None,
+    retry_after: datetime | None = None,
+) -> datetime:
     resolved_now = now_ist.astimezone(IST) if now_ist.tzinfo else now_ist.replace(tzinfo=IST)
     today_eod = resolved_now.replace(
         hour=finalized_after_hour_ist,
@@ -121,6 +145,10 @@ def next_daily_eod_run_at(now_ist: datetime, finalized_after_hour_ist: int, last
         microsecond=0,
     )
     if should_run_daily_eod(resolved_now, finalized_after_hour_ist, last_attempt_date):
+        return resolved_now
+    if retry_after is not None and retry_after > resolved_now:
+        return retry_after
+    if should_retry_daily_eod(resolved_now, retry_after):
         return resolved_now
     if resolved_now < today_eod:
         return today_eod
@@ -132,7 +160,17 @@ def seconds_until_next_check(
     finalized_after_hour_ist: int,
     check_interval_seconds: int,
     last_attempt_date: date | None,
+    retry_after: datetime | None = None,
 ) -> float:
-    next_run = next_daily_eod_run_at(now_ist, finalized_after_hour_ist, last_attempt_date)
+    next_run = next_daily_eod_run_at(now_ist, finalized_after_hour_ist, last_attempt_date, retry_after)
     wait_seconds = max(1.0, (next_run - now_ist.astimezone(IST)).total_seconds())
     return min(wait_seconds, max(60, check_interval_seconds))
+
+
+def retry_after_ist(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(IST) if value.tzinfo else value.replace(tzinfo=IST)
+    parsed = datetime.fromisoformat(str(value))
+    return parsed.astimezone(IST) if parsed.tzinfo else parsed.replace(tzinfo=IST)

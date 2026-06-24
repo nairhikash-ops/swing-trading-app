@@ -22,7 +22,7 @@ from app.matsya.ohlcv_service import (
     reusable_current_window_run,
     returned_candles_are_trailing_stale,
 )
-from app.matsya.ohlcv_worker import next_daily_eod_run_at, should_run_daily_eod
+from app.matsya.ohlcv_worker import next_daily_eod_run_at, retry_after_ist, should_retry_daily_eod, should_run_daily_eod
 from app.matsya.settings import MatsyaSettings
 from app.timezone import IST
 
@@ -221,6 +221,18 @@ def test_matsya_ohlcv_worker_loop_is_daily_eod_after_18_ist() -> None:
     assert should_run_daily_eod(after_eod, 18, date(2026, 6, 24)) is False
     assert next_daily_eod_run_at(before_eod, 18, None) == datetime(2026, 6, 24, 18, 0, tzinfo=IST)
     assert next_daily_eod_run_at(after_eod, 18, date(2026, 6, 24)) == datetime(2026, 6, 25, 18, 0, tzinfo=IST)
+
+
+def test_matsya_ohlcv_worker_honors_same_day_retry_after_window() -> None:
+    now_ist = datetime(2026, 6, 24, 21, 30, tzinfo=IST)
+    retry_due = datetime(2026, 6, 24, 21, 0, tzinfo=IST)
+    retry_future = datetime(2026, 6, 24, 22, 0, tzinfo=IST)
+
+    assert should_retry_daily_eod(now_ist, retry_due) is True
+    assert should_retry_daily_eod(now_ist, retry_future) is False
+    assert next_daily_eod_run_at(now_ist, 18, date(2026, 6, 24), retry_future) == retry_future
+    assert next_daily_eod_run_at(now_ist, 18, date(2026, 6, 24), retry_due) == now_ist
+    assert retry_after_ist("2026-06-24T15:30:00+00:00") == datetime(2026, 6, 24, 21, 0, tzinfo=IST)
 
 
 def test_matsya_ohlcv_validation_contract_is_present_and_non_destructive() -> None:
