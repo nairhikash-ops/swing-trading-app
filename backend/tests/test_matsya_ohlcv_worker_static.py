@@ -10,6 +10,7 @@ from app.matsya.ohlcv_service import (
     HistoricalWindow,
     MatsyaOHLCVService,
     dhan_exclusive_to_date,
+    inclusive_request_to_date,
     latest_returned_candle_date,
     parse_historical_payload,
     reusable_current_window_run,
@@ -239,10 +240,25 @@ def test_dhan_historical_to_date_is_exclusive() -> None:
     assert dhan_exclusive_to_date(date(2026, 6, 23)) == date(2026, 6, 24)
 
 
+def test_inclusive_request_to_uses_item_date_when_present() -> None:
+    assert inclusive_request_to_date("2026-06-23", "2026-06-24") == date(2026, 6, 23)
+
+
+def test_inclusive_request_to_converts_run_exclusive_fallback() -> None:
+    assert inclusive_request_to_date(None, "2026-06-24") == date(2026, 6, 23)
+
+
+def test_dhan_historical_run_fallback_does_not_double_add_exclusive_to_date() -> None:
+    request_to = inclusive_request_to_date(None, "2026-06-24")
+
+    assert dhan_exclusive_to_date(request_to) == date(2026, 6, 24)
+
+
 def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
     service = read("backend/app/matsya/ohlcv_service.py")
     fetch_body = service.split("async def _run_fetch", 1)[1].split("def _access_token", 1)[0]
 
+    assert "inclusive_request_to_date(" in fetch_body
     assert "dhan_to_date_text = dhan_exclusive_to_date(request_to).isoformat()" in fetch_body
     assert "to_date=dhan_to_date_text" in fetch_body
     assert "to_date=request_to_text" not in fetch_body

@@ -986,8 +986,12 @@ class MatsyaOHLCVService:
                     if not run:
                         raise ValueError("Historical fetch run no longer exists.")
                     request_from_text = str(item.get("request_from_date") or run["from_date"])
-                    request_to_text = str(item.get("request_to_date") or run["to_date_exclusive"])
-                    request_to = date.fromisoformat(request_to_text)
+                    item_request_to_text = item.get("request_to_date")
+                    request_to = inclusive_request_to_date(
+                        str(item_request_to_text) if item_request_to_text else None,
+                        str(run["to_date_exclusive"]),
+                    )
+                    request_to_text = request_to.isoformat()
                     dhan_to_date_text = dhan_exclusive_to_date(request_to).isoformat()
                     payload = await self.dhan_client.historical_daily(
                         access_token=access_token,
@@ -1255,6 +1259,12 @@ def returned_candles_are_trailing_stale(candles: list[dict[str, Any]], request_t
 
 def dhan_exclusive_to_date(request_to: date) -> date:
     return request_to + timedelta(days=1)
+
+
+def inclusive_request_to_date(item_request_to: str | None, run_to_date_exclusive: str) -> date:
+    if item_request_to:
+        return date.fromisoformat(item_request_to)
+    return date.fromisoformat(run_to_date_exclusive) - timedelta(days=1)
 
 
 def is_retryable_error(exc: Exception) -> bool:
