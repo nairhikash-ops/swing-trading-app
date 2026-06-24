@@ -989,7 +989,11 @@ class MatsyaOHLCVService:
         active_run = self.store.active_run(self.settings.ohlcv_universe_name)
         if active_run is None:
             self._access_token()
-            window = clamp_window_to_dhan_floor(self.settings, historical_window(self.settings))
+            holidays = self.store.trading_holidays(self.settings.market_code)
+            window = clamp_window_to_dhan_floor(
+                self.settings,
+                historical_window(self.settings, holidays=holidays),
+            )
             latest_run = self.store.latest_run(self.settings.ohlcv_universe_name)
             latest_status = self.store.status(int(latest_run["id"])) if latest_run else None
             if reusable_current_window_run(latest_status, self.settings.historical_lookback_calendar_days, window):
@@ -1006,7 +1010,7 @@ class MatsyaOHLCVService:
                 self.settings.historical_lookback_calendar_days,
                 window,
                 self.settings.ohlcv_incremental_overlap_sessions,
-                self.store.trading_holidays(self.settings.market_code),
+                holidays,
             )
         else:
             run_id = int(active_run["id"])
@@ -1249,9 +1253,14 @@ def historical_window(
     settings: MatsyaSettings,
     lookback_calendar_days: int | None = None,
     as_of: datetime | None = None,
+    holidays: set[date] | None = None,
 ) -> HistoricalWindow:
     now_ist = as_of.astimezone(IST) if as_of else datetime.now(tz=IST)
-    end_date = now_ist.date() - timedelta(days=1)
+    end_date = expected_latest_candle_date(
+        now_ist,
+        settings.historical_finalized_after_hour_ist,
+        holidays,
+    )
     lookback_days = lookback_calendar_days or settings.historical_lookback_calendar_days
     from_date = end_date - timedelta(days=lookback_days - 1)
     return HistoricalWindow(from_date=from_date, to_date_exclusive=end_date + timedelta(days=1))

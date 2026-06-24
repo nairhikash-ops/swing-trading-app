@@ -10,6 +10,7 @@ from app.matsya.ohlcv_service import (
     HistoricalWindow,
     MatsyaOHLCVService,
     dhan_exclusive_to_date,
+    historical_window,
     inclusive_request_to_date,
     incremental_request_from_date,
     instrument_matches_universe_member,
@@ -345,6 +346,17 @@ def test_dhan_historical_run_fallback_does_not_double_add_exclusive_to_date() ->
     request_to = inclusive_request_to_date(None, "2026-06-24")
 
     assert dhan_exclusive_to_date(request_to) == date(2026, 6, 24)
+
+
+def test_historical_window_uses_eod_finalized_trading_day() -> None:
+    settings = MatsyaSettings(database_url="postgresql://example", historical_lookback_calendar_days=5)
+
+    before_eod = historical_window(settings, as_of=datetime(2026, 6, 24, 17, 59, tzinfo=IST), holidays=set())
+    after_eod = historical_window(settings, as_of=datetime(2026, 6, 24, 18, 0, tzinfo=IST), holidays=set())
+
+    assert before_eod.to_date_exclusive == date(2026, 6, 24)
+    assert after_eod.to_date_exclusive == date(2026, 6, 25)
+    assert after_eod.from_date == date(2026, 6, 20)
 
 
 def test_dhan_historical_request_uses_exclusive_to_date_helper() -> None:
