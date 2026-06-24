@@ -844,6 +844,124 @@ class MatsyaOHLCVStore:
         value = (row or {}).get("latest_stored_candle_date")
         return _date_value(value) if value else None
 
+    def validation_report(
+        self,
+        universe_name: str,
+        validation_trading_days: int,
+        finalized_after_hour_ist: int,
+        market_code: str,
+        now_ist: datetime | None = None,
+    ) -> dict[str, Any]:
+        resolved_now = now_ist.astimezone(IST) if now_ist else datetime.now(tz=IST)
+        holidays = self.trading_holidays(market_code)
+        expected_latest = expected_latest_candle_date(resolved_now, finalized_after_hour_ist, holidays)
+        recent_dates = recent_trading_days(expected_latest, validation_trading_days, holidays)
+        validation_start = recent_dates[0] if recent_dates else expected_latest
+        date_values_sql = ", ".join(["(%s::date)"] * len(recent_dates)) or "(%s::date)"
+        date_params: list[Any] = [day.isoformat() for day in recent_dates] or [expected_latest.isoformat()]
+        with self._connect() as conn:
+            totals = _one(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS total_rows,
+                           COUNT(DISTINCT security_id) AS symbols_with_candles,
+                           MIN(trading_date) AS first_stored_candle_date,
+                           MAX(trading_date) AS latest_stored_candle_date
+                    FROM matsya.ohlcv_daily
+                    WHERE provider_code = 'dhan'
+                    """
+                )
+            )
+            duplicates = _one(
+                conn.execute(
+                    """
+                    SELECT COALESCE(SUM(cnt - 1), 0) AS duplicate_count
+                    FROM (
+                        SELECT provider_code, security_id, trading_date, COUNT(*) AS cnt
+                        FROM matsya.ohlcv_daily
+                        GROUP BY provider_code, security_id, trading_date
+                        HAVING COUNT(*) > 1
+                    ) duplicate_rows
+                    """
+                )
+            )
+            bad_rows = _one(
+                conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE open_price IS NULL OR high_price IS NULL OR low_price IS NULL
+                               OR close_price IS NULL OR volume IS NULL
+                        ) AS null_ohlcv_count,
+                        COUNT(*) FILTER (
+                            WHERE high_price < low_price
+                               OR close_price < low_price
+                               OR close_price > high_price
+                        ) AS bad_ohlc_count,
+                        COUNT(*) FILTER (WHERE volume < 0) AS negative_volume_count
+                    FROM matsya.ohlcv_daily
+                    WHERE provider_code = 'dhan'
+                    """
+                )
+            )
+            coverage = _one(
+                conn.execute(
+                    f"""
+                    WITH mapped AS (
+                        SELECT m.symbol, mi.security_id
+                        FROM matsya.market_universe_members m
+                        {INSTRUMENT_LATERAL_JOIN_SQL}
+                        WHERE m.universe_name = %s AND m.active = true AND mi.id IS NOT NULL
+                    ),
+                    latest AS (
+                        SELECT mapped.symbol, mapped.security_id, MAX(dc.trading_date) AS latest_stored_candle_date
+                        FROM mapped
+                        LEFT JOIN matsya.ohlcv_daily dc ON dc.provider_code = 'dhan'
+                          AND dc.security_id = mapped.security_id
+                        GROUP BY mapped.symbol, mapped.security_id
+                    ),
+                    expected_dates(trading_date) AS (
+                        VALUES {date_values_sql}
+                    ),
+                    missing_recent AS (
+                        SELECT mapped.security_id, expected_dates.trading_date
+                        FROM mapped
+                        CROSS JOIN expected_dates
+                        LEFT JOIN matsya.ohlcv_daily dc ON dc.provider_code = 'dhan'
+                          AND dc.security_id = mapped.security_id
+                          AND dc.trading_date = expected_dates.trading_date
+                        WHERE dc.id IS NULL
+                    )
+                    SELECT
+                        COUNT(*) AS mapped_symbols,
+                        COUNT(*) FILTER (WHERE latest_stored_candle_date IS NULL) AS zero_candle_symbols,
+                        COUNT(*) FILTER (WHERE latest_stored_candle_date IS NOT NULL
+                                         AND latest_stored_candle_date < %s::date) AS stale_symbols,
+                        (SELECT COUNT(*) FROM missing_recent) AS missing_recent_symbol_dates
+                    FROM latest
+                    """,
+                    tuple([universe_name, *date_params, expected_latest.isoformat()]),
+                )
+            )
+        return {
+            "universe_name": universe_name,
+            "validation_trading_days": len(recent_dates),
+            "validation_start_date": validation_start.isoformat(),
+            "expected_latest_candle_date": expected_latest.isoformat(),
+            "total_rows": int((totals or {}).get("total_rows") or 0),
+            "symbols_with_candles": int((totals or {}).get("symbols_with_candles") or 0),
+            "first_stored_candle_date": _date_text((totals or {}).get("first_stored_candle_date")),
+            "latest_stored_candle_date": _date_text((totals or {}).get("latest_stored_candle_date")),
+            "duplicate_count": int((duplicates or {}).get("duplicate_count") or 0),
+            "null_ohlcv_count": int((bad_rows or {}).get("null_ohlcv_count") or 0),
+            "bad_ohlc_count": int((bad_rows or {}).get("bad_ohlc_count") or 0),
+            "negative_volume_count": int((bad_rows or {}).get("negative_volume_count") or 0),
+            "mapped_symbols": int((coverage or {}).get("mapped_symbols") or 0),
+            "zero_candle_symbols": int((coverage or {}).get("zero_candle_symbols") or 0),
+            "stale_symbols": int((coverage or {}).get("stale_symbols") or 0),
+            "missing_recent_symbol_dates": int((coverage or {}).get("missing_recent_symbol_dates") or 0),
+        }
+
     def _touch_run(self, conn: Any, item_id: int, timestamp: datetime) -> None:
         conn.execute(
             """
@@ -1001,6 +1119,15 @@ class MatsyaOHLCVService:
             )["fresh"]
         )
 
+    def validation_report(self, now_ist: datetime | None = None) -> dict[str, Any]:
+        return self.store.validation_report(
+            self.settings.ohlcv_universe_name,
+            self.settings.ohlcv_validation_trading_days,
+            self.settings.historical_finalized_after_hour_ist,
+            self.settings.market_code,
+            now_ist,
+        )
+
     async def _run_fetch(self, run_id: int) -> None:
         self.store.prepare_run(run_id)
         try:
@@ -1154,6 +1281,16 @@ def incremental_request_from_date(
     for _ in range(max(0, overlap_sessions)):
         request_from = previous_trading_day(request_from, holidays)
     return max(window.from_date, request_from)
+
+
+def recent_trading_days(end_date: date, count: int, holidays: set[date] | None = None) -> list[date]:
+    days: list[date] = []
+    candidate = end_date
+    while len(days) < max(0, count):
+        if is_trading_day(candidate, holidays):
+            days.append(candidate)
+        candidate -= timedelta(days=1)
+    return list(reversed(days))
 
 
 def latest_candle_retry_delay(retry_hours: int) -> timedelta:

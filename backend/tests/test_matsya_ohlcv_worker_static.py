@@ -17,9 +17,11 @@ from app.matsya.ohlcv_service import (
     latest_returned_candle_date,
     normalized_mapping_symbol,
     parse_historical_payload,
+    recent_trading_days,
     reusable_current_window_run,
     returned_candles_are_trailing_stale,
 )
+from app.matsya.ohlcv_worker import next_daily_eod_run_at, should_run_daily_eod
 from app.matsya.settings import MatsyaSettings
 from app.timezone import IST
 
@@ -177,9 +179,10 @@ def test_matsya_ohlcv_schema_and_compose_are_safe() -> None:
 
     for key in (
         "MATSYA_OHLCV_WORKER_ENABLED=true",
-        "MATSYA_OHLCV_LOOP=false",
+        "MATSYA_OHLCV_LOOP=true",
         "MATSYA_OHLCV_CHECK_INTERVAL_SECONDS=3600",
         "MATSYA_HISTORICAL_LOOKBACK_CALENDAR_DAYS=1825",
+        "MATSYA_OHLCV_VALIDATION_TRADING_DAYS=60",
         "MATSYA_DHAN_HISTORICAL_DAILY_SUPPORTED_YEARS=5",
         "MATSYA_DHAN_HISTORICAL_RPS=2",
         "MATSYA_DHAN_HISTORICAL_MAX_RETRIES=3",
@@ -196,6 +199,55 @@ def test_old_root_compose_not_modified_for_matsya_ohlcv_worker() -> None:
     old_compose = read("docker-compose.yml")
 
     assert "matsya-ohlcv-worker" not in old_compose
+
+
+def test_matsya_ohlcv_worker_compose_is_restartable_but_not_public() -> None:
+    compose = read("deploy/matsya-setup/docker-compose.yml")
+    worker_section = compose.split("matsya-ohlcv-worker:", 1)[1].split("\n\nnetworks:", 1)[0]
+
+    assert "restart: unless-stopped" in worker_section
+    assert "ports:" not in worker_section
+    assert 'command: ["python", "-m", "scripts.matsya_ohlcv_worker"]' in worker_section
+
+
+def test_matsya_ohlcv_worker_loop_is_daily_eod_after_18_ist() -> None:
+    before_eod = datetime(2026, 6, 24, 17, 59, tzinfo=IST)
+    at_eod = datetime(2026, 6, 24, 18, 0, tzinfo=IST)
+    after_eod = datetime(2026, 6, 24, 20, 30, tzinfo=IST)
+
+    assert should_run_daily_eod(before_eod, 18, None) is False
+    assert should_run_daily_eod(at_eod, 18, None) is True
+    assert should_run_daily_eod(after_eod, 18, date(2026, 6, 24)) is False
+    assert next_daily_eod_run_at(before_eod, 18, None) == datetime(2026, 6, 24, 18, 0, tzinfo=IST)
+    assert next_daily_eod_run_at(after_eod, 18, date(2026, 6, 24)) == datetime(2026, 6, 25, 18, 0, tzinfo=IST)
+
+
+def test_matsya_ohlcv_validation_contract_is_present_and_non_destructive() -> None:
+    service = read("backend/app/matsya/ohlcv_service.py")
+    worker = read("backend/app/matsya/ohlcv_worker.py")
+    status_script = read("backend/scripts/matsya_status.py")
+
+    assert "def validation_report" in service
+    assert "missing_recent_symbol_dates" in service
+    assert "duplicate_count" in service
+    assert "zero_candle_symbols" in service
+    assert "stale_symbols" in service
+    assert "bad_ohlc_count" in service
+    assert "negative_volume_count" in service
+    assert "Matsya OHLCV validation" in worker
+    assert "matsya.ohlcv_validation:" in status_script
+    assert "DROP TABLE" not in service.upper()
+    assert "TRUNCATE" not in service.upper()
+    assert "DELETE FROM matsya.ohlcv_daily" not in service
+
+
+def test_recent_trading_days_returns_60_sessions_and_skips_weekends() -> None:
+    days = recent_trading_days(date(2026, 6, 24), 60, set())
+
+    assert len(days) == 60
+    assert days[-1] == date(2026, 6, 24)
+    assert all(day.weekday() < 5 for day in days)
+    assert date(2026, 6, 21) not in days
 
 
 def test_parse_historical_payload_converts_dhan_arrays() -> None:

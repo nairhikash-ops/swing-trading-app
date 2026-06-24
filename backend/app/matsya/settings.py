@@ -22,6 +22,7 @@ class MatsyaSettings:
     ohlcv_loop: bool = False
     ohlcv_check_interval_seconds: int = 3600
     ohlcv_incremental_overlap_sessions: int = 2
+    ohlcv_validation_trading_days: int = 60
     historical_lookback_calendar_days: int = 1825
     dhan_historical_daily_supported_years: int = 5
     dhan_historical_rps: float = 2.0
@@ -69,6 +70,7 @@ class MatsyaSettings:
             ohlcv_loop=os.getenv("MATSYA_OHLCV_LOOP", "false").lower() == "true",
             ohlcv_check_interval_seconds=int(os.getenv("MATSYA_OHLCV_CHECK_INTERVAL_SECONDS", "3600")),
             ohlcv_incremental_overlap_sessions=int(os.getenv("MATSYA_OHLCV_INCREMENTAL_OVERLAP_SESSIONS", "2")),
+            ohlcv_validation_trading_days=int(os.getenv("MATSYA_OHLCV_VALIDATION_TRADING_DAYS", "60")),
             historical_lookback_calendar_days=int(os.getenv("MATSYA_HISTORICAL_LOOKBACK_CALENDAR_DAYS", "1825")),
             dhan_historical_daily_supported_years=int(os.getenv("MATSYA_DHAN_HISTORICAL_DAILY_SUPPORTED_YEARS", "5")),
             dhan_historical_rps=float(os.getenv("MATSYA_DHAN_HISTORICAL_RPS", "2")),
