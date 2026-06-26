@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from app.matsya.latest_regime_v3_snapshot import (
+    CANDLE_FEATURE_NAMES,
     FEATURE_NAMES,
     MODEL_FEATURE_COUNT,
     REGIME_FEATURE_NAMES,
@@ -19,6 +20,8 @@ from app.matsya.latest_regime_v3_snapshot import (
     technical_feature_names,
     validate_snapshot_frame,
 )
+from app.ml_dataset_v3_anatomy import calculate_candle_anatomy
+from app.ml_samples import build_feature_snapshot
 
 
 class FakeSnapshotRepository:
@@ -112,6 +115,29 @@ def test_builds_60_by_10_candle_anatomy_columns_in_exact_order() -> None:
         "c00_signed_body_to_range",
     ]
     assert names[-1] == "c59_signed_body_to_range"
+
+
+def test_first_600_feature_values_match_original_ml_sample_generation() -> None:
+    candles = make_candles()
+    instrument = {"id": 123, "underlying_symbol": "AAA"}
+
+    original_feature = build_feature_snapshot(
+        instrument=instrument,
+        input_window=candles,
+        entry_close=float(candles[-1]["close"]),
+        target_percent=3.0,
+        stop_percent=3.0,
+        future_window_sessions=20,
+    )
+    snapshot_row = build_snapshot_row(symbol="AAA", security_id="1001", candles=candles)
+
+    assert original_feature["sample_date"] == snapshot_row["sample_date"]
+    for index, original_candle in enumerate(original_feature["candles"]):
+        expected_values = dict(original_candle)
+        expected_values.update(calculate_candle_anatomy(original_candle))
+        for feature_name in CANDLE_FEATURE_NAMES:
+            column_name = f"c{index:02d}_{feature_name}"
+            assert snapshot_row[column_name] == pytest.approx(expected_values[feature_name], abs=1e-6)
 
 
 def test_adds_final_8_regime_columns_in_exact_order() -> None:
