@@ -26,6 +26,8 @@ class FakeSnapshotRepository:
         self,
         *,
         ready: bool = True,
+        latest_run_status: str = "completed",
+        readiness_overrides: dict[str, object] | None = None,
         symbols: list[dict[str, str]] | None = None,
         candles_by_security_id: dict[str, list[dict[str, object]]] | None = None,
     ) -> None:
@@ -38,19 +40,33 @@ class FakeSnapshotRepository:
             for index, row in enumerate(self._symbols)
         }
         self._ready = ready
+        self._latest_run_status = latest_run_status
+        self._readiness_overrides = readiness_overrides or {}
         self.latest_calls: list[tuple[str, int]] = []
 
     def readiness(self) -> dict[str, object]:
-        return {
+        readiness = {
             "status": "ready" if self._ready else "not_ready",
             "latest_ohlcv_date": "2026-06-25" if self._ready else None,
+            "latest_stored_candle_date": "2026-06-25" if self._ready else None,
+            "expected_latest_candle_date": "2026-06-25",
+            "validation_trading_days": 60,
+            "validation_start_date": "2026-03-31",
+            "latest_ohlcv_run_status": self._latest_run_status,
             "expected_symbol_count": len(self._symbols),
+            "mapped_symbols": len(self._symbols),
             "mapped_symbols_missing": 0,
+            "zero_candle_symbols": 0,
+            "stale_symbols": 0,
+            "missing_recent_symbol_dates": 0,
             "duplicate_count": 0,
             "null_count": 0,
+            "null_ohlcv_count": 0,
             "bad_ohlc_count": 0,
             "negative_volume_count": 0,
         }
+        readiness.update(self._readiness_overrides)
+        return readiness
 
     def mapped_symbols(self) -> list[dict[str, str]]:
         return self._symbols
@@ -119,6 +135,16 @@ def test_validates_exactly_608_model_features_and_writes_metadata(tmp_path: Path
     assert result.metadata["feature_count"] == 608
     assert result.metadata["technical_feature_count"] == 600
     assert result.metadata["regime_feature_count"] == 8
+    assert result.metadata["validation_trading_days"] == 60
+    assert result.metadata["validation_start_date"] == "2026-03-31"
+    assert result.metadata["expected_latest_candle_date"] == "2026-06-25"
+    assert result.metadata["latest_stored_candle_date"] == "2026-06-25"
+    assert result.metadata["mapped_symbols"] == 2
+    assert result.metadata["zero_candle_symbols"] == 0
+    assert result.metadata["stale_symbols"] == 0
+    assert result.metadata["missing_recent_symbol_dates"] == 0
+    assert result.metadata["latest_ohlcv_run_status"] == "completed"
+    assert result.metadata["null_ohlcv_count"] == 0
     assert json.loads(meta_path.read_text(encoding="utf-8"))["notes"] == "latest inference snapshot only; no split; no labels; no scoring"
 
 
@@ -174,6 +200,66 @@ def test_rejects_readiness_not_ready(tmp_path: Path) -> None:
     with pytest.raises(MatsyaSnapshotReadinessError, match="Matsya readiness is not ready"):
         generate_latest_regime_v3_snapshot(
             repository=FakeSnapshotRepository(ready=False),
+            output_path=tmp_path / "snapshot.csv",
+            meta_path=tmp_path / "snapshot.meta.json",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("zero_candle_symbols", "no OHLCV candles"),
+        ("stale_symbols", "stale OHLCV candles"),
+        ("missing_recent_symbol_dates", "missing recent completed trading dates"),
+    ],
+)
+def test_readiness_fails_when_full_validation_coverage_counters_are_nonzero(
+    tmp_path: Path,
+    field: str,
+    message: str,
+) -> None:
+    with pytest.raises(MatsyaSnapshotReadinessError, match=message):
+        generate_latest_regime_v3_snapshot(
+            repository=FakeSnapshotRepository(readiness_overrides={field: 1, "status": "not_ready"}),
+            output_path=tmp_path / "snapshot.csv",
+            meta_path=tmp_path / "snapshot.meta.json",
+        )
+
+
+def test_readiness_fails_when_latest_run_status_is_completed_with_errors(tmp_path: Path) -> None:
+    with pytest.raises(MatsyaSnapshotReadinessError, match="Latest OHLCV run status"):
+        generate_latest_regime_v3_snapshot(
+            repository=FakeSnapshotRepository(ready=True, latest_run_status="completed_with_errors"),
+            output_path=tmp_path / "snapshot.csv",
+            meta_path=tmp_path / "snapshot.meta.json",
+        )
+
+
+@pytest.mark.parametrize("latest_run_status", ["completed", "up_to_date"])
+def test_readiness_allows_only_completed_or_up_to_date_with_clean_validation(
+    tmp_path: Path,
+    latest_run_status: str,
+) -> None:
+    result = generate_latest_regime_v3_snapshot(
+        repository=FakeSnapshotRepository(ready=True, latest_run_status=latest_run_status),
+        output_path=tmp_path / f"{latest_run_status}.csv",
+        meta_path=tmp_path / f"{latest_run_status}.meta.json",
+    )
+
+    assert result.metadata["latest_ohlcv_run_status"] == latest_run_status
+    assert result.metadata["matsya_readiness_status"] == "ready"
+
+
+def test_snapshot_sample_date_must_equal_expected_latest_candle_date(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="sample_date must equal expected latest candle date"):
+        generate_latest_regime_v3_snapshot(
+            repository=FakeSnapshotRepository(
+                readiness_overrides={
+                    "expected_latest_candle_date": "2026-06-26",
+                    "latest_ohlcv_date": "2026-06-26",
+                    "latest_stored_candle_date": "2026-06-26",
+                }
+            ),
             output_path=tmp_path / "snapshot.csv",
             meta_path=tmp_path / "snapshot.meta.json",
         )

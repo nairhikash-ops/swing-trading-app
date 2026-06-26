@@ -15,11 +15,9 @@ import numpy as np
 import pandas as pd
 
 from app.matsya.db import connect
-from app.matsya.market_calendar import expected_latest_candle_date
-from app.matsya.ohlcv_service import INSTRUMENT_LATERAL_JOIN_SQL
+from app.matsya.ohlcv_service import INSTRUMENT_LATERAL_JOIN_SQL, MatsyaOHLCVStore
 from app.matsya.settings import MatsyaSettings
 from app.ml_dataset_v3_anatomy import calculate_candle_anatomy
-from app.timezone import IST
 
 
 DATASET_VERSION = "stock_opportunity_ohlcv_regime_v3"
@@ -88,6 +86,7 @@ class MatsyaSnapshotReadinessError(ValueError):
 class MatsyaLatestRegimeV3Repository:
     def __init__(self, settings: MatsyaSettings | None = None) -> None:
         self.settings = settings or MatsyaSettings.from_env()
+        self.ohlcv_store = MatsyaOHLCVStore(self.settings)
 
     @contextmanager
     def _connect(self) -> Iterable[Any]:
@@ -98,54 +97,13 @@ class MatsyaLatestRegimeV3Repository:
             conn.close()
 
     def readiness(self) -> dict[str, Any]:
+        validation = self.ohlcv_store.validation_report(
+            self.settings.ohlcv_universe_name,
+            self.settings.ohlcv_validation_trading_days,
+            self.settings.historical_finalized_after_hour_ist,
+            self.settings.market_code,
+        )
         with self._connect() as conn:
-            validation = _one(
-                conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS total_rows,
-                        COUNT(DISTINCT security_id) AS symbols_with_candles,
-                        MAX(trading_date) AS latest_stored_candle_date,
-                        COALESCE(SUM(CASE WHEN open_price IS NULL OR high_price IS NULL OR low_price IS NULL
-                                           OR close_price IS NULL OR volume IS NULL THEN 1 ELSE 0 END), 0) AS null_ohlcv_count,
-                        COALESCE(SUM(CASE WHEN high_price < low_price OR close_price < low_price
-                                           OR close_price > high_price THEN 1 ELSE 0 END), 0) AS bad_ohlc_count,
-                        COALESCE(SUM(CASE WHEN volume < 0 THEN 1 ELSE 0 END), 0) AS negative_volume_count
-                    FROM matsya.ohlcv_daily
-                    WHERE provider_code = 'dhan'
-                    """
-                )
-            ) or {}
-            duplicates = _one(
-                conn.execute(
-                    """
-                    SELECT COALESCE(SUM(cnt - 1), 0) AS duplicate_count
-                    FROM (
-                        SELECT provider_code, security_id, trading_date, COUNT(*) AS cnt
-                        FROM matsya.ohlcv_daily
-                        GROUP BY provider_code, security_id, trading_date
-                        HAVING COUNT(*) > 1
-                    ) duplicate_rows
-                    """
-                )
-            ) or {}
-            coverage = _one(
-                conn.execute(
-                    f"""
-                    WITH mapped AS (
-                        SELECT m.symbol, mi.security_id
-                        FROM matsya.market_universe_members m
-                        {INSTRUMENT_LATERAL_JOIN_SQL}
-                        WHERE m.universe_name = %s AND m.active = true
-                    )
-                    SELECT
-                        COUNT(*) AS expected_symbol_count,
-                        COUNT(*) FILTER (WHERE security_id IS NULL) AS unmapped_symbol_count
-                    FROM mapped
-                    """,
-                    (self.settings.ohlcv_universe_name,),
-                )
-            ) or {}
             latest_run = _one(
                 conn.execute(
                     """
@@ -158,40 +116,41 @@ class MatsyaLatestRegimeV3Repository:
                     (self.settings.ohlcv_universe_name,),
                 )
             ) or {}
-            holiday_rows = _all(
-                conn.execute(
-                    "SELECT holiday_date FROM matsya.trading_holidays WHERE market_code = %s",
-                    (self.settings.market_code,),
-                )
-            )
 
-        latest_date = _date_text(validation.get("latest_stored_candle_date"))
-        holidays = {_date_value(row["holiday_date"]) for row in holiday_rows}
-        expected_latest = expected_latest_candle_date(
-            datetime.now(tz=IST),
-            self.settings.historical_finalized_after_hour_ist,
-            holidays,
-        ).isoformat()
+        latest_stored = validation.get("latest_stored_candle_date")
+        expected_latest = validation.get("expected_latest_candle_date")
+        latest_run_status = latest_run.get("status") or ""
         ready = (
-            latest_date is not None
-            and latest_date == expected_latest
-            and latest_run.get("status") in {"completed", "completed_with_errors", "up_to_date"}
-            and int(duplicates.get("duplicate_count") or 0) == 0
+            latest_stored is not None
+            and latest_stored == expected_latest
+            and latest_run_status in {"completed", "up_to_date"}
+            and int(validation.get("duplicate_count") or 0) == 0
             and int(validation.get("null_ohlcv_count") or 0) == 0
             and int(validation.get("bad_ohlc_count") or 0) == 0
             and int(validation.get("negative_volume_count") or 0) == 0
-            and int(coverage.get("expected_symbol_count") or 0) > 0
-            and int(coverage.get("unmapped_symbol_count") or 0) == 0
+            and int(validation.get("mapped_symbols") or 0) > 0
+            and int(validation.get("zero_candle_symbols") or 0) == 0
+            and int(validation.get("stale_symbols") or 0) == 0
+            and int(validation.get("missing_recent_symbol_dates") or 0) == 0
         )
         return {
             "status": "ready" if ready else "not_ready",
-            "latest_ohlcv_date": latest_date,
+            "validation_trading_days": int(validation.get("validation_trading_days") or 0),
+            "validation_start_date": validation.get("validation_start_date"),
+            "latest_ohlcv_date": latest_stored,
+            "latest_stored_candle_date": latest_stored,
             "expected_latest_ohlcv_date": expected_latest,
+            "expected_latest_candle_date": expected_latest,
             "latest_ohlcv_run": latest_run,
-            "expected_symbol_count": int(coverage.get("expected_symbol_count") or 0),
-            "mapped_symbols_missing": int(coverage.get("unmapped_symbol_count") or 0),
-            "duplicate_count": int(duplicates.get("duplicate_count") or 0),
+            "latest_ohlcv_run_status": latest_run_status,
+            "expected_symbol_count": int(validation.get("mapped_symbols") or 0),
+            "mapped_symbols": int(validation.get("mapped_symbols") or 0),
+            "zero_candle_symbols": int(validation.get("zero_candle_symbols") or 0),
+            "stale_symbols": int(validation.get("stale_symbols") or 0),
+            "missing_recent_symbol_dates": int(validation.get("missing_recent_symbol_dates") or 0),
+            "duplicate_count": int(validation.get("duplicate_count") or 0),
             "null_count": int(validation.get("null_ohlcv_count") or 0),
+            "null_ohlcv_count": int(validation.get("null_ohlcv_count") or 0),
             "bad_ohlc_count": int(validation.get("bad_ohlc_count") or 0),
             "negative_volume_count": int(validation.get("negative_volume_count") or 0),
         }
@@ -277,6 +236,9 @@ def generate_latest_regime_v3_snapshot(
         raise MatsyaSnapshotReadinessError(f"{len(skipped_symbols)} mapped symbols had fewer than 60 completed candles.")
     if len(sample_dates) != 1:
         raise ValueError(f"Latest snapshot must have exactly one sample_date, got {sorted(sample_dates)}")
+    expected_sample_date = readiness.get("expected_latest_candle_date") or readiness.get("expected_latest_ohlcv_date")
+    if expected_sample_date and sample_dates != {str(expected_sample_date)}:
+        raise ValueError(f"Snapshot sample_date must equal expected latest candle date {expected_sample_date}.")
 
     df = pd.DataFrame(rows, columns=METADATA_COLUMNS + technical_feature_names())
     df = add_regime_features(df)
@@ -446,10 +408,20 @@ def build_metadata(
         "skipped_symbols": skipped_symbols,
         "sample_date": sample_date,
         "latest_ohlcv_date": readiness.get("latest_ohlcv_date") or sample_date,
+        "validation_trading_days": int(readiness.get("validation_trading_days") or 0),
+        "validation_start_date": readiness.get("validation_start_date"),
+        "expected_latest_candle_date": readiness.get("expected_latest_candle_date"),
+        "latest_stored_candle_date": readiness.get("latest_stored_candle_date") or readiness.get("latest_ohlcv_date"),
+        "mapped_symbols": int(readiness.get("mapped_symbols") or 0),
+        "zero_candle_symbols": int(readiness.get("zero_candle_symbols") or 0),
+        "stale_symbols": int(readiness.get("stale_symbols") or 0),
+        "missing_recent_symbol_dates": int(readiness.get("missing_recent_symbol_dates") or 0),
+        "latest_ohlcv_run_status": readiness.get("latest_ohlcv_run_status") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "matsya_readiness_status": readiness.get("status", "unknown"),
         "duplicate_count": int(readiness.get("duplicate_count") or 0),
         "null_count": int(readiness.get("null_count") or 0),
+        "null_ohlcv_count": int(readiness.get("null_ohlcv_count") or readiness.get("null_count") or 0),
         "bad_ohlc_count": int(readiness.get("bad_ohlc_count") or 0),
         "negative_volume_count": int(readiness.get("negative_volume_count") or 0),
         "first_10_feature_names": FEATURE_NAMES[:10],
@@ -471,9 +443,9 @@ def _validate_readiness(readiness: dict[str, Any]) -> None:
     if not readiness.get("latest_ohlcv_date"):
         reasons.append("Latest trading date is not finalized.")
     if (
-        readiness.get("expected_latest_ohlcv_date")
+        (readiness.get("expected_latest_candle_date") or readiness.get("expected_latest_ohlcv_date"))
         and readiness.get("latest_ohlcv_date")
-        and readiness.get("latest_ohlcv_date") != readiness.get("expected_latest_ohlcv_date")
+        and readiness.get("latest_ohlcv_date") != (readiness.get("expected_latest_candle_date") or readiness.get("expected_latest_ohlcv_date"))
     ):
         reasons.append("Latest trading date is not finalized.")
     if int(readiness.get("duplicate_count") or 0) != 0:
@@ -484,8 +456,16 @@ def _validate_readiness(readiness: dict[str, Any]) -> None:
         reasons.append("Bad OHLC rows exist.")
     if int(readiness.get("negative_volume_count") or 0) != 0:
         reasons.append("Negative volume rows exist.")
-    if int(readiness.get("mapped_symbols_missing") or 0) != 0:
-        reasons.append("Mapped symbols are missing.")
+    if int(readiness.get("mapped_symbols") or readiness.get("expected_symbol_count") or 0) <= 0:
+        reasons.append("No mapped symbols are available.")
+    if int(readiness.get("zero_candle_symbols") or 0) != 0:
+        reasons.append("Mapped symbols have no OHLCV candles.")
+    if int(readiness.get("stale_symbols") or 0) != 0:
+        reasons.append("Mapped symbols have stale OHLCV candles.")
+    if int(readiness.get("missing_recent_symbol_dates") or 0) != 0:
+        reasons.append("Mapped symbols are missing recent completed trading dates.")
+    if readiness.get("latest_ohlcv_run_status") not in {"completed", "up_to_date"}:
+        reasons.append("Latest OHLCV run status is not completed or up_to_date.")
     if reasons:
         raise MatsyaSnapshotReadinessError(" ".join(reasons))
 
@@ -554,9 +534,3 @@ def _date_text(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
-
-
-def _date_value(value: Any) -> date:
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(str(value))
