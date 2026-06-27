@@ -1,0 +1,30 @@
+{
+  "signals": [
+    {
+      "symbol": "ALPHA",
+      "security_id": "1001",
+      "sample_date": "2026-06-25",
+      "kurma_probability": 0.62,
+      "varaha_probability": 0.58,
+      "close_price": 100.0,
+      "source_report_path": "synthetic-fixture",
+      "model_versions": {
+        "kurma": "stock_opportunity_ohlcv_regime_timesplit_kurma_v3",
+        "varaha": "stock_opportunity_ohlcv_regime_timesplit_varaha_v3"
+      }
+    },
+    {
+      "symbol": "BETA",
+      "security_id": "1002",
+      "sample_date": "2026-06-25",
+      "kurma_probability": 0.54,
+      "varaha_probability": 0.61,
+      "close_price": 200.0,
+      "source_report_path": "synthetic-fixture",
+      "model_versions": {
+        "kurma": "stock_opportunity_ohlcv_regime_timesplit_kurma_v3",
+        "varaha": "stock_opportunity_ohlcv_regime_timesplit_varaha_v3"
+      }
+    }
+  ]
+}
