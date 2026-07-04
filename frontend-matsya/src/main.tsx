@@ -46,6 +46,8 @@ type PaperStrategyStatus = {
 };
 
 type PaperTradingStatus = {
+  mode: string;
+  leakage_guard: string;
   summary: {
     strategy_count: number;
     latest_dates: string[];
@@ -208,7 +210,7 @@ function DemoTraderPanel({ status, busy, reload }: { status: PaperTradingStatus 
       </div>
       <div className="demo-grid">
         <div><p className="eyebrow">Total account state</p><dl className="status-list"><StatusRow label="Strategies" value={formatDemo(summary?.strategy_count)} /><StatusRow label="Latest dates" value={summary?.latest_dates?.join(", ") || "-"} /><StatusRow label="Total cash" value={formatDemo(summary?.total_cash)} /><StatusRow label="Open positions" value={formatDemo(summary?.total_open_positions)} /><StatusRow label="Pending orders" value={formatDemo(summary?.total_pending_orders)} /><StatusRow label="Closed trades" value={formatDemo(summary?.total_closed_trades)} /></dl></div>
-        <div><p className="eyebrow">Latest signal flow</p><dl className="status-list"><StatusRow label="Watch candidates latest" value={formatDemo(summary?.total_watch_candidates_latest)} /><StatusRow label="Final signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Pending orders created latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
+        <div><p className="eyebrow">Forward validation</p><dl className="status-list"><StatusRow label="Mode" value={status?.mode === "forward_paper_walk_forward" ? "Walk-forward paper only" : formatDemo(status?.mode)} /><StatusRow label="Leakage guard" value={status?.leakage_guard ?? "-"} /><StatusRow label="Watch candidates latest" value={formatDemo(summary?.total_watch_candidates_latest)} /><StatusRow label="Final signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Pending orders created latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
       </div>
       {(status?.strategies ?? []).map((strategy) => (
         <StrategyPanel key={strategy.strategy_id} strategy={strategy} />
@@ -233,9 +235,9 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
       </div>
       <DemoTable title="Pending Orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
       <DemoTable title="Open Positions" rows={strategy.open_positions} columns={isSideways ? ["symbol", "entry_date", "shares", "entry_price", "base_high", "base_low", "target_price", "bars_held"] : ["symbol", "entry_date", "shares", "entry_price", "stop_price", "target_price", "bars_held"]} />
-      <DemoTable title="Closed Trades" rows={strategy.closed_trades} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct"]} />
-      <DemoTable title="Latest Signals" rows={strategy.signals} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "target_price"] : ["symbol", "as_of_date", "confirmation_date", "down_market_capture_60d", "liquidity_cap"]} />
-      <DemoTable title="Watch Candidates" rows={strategy.watch_candidates} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close"] : ["symbol", "as_of_date", "watch_reason", "crash_date", "days_since_crash", "reaction_high_price", "higher_low_price", "latest_close", "distance_to_reaction_high_pct"]} />
+      <DemoTable title="Closed Trades" rows={strategy.closed_trades} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct", "realized_move_pct"]} />
+      <DemoTable title="Latest Signals" rows={strategy.signals} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "move_from_base_high_pct", "move_from_base_low_pct", "target_price"] : ["symbol", "as_of_date", "confirmation_date", "down_market_capture_60d", "liquidity_cap"]} />
+      <DemoTable title="Watch Candidates" rows={strategy.watch_candidates} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "move_from_base_high_pct", "move_from_base_low_pct"] : ["symbol", "as_of_date", "watch_reason", "crash_date", "days_since_crash", "reaction_high_price", "higher_low_price", "latest_close", "move_from_reaction_high_pct", "move_from_crash_low_pct", "move_from_higher_low_pct"]} />
       <DemoTable title="Daily Reports" rows={strategy.daily_reports} columns={isSideways ? ["date", "equity", "open_positions", "pending_orders", "watch_candidates", "breakout_signals", "orders_placed", "fetch_failures"] : ["date", "equity", "open_positions", "pending_orders", "watch_candidates", "eligible_signals", "orders_placed", "fetch_failures"]} />
       <div className="file-grid"><div><p className="eyebrow">Files</p><div className="file-title"><FileText size={18} /> {strategy.output_dir}</div><dl className="status-list">{Object.entries(strategy.files ?? {}).map(([name, meta]) => <StatusRow key={name} label={name.replaceAll("_", " ")} value={meta.exists ? `${formatDemo(meta.size_bytes)} bytes` : "missing"} />)}</dl></div></div>
     </section>
@@ -243,7 +245,7 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
 }
 
 function DemoTable({ title, rows, columns }: { title: string; rows: DemoRow[]; columns: string[] }) {
-  return <div className="demo-table-block"><p className="eyebrow">{title}</p><div className="table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={columns.length}>No rows.</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{columns.map((column) => <td key={column}>{formatDemo(row[column])}</td>)}</tr>)}</tbody></table></div></div>;
+  return <div className="demo-table-block"><p className="eyebrow">{title}</p><div className="table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={columns.length}>No rows.</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{columns.map((column) => <td key={column}>{formatDemo(row[column], column)}</td>)}</tr>)}</tbody></table></div></div>;
 }
 
 function StatusRow({ label, value }: { label: string; value: string }) {
@@ -261,13 +263,21 @@ function formatDate(value?: string | null): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
-function formatDemo(value: string | number | boolean | null | undefined): string {
+function formatDemo(value: string | number | boolean | null | undefined, key = ""): string {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "number") return Math.abs(value) < 1 && value !== 0 ? value.toFixed(4) : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
+  if (typeof value === "number") return isPercentColumn(key) ? formatPercent(value) : Math.abs(value) < 1 && value !== 0 ? value.toFixed(4) : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(value);
   const parsed = Number(value);
-  if (!Number.isNaN(parsed) && value.trim() !== "") return Math.abs(parsed) < 1 && parsed !== 0 ? parsed.toFixed(4) : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(parsed);
+  if (!Number.isNaN(parsed) && value.trim() !== "") return isPercentColumn(key) ? formatPercent(parsed) : Math.abs(parsed) < 1 && parsed !== 0 ? parsed.toFixed(4) : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(parsed);
   return value;
+}
+
+function isPercentColumn(key: string): boolean {
+  return key.endsWith("_pct") || key.endsWith("_return") || key.includes("return_");
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(2)}%`;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

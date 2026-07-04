@@ -41,7 +41,12 @@ class PaperTradingReportService:
                 include_watch=True,
             ),
         ]
-        return {"summary": aggregate_summary(strategies), "strategies": strategies}
+        return {
+            "mode": "forward_paper_walk_forward",
+            "leakage_guard": "date-locked candles only; entries fill next open",
+            "summary": aggregate_summary(strategies),
+            "strategies": strategies,
+        }
 
 
 def strategy_status(
@@ -57,12 +62,12 @@ def strategy_status(
     state = read_json(output_dir / "paper_broker_state.json", default={})
     fetch_failures = read_json(output_dir / "fetch_failures.json", default={})
 
-    pending_orders = [coerce_numbers(row) for row in list(state.get("pending_orders") or [])]
-    open_positions = [coerce_numbers(row) for row in list(state.get("open_positions") or [])]
-    closed_trades = [coerce_numbers(row) for row in read_csv_tail(output_dir / "paper_trade_ledger.csv", limit)]
-    order_ledger = [coerce_numbers(row) for row in read_csv_tail(output_dir / "paper_order_ledger.csv", limit)]
-    signals = [coerce_numbers(row) for row in read_csv_tail(output_dir / "signals.csv", limit)]
-    watch_candidates = [coerce_numbers(row) for row in read_csv_tail(output_dir / "watch_candidates.csv", limit)] if include_watch else []
+    pending_orders = [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("pending_orders") or [])]
+    open_positions = [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("open_positions") or [])]
+    closed_trades = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_trade_ledger.csv", limit)]
+    order_ledger = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_order_ledger.csv", limit)]
+    signals = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "signals.csv", limit)]
+    watch_candidates = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "watch_candidates.csv", limit)] if include_watch else []
 
     account = {
         "cash": as_float(state.get("cash")),
@@ -171,6 +176,31 @@ def coerce_numbers(row: dict[str, Any]) -> dict[str, Any]:
             continue
         out[key] = value
     return out
+
+
+def derive_movement_fields(row: dict[str, Any]) -> dict[str, Any]:
+    latest_close = as_float(row.get("latest_close"))
+    if latest_close > 0:
+        base_high = as_float(row.get("base_high"))
+        base_low = as_float(row.get("base_low"))
+        reaction_high = as_float(row.get("reaction_high_price"))
+        crash_low = as_float(row.get("crash_low_price"))
+        higher_low = as_float(row.get("higher_low_price"))
+        if base_high > 0:
+            row.setdefault("move_from_base_high_pct", latest_close / base_high - 1)
+        if base_low > 0:
+            row.setdefault("move_from_base_low_pct", latest_close / base_low - 1)
+        if reaction_high > 0:
+            row.setdefault("move_from_reaction_high_pct", latest_close / reaction_high - 1)
+        if crash_low > 0:
+            row.setdefault("move_from_crash_low_pct", latest_close / crash_low - 1)
+        if higher_low > 0:
+            row.setdefault("move_from_higher_low_pct", latest_close / higher_low - 1)
+    entry_price = as_float(row.get("entry_price"))
+    exit_price = as_float(row.get("exit_price"))
+    if entry_price > 0 and exit_price > 0:
+        row.setdefault("realized_move_pct", exit_price / entry_price - 1)
+    return row
 
 
 def parse_number(value: str) -> int | float | None:

@@ -339,6 +339,8 @@ def find_latest_uptrend_sideways(symbol: str, df_raw: pd.DataFrame, as_of_date: 
             "latest_close": float(latest["close"]),
             "latest_high": float(latest["high"]),
             "latest_low": float(latest["low"]),
+            "move_from_base_high_pct": (float(latest["close"]) / base_high) - 1,
+            "move_from_base_low_pct": (float(latest["close"]) / base_low) - 1,
             "target_price": round_money(base_high * 1.10),
         }
         if best is None or (row["status"] == "upward_breakout" and best["status"] != "upward_breakout"):
