@@ -12,8 +12,11 @@ from v7b_matsya_forward_paper_logger import (
     FRICTION_BASE,
     FRICTION_HARSH,
     MAX_SLOTS,
+    MIN_AVG_TRADED_VALUE_20D,
     MatsyaClient,
     build_market_returns,
+    compute_base_features,
+    down_market_capture_60d,
     fetch_universe_candles,
     generate_signals,
     latest_candle_for_date,
@@ -25,6 +28,7 @@ DEFAULT_BASE_URL = "http://100.76.218.124:8020"
 DEFAULT_OUTPUT_DIR = Path(r"D:\app\data\exports\v8_demo_trader")
 DEFAULT_STARTING_EQUITY = 100000.0
 DEFAULT_LOOKBACK_DAYS = 420
+WATCH_WINDOW_DAYS = 14
 
 
 @dataclass(frozen=True)
@@ -243,6 +247,98 @@ def health_gate(status: dict, symbols_loaded: int, fetch_failures: int, strict: 
     return errors
 
 
+def find_watch_candidate(
+    symbol: str,
+    df_raw: pd.DataFrame,
+    market_df: pd.DataFrame,
+    as_of_date: str,
+) -> dict | None:
+    df = compute_base_features(df_raw)
+    if "is_crash" not in df.columns:
+        return None
+    df["daily_return"] = df["close"].pct_change()
+    as_of_ts = pd.to_datetime(as_of_date)
+    matches = df.index[df["trading_date"] == as_of_ts].tolist()
+    if not matches:
+        return None
+    as_of_idx = int(matches[-1])
+    crash_indices = [int(idx) for idx in df.index[df["is_crash"]].tolist() if 0 <= as_of_idx - int(idx) <= WATCH_WINDOW_DAYS]
+
+    for idx in reversed(crash_indices):
+        reaction_high_price = float(df.at[idx, "high"])
+        reaction_high_date = df.at[idx, "trading_date"]
+        crash_low_price = float(df.at[idx, "low"])
+        higher_low_price = None
+        higher_low_date = None
+        higher_low_formed = False
+        invalidated = False
+        confirmed = False
+
+        for curr in range(idx + 1, as_of_idx + 1):
+            if float(df.at[curr, "low"]) < crash_low_price:
+                invalidated = True
+                break
+            if float(df.at[curr, "high"]) > reaction_high_price and higher_low_formed:
+                confirmed = True
+                break
+            if float(df.at[curr, "low"]) > crash_low_price and float(df.at[curr, "low"]) < float(df.at[curr - 1, "low"]):
+                higher_low_formed = True
+                higher_low_price = float(df.at[curr, "low"])
+                higher_low_date = df.at[curr, "trading_date"]
+            if float(df.at[curr, "high"]) > reaction_high_price:
+                reaction_high_price = float(df.at[curr, "high"])
+                reaction_high_date = df.at[curr, "trading_date"]
+
+        if invalidated or confirmed:
+            continue
+
+        avg_tv = df.at[as_of_idx, "avg_traded_value_20d"]
+        capture, capture_available = down_market_capture_60d(df, market_df, as_of_idx)
+        latest_close = float(df.at[as_of_idx, "close"])
+        if higher_low_formed:
+            reason = "higher_low_waiting_reaction_high_break"
+        else:
+            reason = "crash_alive_waiting_higher_low"
+        return {
+            "symbol": symbol,
+            "as_of_date": as_of_date,
+            "watch_reason": reason,
+            "crash_date": df.at[idx, "trading_date"].strftime("%Y-%m-%d"),
+            "days_since_crash": int(as_of_idx - idx),
+            "crash_low_price": crash_low_price,
+            "reaction_high_date": reaction_high_date.strftime("%Y-%m-%d"),
+            "reaction_high_price": reaction_high_price,
+            "higher_low_date": higher_low_date.strftime("%Y-%m-%d") if higher_low_date is not None else None,
+            "higher_low_price": higher_low_price,
+            "latest_close": latest_close,
+            "distance_to_reaction_high_pct": (reaction_high_price / latest_close) - 1 if latest_close > 0 else None,
+            "avg_traded_value_20d": float(avg_tv) if pd.notna(avg_tv) else None,
+            "liquidity_pass": bool(pd.notna(avg_tv) and float(avg_tv) > MIN_AVG_TRADED_VALUE_20D),
+            "down_market_capture_60d": float(capture) if capture is not None else None,
+            "down_market_capture_60d_available": bool(capture_available),
+        }
+
+    return None
+
+
+def generate_watch_candidates(
+    candles_by_symbol: dict[str, pd.DataFrame],
+    market_df: pd.DataFrame,
+    as_of_date: str,
+) -> pd.DataFrame:
+    rows = []
+    for symbol, df in candles_by_symbol.items():
+        row = find_watch_candidate(symbol, df, market_df, as_of_date)
+        if row:
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(
+        ["watch_reason", "distance_to_reaction_high_pct", "days_since_crash"],
+        ascending=[False, True, True],
+    )
+
+
 def run_demo(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     client = MatsyaClient(args.base_url, args.timeout)
@@ -287,8 +383,16 @@ def run_demo(args: argparse.Namespace) -> None:
     equity, open_value = broker.equity(candles_by_symbol, as_of_date)
 
     market_df = build_market_returns(candles_by_symbol)
+    watch_candidates = generate_watch_candidates(candles_by_symbol, market_df, as_of_date)
     signals = generate_signals(candles_by_symbol, market_df, as_of_date)
     placed: list[str] = []
+    if not watch_candidates.empty:
+        watch_candidates.to_csv(
+            output_dir / "watch_candidates.csv",
+            mode="a",
+            header=not (output_dir / "watch_candidates.csv").exists(),
+            index=False,
+        )
     if not signals.empty:
         slots_available = max(0, MAX_SLOTS - broker.slots_used())
         if slots_available > 0:
@@ -321,6 +425,7 @@ def run_demo(args: argparse.Namespace) -> None:
         "pending_orders": len(getattr(broker, "state", {}).get("pending_orders", [])),
         "filled_today": len(filled),
         "closed_today": len(closed),
+        "watch_candidates": 0 if watch_candidates.empty else len(watch_candidates),
         "eligible_signals": 0 if signals.empty else len(signals),
         "orders_placed": len(placed),
         "matsya_latest_candle_date": status.get("latest_candle_date"),
