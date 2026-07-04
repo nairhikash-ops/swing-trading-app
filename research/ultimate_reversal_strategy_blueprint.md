@@ -1761,6 +1761,6 @@ Live API dry-run verification:
 - Orders placed: `0` because the run used `--dry-run`
 
 Planned server state path:
-- `/home/hacker/apps/uptrend-sideways-paper-trader/state`
+- `/home/hacker/apps/swing-trading-app/data/uptrend_sideways_paper_trader`
 
 Safety boundary: this is a forward paper-trading deployment only. It is not approved for live broker execution.

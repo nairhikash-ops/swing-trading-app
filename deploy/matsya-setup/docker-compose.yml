@@ -1,0 +1,94 @@
+services:
+  matsya-api:
+    build:
+      context: ../../backend
+    command: ["uvicorn", "app.matsya_api:app", "--host", "0.0.0.0", "--port", "8020"]
+    env_file:
+      - .env
+    environment:
+      V8_DEMO_OUTPUT_DIR: /app/data/v8_demo_trader
+    volumes:
+      - ../../data/v8_demo_trader:/app/data/v8_demo_trader:ro
+    ports:
+      - "${MATSYA_BIND_HOST:-127.0.0.1}:${MATSYA_API_PORT:-8020}:8020"
+    networks:
+      - matsya-db
+    restart: unless-stopped
+
+  matsya-ui:
+    build:
+      context: ../../frontend-matsya
+      args:
+        VITE_MATSYA_API_BASE_URL: ${VITE_MATSYA_API_BASE_URL:-http://localhost:8020}
+    ports:
+      - "${MATSYA_BIND_HOST:-127.0.0.1}:${MATSYA_UI_PORT:-5190}:80"
+    depends_on:
+      - matsya-api
+    restart: unless-stopped
+
+  v8-demo-trader:
+    build:
+      context: ../../backend
+    command:
+      - python
+      - scripts/run_v8_demo_trader_once.py
+    env_file:
+      - .env
+    environment:
+      V8_DEMO_OUTPUT_DIR: /app/data/v8_demo_trader
+    volumes:
+      - ../../data/v8_demo_trader:/app/data/v8_demo_trader
+    networks:
+      - matsya-db
+    depends_on:
+      - matsya-api
+    profiles:
+      - manual
+    restart: "no"
+
+  uptrend-sideways-paper-trader:
+    build:
+      context: ../../backend
+    command:
+      - python
+      - scripts/run_uptrend_sideways_paper_trader_once.py
+    env_file:
+      - .env
+    volumes:
+      - ../../data/uptrend_sideways_paper_trader:/app/data/uptrend_sideways_paper_trader
+    networks:
+      - matsya-db
+    depends_on:
+      - matsya-api
+    profiles:
+      - manual
+    restart: "no"
+
+  matsya-renewal-worker:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "scripts.matsya_renewal_worker"]
+    env_file:
+      - .env
+    networks:
+      - matsya-db
+    restart: unless-stopped
+    depends_on:
+      - matsya-api
+
+  matsya-ohlcv-worker:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "scripts.matsya_ohlcv_worker"]
+    env_file:
+      - .env
+    networks:
+      - matsya-db
+    restart: unless-stopped
+    depends_on:
+      - matsya-api
+
+networks:
+  matsya-db:
+    external: true
+    name: matsya-db_default
