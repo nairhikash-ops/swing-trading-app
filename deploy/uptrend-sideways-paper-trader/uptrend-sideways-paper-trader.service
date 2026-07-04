@@ -1,0 +1,12 @@
+[Unit]
+Description=Uptrend Sideways Demo Paper Trader
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/hacker/apps/swing-trading-app
+ExecStart=/usr/bin/python3 backend/app/scripts/uptrend_sideways_paper_trader.py --base-url http://100.76.218.124:8020 --output-dir /home/hacker/apps/uptrend-sideways-paper-trader/state --strict-health
+
+[Install]
+WantedBy=multi-user.target
