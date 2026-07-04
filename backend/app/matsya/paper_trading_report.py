@@ -107,6 +107,7 @@ def aggregate_summary(strategies: list[dict[str, Any]]) -> dict[str, Any]:
         "total_open_positions": sum(int(s.get("account", {}).get("open_positions_count") or 0) for s in strategies),
         "total_closed_trades": sum(int(s.get("account", {}).get("closed_trades_count") or 0) for s in strategies),
         "total_signals_latest": sum(as_float((s.get("latest") or {}).get(s.get("signal_count_key", ""))) for s in strategies),
+        "total_watch_candidates_latest": sum(as_float((s.get("latest") or {}).get("watch_candidates")) for s in strategies),
         "total_orders_placed_latest": sum(as_float((s.get("latest") or {}).get("orders_placed")) for s in strategies),
     }
 

@@ -54,6 +54,7 @@ type PaperTradingStatus = {
     total_open_positions: number;
     total_closed_trades: number;
     total_signals_latest: number;
+    total_watch_candidates_latest: number;
     total_orders_placed_latest: number;
   };
   strategies: PaperStrategyStatus[];
@@ -207,7 +208,7 @@ function DemoTraderPanel({ status, busy, reload }: { status: PaperTradingStatus 
       </div>
       <div className="demo-grid">
         <div><p className="eyebrow">Total account state</p><dl className="status-list"><StatusRow label="Strategies" value={formatDemo(summary?.strategy_count)} /><StatusRow label="Latest dates" value={summary?.latest_dates?.join(", ") || "-"} /><StatusRow label="Total cash" value={formatDemo(summary?.total_cash)} /><StatusRow label="Open positions" value={formatDemo(summary?.total_open_positions)} /><StatusRow label="Pending orders" value={formatDemo(summary?.total_pending_orders)} /><StatusRow label="Closed trades" value={formatDemo(summary?.total_closed_trades)} /></dl></div>
-        <div><p className="eyebrow">Latest signal flow</p><dl className="status-list"><StatusRow label="Signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Orders placed latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
+        <div><p className="eyebrow">Latest signal flow</p><dl className="status-list"><StatusRow label="Watch candidates latest" value={formatDemo(summary?.total_watch_candidates_latest)} /><StatusRow label="Final signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Pending orders created latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
       </div>
       {(status?.strategies ?? []).map((strategy) => (
         <StrategyPanel key={strategy.strategy_id} strategy={strategy} />
@@ -228,7 +229,7 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
       </div>
       <div className="demo-grid">
         <div><p className="eyebrow">Paper account</p><dl className="status-list"><StatusRow label="Date" value={formatDemo(latest?.date)} /><StatusRow label="Broker" value={formatDemo(latest?.broker)} /><StatusRow label="Equity" value={formatDemo(latest?.equity)} /><StatusRow label="Cash" value={formatDemo(strategy.account.cash)} /><StatusRow label="Open positions" value={formatDemo(strategy.account.open_positions_count)} /><StatusRow label="Pending orders" value={formatDemo(strategy.account.pending_orders_count)} /></dl></div>
-        <div><p className="eyebrow">Run health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Signals" value={formatDemo(latest?.[strategy.signal_count_key])} /><StatusRow label="Orders placed" value={formatDemo(latest?.orders_placed)} /></dl></div>
+        <div><p className="eyebrow">Run health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Watch candidates" value={formatDemo(latest?.watch_candidates)} /><StatusRow label="Final signals" value={formatDemo(latest?.[strategy.signal_count_key])} /><StatusRow label="Pending orders created" value={formatDemo(latest?.orders_placed)} /></dl></div>
       </div>
       <DemoTable title="Pending Orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
       <DemoTable title="Open Positions" rows={strategy.open_positions} columns={isSideways ? ["symbol", "entry_date", "shares", "entry_price", "base_high", "base_low", "target_price", "bars_held"] : ["symbol", "entry_date", "shares", "entry_price", "stop_price", "target_price", "bars_held"]} />
