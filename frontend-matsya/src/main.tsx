@@ -27,18 +27,36 @@ type FormState = {
   validateWithDhan: boolean;
 };
 
-type V8DemoStatus = {
+type PaperStrategyStatus = {
+  strategy_id: string;
+  name: string;
   output_dir: string;
   latest: DemoRow | null;
-  account: { cash: number; pending_orders_count: number; open_positions_count: number };
+  account: { cash: number; pending_orders_count: number; open_positions_count: number; closed_trades_count: number };
   pending_orders: DemoRow[];
   open_positions: DemoRow[];
   closed_trades: DemoRow[];
   order_ledger: DemoRow[];
   signals: DemoRow[];
+  watch_candidates: DemoRow[];
   daily_reports: DemoRow[];
+  signal_count_key: string;
   fetch_failures: { as_of_date?: string; symbols_requested?: number; symbols_loaded?: number; fetch_failures?: Record<string, string> };
   files: Record<string, { exists: boolean; path: string; size_bytes: number; updated_at?: number | null }>;
+};
+
+type PaperTradingStatus = {
+  summary: {
+    strategy_count: number;
+    latest_dates: string[];
+    total_cash: number;
+    total_pending_orders: number;
+    total_open_positions: number;
+    total_closed_trades: number;
+    total_signals_latest: number;
+    total_orders_placed_latest: number;
+  };
+  strategies: PaperStrategyStatus[];
 };
 
 const API_BASE = import.meta.env.VITE_MATSYA_API_BASE_URL || "http://localhost:8020";
@@ -46,7 +64,7 @@ const API_BASE = import.meta.env.VITE_MATSYA_API_BASE_URL || "http://localhost:8
 function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [status, setStatus] = useState<DhanStatus | null>(null);
-  const [demoStatus, setDemoStatus] = useState<V8DemoStatus | null>(null);
+  const [demoStatus, setDemoStatus] = useState<PaperTradingStatus | null>(null);
   const [form, setForm] = useState<FormState>({ dhanClientId: "", accessToken: "", expiryTime: "", validateWithDhan: true });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -81,8 +99,8 @@ function App() {
   }
 
   async function loadDemoStatus() {
-    try { setDemoStatus(await request<V8DemoStatus>("/api/matsya/demo/v8/status?limit=100")); }
-    catch (err) { setError(err instanceof Error ? err.message : "Unable to load V8 demo trader status."); }
+    try { setDemoStatus(await request<PaperTradingStatus>("/api/matsya/demo/paper-trading/status?limit=100")); }
+    catch (err) { setError(err instanceof Error ? err.message : "Unable to load paper trading status."); }
   }
 
   async function saveToken(event: FormEvent<HTMLFormElement>) {
@@ -179,24 +197,46 @@ function App() {
   );
 }
 
-function DemoTraderPanel({ status, busy, reload }: { status: V8DemoStatus | null; busy: boolean; reload: () => void }) {
-  const latest = status?.latest ?? null;
-  const healthOk = latest?.matsya_token_state === "active" && Number(latest?.symbols_loaded ?? 0) === 500 && Number(latest?.fetch_failures ?? 0) === 0;
+function DemoTraderPanel({ status, busy, reload }: { status: PaperTradingStatus | null; busy: boolean; reload: () => void }) {
+  const summary = status?.summary;
   return (
     <section className="panel demo-panel">
       <div className="panel-heading">
-        <div><p className="eyebrow">Forward paper trading</p><h2>V8 Demo Trader</h2></div>
-        <div className="button-row compact-actions"><div className={`pill ${healthOk ? "ok" : "warn"}`}>{healthOk ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}{healthOk ? "healthy" : "needs review"}</div><button className="secondary" onClick={reload} disabled={busy}><RefreshCcw size={17} />Refresh</button></div>
+        <div><p className="eyebrow">Forward paper trading</p><h2>Strategy Portfolio</h2></div>
+        <button className="secondary" onClick={reload} disabled={busy}><RefreshCcw size={17} />Refresh</button>
       </div>
       <div className="demo-grid">
-        <div><p className="eyebrow">Paper account</p><dl className="status-list"><StatusRow label="Date" value={formatDemo(latest?.date)} /><StatusRow label="Broker" value={formatDemo(latest?.broker)} /><StatusRow label="Equity" value={formatDemo(latest?.equity)} /><StatusRow label="Cash" value={formatDemo(status?.account.cash)} /><StatusRow label="Open positions" value={formatDemo(status?.account.open_positions_count)} /><StatusRow label="Pending orders" value={formatDemo(status?.account.pending_orders_count)} /></dl></div>
-        <div><p className="eyebrow">Matsya health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Signals" value={formatDemo(latest?.eligible_signals)} /><StatusRow label="Orders placed" value={formatDemo(latest?.orders_placed)} /></dl></div>
+        <div><p className="eyebrow">Total account state</p><dl className="status-list"><StatusRow label="Strategies" value={formatDemo(summary?.strategy_count)} /><StatusRow label="Latest dates" value={summary?.latest_dates?.join(", ") || "-"} /><StatusRow label="Total cash" value={formatDemo(summary?.total_cash)} /><StatusRow label="Open positions" value={formatDemo(summary?.total_open_positions)} /><StatusRow label="Pending orders" value={formatDemo(summary?.total_pending_orders)} /><StatusRow label="Closed trades" value={formatDemo(summary?.total_closed_trades)} /></dl></div>
+        <div><p className="eyebrow">Latest signal flow</p><dl className="status-list"><StatusRow label="Signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Orders placed latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
       </div>
-      <DemoTable title="Pending Orders" rows={status?.pending_orders ?? []} columns={["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
-      <DemoTable title="Open Positions" rows={status?.open_positions ?? []} columns={["symbol", "entry_date", "shares", "entry_price", "stop_price", "target_price", "bars_held"]} />
-      <DemoTable title="Closed Trades" rows={status?.closed_trades ?? []} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct"]} />
-      <DemoTable title="Latest Signals" rows={status?.signals ?? []} columns={["symbol", "as_of_date", "confirmation_date", "down_market_capture_60d", "liquidity_cap"]} />
-      <div className="file-grid"><div className="panel-mini"><p className="eyebrow">Files</p><div className="file-title"><FileText size={18} /> {status?.output_dir ?? "No V8 output directory reported"}</div><dl className="status-list">{Object.entries(status?.files ?? {}).map(([name, meta]) => <StatusRow key={name} label={name.replaceAll("_", " ")} value={meta.exists ? `${formatDemo(meta.size_bytes)} bytes` : "missing"} />)}</dl></div></div>
+      {(status?.strategies ?? []).map((strategy) => (
+        <StrategyPanel key={strategy.strategy_id} strategy={strategy} />
+      ))}
+    </section>
+  );
+}
+
+function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
+  const latest = strategy.latest ?? null;
+  const healthOk = latest?.matsya_token_state === "active" && Number(latest?.symbols_loaded ?? 0) === 500 && Number(latest?.fetch_failures ?? 0) === 0;
+  const isSideways = strategy.strategy_id === "uptrend_sideways";
+  return (
+    <section className="panel-mini strategy-block">
+      <div className="panel-heading">
+        <div><p className="eyebrow">Individual strategy</p><h2>{strategy.name}</h2></div>
+        <div className={`pill ${healthOk ? "ok" : "warn"}`}>{healthOk ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}{healthOk ? "healthy" : "needs review"}</div>
+      </div>
+      <div className="demo-grid">
+        <div><p className="eyebrow">Paper account</p><dl className="status-list"><StatusRow label="Date" value={formatDemo(latest?.date)} /><StatusRow label="Broker" value={formatDemo(latest?.broker)} /><StatusRow label="Equity" value={formatDemo(latest?.equity)} /><StatusRow label="Cash" value={formatDemo(strategy.account.cash)} /><StatusRow label="Open positions" value={formatDemo(strategy.account.open_positions_count)} /><StatusRow label="Pending orders" value={formatDemo(strategy.account.pending_orders_count)} /></dl></div>
+        <div><p className="eyebrow">Run health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Signals" value={formatDemo(latest?.[strategy.signal_count_key])} /><StatusRow label="Orders placed" value={formatDemo(latest?.orders_placed)} /></dl></div>
+      </div>
+      <DemoTable title="Pending Orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
+      <DemoTable title="Open Positions" rows={strategy.open_positions} columns={isSideways ? ["symbol", "entry_date", "shares", "entry_price", "base_high", "base_low", "target_price", "bars_held"] : ["symbol", "entry_date", "shares", "entry_price", "stop_price", "target_price", "bars_held"]} />
+      <DemoTable title="Closed Trades" rows={strategy.closed_trades} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct"]} />
+      <DemoTable title="Latest Signals" rows={strategy.signals} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "target_price"] : ["symbol", "as_of_date", "confirmation_date", "down_market_capture_60d", "liquidity_cap"]} />
+      {isSideways ? <DemoTable title="Watch Candidates" rows={strategy.watch_candidates} columns={["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close"]} /> : null}
+      <DemoTable title="Daily Reports" rows={strategy.daily_reports} columns={isSideways ? ["date", "equity", "open_positions", "pending_orders", "watch_candidates", "breakout_signals", "orders_placed", "fetch_failures"] : ["date", "equity", "open_positions", "pending_orders", "eligible_signals", "orders_placed", "fetch_failures"]} />
+      <div className="file-grid"><div><p className="eyebrow">Files</p><div className="file-title"><FileText size={18} /> {strategy.output_dir}</div><dl className="status-list">{Object.entries(strategy.files ?? {}).map(([name, meta]) => <StatusRow key={name} label={name.replaceAll("_", " ")} value={meta.exists ? `${formatDemo(meta.size_bytes)} bytes` : "missing"} />)}</dl></div></div>
     </section>
   );
 }

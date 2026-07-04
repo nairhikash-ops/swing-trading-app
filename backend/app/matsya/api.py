@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.matsya.market_data import DEFAULT_LATEST_DAYS, DEFAULT_LIMIT, MAX_LATEST_DAYS, MAX_LIMIT, MatsyaMarketDataStore
+from app.matsya.paper_trading_report import PaperTradingReportService
 from app.matsya.settings import MatsyaSettings
 from app.matsya.token_service import MatsyaDhanTokenService
 from app.matsya.v8_demo_report import V8DemoReportService
@@ -276,3 +277,8 @@ async def market_data_validation() -> MatsyaMarketValidationResponse:
 @router.get("/demo/v8/status")
 async def demo_v8_status(limit: int = Query(default=50, ge=1, le=500)) -> dict:
     return V8DemoReportService().status(limit=limit)
+
+
+@router.get("/demo/paper-trading/status")
+async def demo_paper_trading_status(limit: int = Query(default=50, ge=1, le=500)) -> dict:
+    return PaperTradingReportService().combined_status(limit=limit)
