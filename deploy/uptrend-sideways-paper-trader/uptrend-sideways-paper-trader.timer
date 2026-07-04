@@ -1,0 +1,10 @@
+[Unit]
+Description=Run uptrend-sideways paper trader after Matsya daily ingestion
+
+[Timer]
+OnCalendar=Mon..Fri 19:20:00
+Persistent=true
+Unit=uptrend-sideways-paper-trader.service
+
+[Install]
+WantedBy=timers.target
