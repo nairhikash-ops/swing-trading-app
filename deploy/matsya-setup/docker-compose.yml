@@ -9,6 +9,7 @@ services:
       V8_DEMO_OUTPUT_DIR: /app/data/v8_demo_trader
     volumes:
       - ../../data/v8_demo_trader:/app/data/v8_demo_trader:ro
+      - ../../data/uptrend_sideways_paper_trader:/app/data/uptrend_sideways_paper_trader:ro
     ports:
       - "${MATSYA_BIND_HOST:-127.0.0.1}:${MATSYA_API_PORT:-8020}:8020"
     networks:
