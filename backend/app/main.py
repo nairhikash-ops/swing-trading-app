@@ -13,6 +13,7 @@ from app.ml_dataset import MLDatasetService
 from app.ml_foundation import MLFoundationService, MLFoundationStore
 from app.ml_samples import MLSampleService, MLSampleStore
 from app.move_events import MoveEventService
+from app.paper_trading_report import PaperTradingReportService
 from app.range_movers import RangeMoverService
 from app.regime import StockRegimeService
 from app.schemas import (
@@ -102,6 +103,10 @@ def build_ml_dataset_service(settings: Settings) -> MLDatasetService:
     return MLDatasetService(settings=settings, token_store=token_store)
 
 
+def build_paper_trading_report_service() -> PaperTradingReportService:
+    return PaperTradingReportService()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -116,6 +121,7 @@ async def lifespan(app: FastAPI):
     ml_service = build_ml_service(settings)
     ml_dataset_service = build_ml_dataset_service(settings)
     ml_sample_service = build_ml_sample_service(settings)
+    paper_trading_report_service = build_paper_trading_report_service()
     renewal_scheduler = RenewalScheduler(settings, token_service)
     data_maintenance_scheduler = DataMaintenanceScheduler(
         settings,
@@ -134,6 +140,7 @@ async def lifespan(app: FastAPI):
     app.state.ml_service = ml_service
     app.state.ml_dataset_service = ml_dataset_service
     app.state.ml_sample_service = ml_sample_service
+    app.state.paper_trading_report_service = paper_trading_report_service
     renewal_scheduler.start()
     data_maintenance_scheduler.start()
     try:
@@ -198,6 +205,10 @@ def get_ml_dataset_service_dep() -> MLDatasetService:
     return app.state.ml_dataset_service
 
 
+def get_paper_trading_report_service_dep() -> PaperTradingReportService:
+    return app.state.paper_trading_report_service
+
+
 def get_settings_dep() -> Settings:
     return app.state.settings
 
@@ -205,6 +216,22 @@ def get_settings_dep() -> Settings:
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok", app="swing-trading-app")
+
+
+@app.get("/api/demo/v8/status")
+async def v8_demo_status(
+    limit: int = Query(default=50, ge=1, le=500),
+    service: PaperTradingReportService = Depends(get_paper_trading_report_service_dep),
+) -> dict:
+    return service.combined_status(limit=limit)["strategies"][0]
+
+
+@app.get("/api/demo/paper-trading/status")
+async def paper_trading_status(
+    limit: int = Query(default=50, ge=1, le=500),
+    service: PaperTradingReportService = Depends(get_paper_trading_report_service_dep),
+) -> dict:
+    return service.combined_status(limit=limit)
 
 
 @app.get("/api/ml/status", response_model=MLStatusResponse)
