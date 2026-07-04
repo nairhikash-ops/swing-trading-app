@@ -62,10 +62,26 @@ def strategy_status(
     state = read_json(output_dir / "paper_broker_state.json", default={})
     fetch_failures = read_json(output_dir / "fetch_failures.json", default={})
 
-    pending_orders = [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("pending_orders") or [])]
-    open_positions = [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("open_positions") or [])]
-    closed_trades = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_trade_ledger.csv", limit)]
-    order_ledger = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_order_ledger.csv", limit)]
+    pending_orders = tag_rows(
+        [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("pending_orders") or [])],
+        strategy_id,
+        name,
+    )
+    open_positions = tag_rows(
+        [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("open_positions") or [])],
+        strategy_id,
+        name,
+    )
+    closed_trades = tag_rows(
+        [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_trade_ledger.csv", limit)],
+        strategy_id,
+        name,
+    )
+    order_ledger = tag_rows(
+        [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_order_ledger.csv", limit)],
+        strategy_id,
+        name,
+    )
     signals = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "signals.csv", limit)]
     watch_candidates = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "watch_candidates.csv", limit)] if include_watch else []
 
@@ -115,6 +131,13 @@ def aggregate_summary(strategies: list[dict[str, Any]]) -> dict[str, Any]:
         "total_watch_candidates_latest": sum(as_float((s.get("latest") or {}).get("watch_candidates")) for s in strategies),
         "total_orders_placed_latest": sum(as_float((s.get("latest") or {}).get("orders_placed")) for s in strategies),
     }
+
+
+def tag_rows(rows: list[dict[str, Any]], strategy_id: str, strategy_name: str) -> list[dict[str, Any]]:
+    for row in rows:
+        row.setdefault("strategy", strategy_name)
+        row.setdefault("strategy_id", strategy_id)
+    return rows
 
 
 def read_json(path: Path, default: Any) -> Any:
