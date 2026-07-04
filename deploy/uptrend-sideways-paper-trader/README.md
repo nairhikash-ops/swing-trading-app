@@ -23,10 +23,7 @@ paper orders only when the sideways range breaks upward first.
 
 ```bash
 cd /home/hacker/apps/swing-trading-app
-python backend/app/scripts/uptrend_sideways_paper_trader.py \
-  --base-url http://100.76.218.124:8020 \
-  --output-dir /home/hacker/apps/uptrend-sideways-paper-trader/state \
-  --strict-health
+docker compose -f deploy/matsya-setup/docker-compose.yml --profile manual run --rm uptrend-sideways-paper-trader
 ```
 
 ## Safety Boundary

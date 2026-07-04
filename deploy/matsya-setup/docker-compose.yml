@@ -46,6 +46,24 @@ services:
       - manual
     restart: "no"
 
+  uptrend-sideways-paper-trader:
+    build:
+      context: ../../backend
+    command:
+      - python
+      - scripts/run_uptrend_sideways_paper_trader_once.py
+    env_file:
+      - .env
+    volumes:
+      - ../../data/uptrend_sideways_paper_trader:/app/data/uptrend_sideways_paper_trader
+    networks:
+      - matsya-db
+    depends_on:
+      - matsya-api
+    profiles:
+      - manual
+    restart: "no"
+
   matsya-renewal-worker:
     build:
       context: ../../backend
