@@ -228,10 +228,22 @@ class RealBrokerAdapterDisabled:
 def append_csv(file_path: Path, row_dict: dict) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     row = pd.DataFrame([row_dict])
-    if file_path.exists():
-        row.to_csv(file_path, mode="a", header=False, index=False)
-    else:
+    if not file_path.exists():
         row.to_csv(file_path, index=False)
+        return
+
+    with file_path.open("r", encoding="utf-8", newline="") as handle:
+        existing_header = handle.readline().strip().split(",")
+    row_columns = list(row.columns)
+    if existing_header == row_columns:
+        row.to_csv(file_path, mode="a", header=False, index=False)
+        return
+
+    existing = pd.read_csv(file_path)
+    columns = existing_header + [column for column in row_columns if column not in existing_header]
+    existing = existing.reindex(columns=columns)
+    row = row.reindex(columns=columns)
+    pd.concat([existing, row], ignore_index=True).to_csv(file_path, index=False)
 
 
 def health_gate(status: dict, symbols_loaded: int, fetch_failures: int, strict: bool) -> list[str]:
