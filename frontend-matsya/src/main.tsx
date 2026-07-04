@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, CheckCircle2, Database, FileText, RefreshCcw, Save, Shield, Wifi } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, RefreshCcw, Save, Shield, Wifi } from "lucide-react";
 import "./styles.css";
 
 type TokenState = "missing" | "active" | "expiring_soon" | "expired" | "renew_failed" | "config_error" | "unknown";
@@ -210,7 +210,7 @@ function DemoTraderPanel({ status, busy, reload }: { status: PaperTradingStatus 
       </div>
       <div className="demo-grid">
         <div><p className="eyebrow">Total account state</p><dl className="status-list"><StatusRow label="Strategies" value={formatDemo(summary?.strategy_count)} /><StatusRow label="Latest dates" value={summary?.latest_dates?.join(", ") || "-"} /><StatusRow label="Total cash" value={formatDemo(summary?.total_cash)} /><StatusRow label="Open positions" value={formatDemo(summary?.total_open_positions)} /><StatusRow label="Pending orders" value={formatDemo(summary?.total_pending_orders)} /><StatusRow label="Closed trades" value={formatDemo(summary?.total_closed_trades)} /></dl></div>
-        <div><p className="eyebrow">Forward validation</p><dl className="status-list"><StatusRow label="Mode" value={status?.mode === "forward_paper_walk_forward" ? "Walk-forward paper only" : formatDemo(status?.mode)} /><StatusRow label="Leakage guard" value={status?.leakage_guard ?? "-"} /><StatusRow label="Watch candidates latest" value={formatDemo(summary?.total_watch_candidates_latest)} /><StatusRow label="Final signals latest" value={formatDemo(summary?.total_signals_latest)} /><StatusRow label="Pending orders created latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
+        <div><p className="eyebrow">Forward validation</p><dl className="status-list"><StatusRow label="Mode" value={status?.mode === "forward_paper_walk_forward" ? "Walk-forward paper only" : formatDemo(status?.mode)} /><StatusRow label="Leakage guard" value={status?.leakage_guard ?? "-"} /><StatusRow label="Pending orders created latest" value={formatDemo(summary?.total_orders_placed_latest)} /></dl></div>
       </div>
       {(status?.strategies ?? []).map((strategy) => (
         <StrategyPanel key={strategy.strategy_id} strategy={strategy} />
@@ -231,15 +231,12 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
       </div>
       <div className="demo-grid">
         <div><p className="eyebrow">Paper account</p><dl className="status-list"><StatusRow label="Date" value={formatDemo(latest?.date)} /><StatusRow label="Broker" value={formatDemo(latest?.broker)} /><StatusRow label="Equity" value={formatDemo(latest?.equity)} /><StatusRow label="Cash" value={formatDemo(strategy.account.cash)} /><StatusRow label="Open positions" value={formatDemo(strategy.account.open_positions_count)} /><StatusRow label="Pending orders" value={formatDemo(strategy.account.pending_orders_count)} /></dl></div>
-        <div><p className="eyebrow">Run health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Watch candidates" value={formatDemo(latest?.watch_candidates)} /><StatusRow label="Final signals" value={formatDemo(latest?.[strategy.signal_count_key])} /><StatusRow label="Pending orders created" value={formatDemo(latest?.orders_placed)} /></dl></div>
+        <div><p className="eyebrow">Run health</p><dl className="status-list"><StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} /><StatusRow label="Latest candle" value={formatDemo(latest?.matsya_latest_candle_date)} /><StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} /><StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} /><StatusRow label="Pending orders created" value={formatDemo(latest?.orders_placed)} /></dl></div>
       </div>
       <DemoTable title="Pending Orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
+      <DemoTable title="Executed Orders" rows={strategy.order_ledger} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} />
       <DemoTable title="Open Positions" rows={strategy.open_positions} columns={isSideways ? ["symbol", "entry_date", "shares", "entry_price", "base_high", "base_low", "target_price", "bars_held"] : ["symbol", "entry_date", "shares", "entry_price", "stop_price", "target_price", "bars_held"]} />
-      <DemoTable title="Closed Trades" rows={strategy.closed_trades} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct", "realized_move_pct"]} />
-      <DemoTable title="Latest Signals" rows={strategy.signals} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "move_from_base_high_pct", "move_from_base_low_pct", "target_price"] : ["symbol", "as_of_date", "confirmation_date", "down_market_capture_60d", "liquidity_cap"]} />
-      <DemoTable title="Watch Candidates" rows={strategy.watch_candidates} columns={isSideways ? ["symbol", "as_of_date", "status", "base_duration", "base_range_max", "base_high", "base_low", "latest_close", "move_from_base_high_pct", "move_from_base_low_pct"] : ["symbol", "as_of_date", "watch_reason", "crash_date", "days_since_crash", "reaction_high_price", "higher_low_price", "latest_close", "move_from_reaction_high_pct", "move_from_crash_low_pct", "move_from_higher_low_pct"]} />
-      <DemoTable title="Daily Reports" rows={strategy.daily_reports} columns={isSideways ? ["date", "equity", "open_positions", "pending_orders", "watch_candidates", "breakout_signals", "orders_placed", "fetch_failures"] : ["date", "equity", "open_positions", "pending_orders", "watch_candidates", "eligible_signals", "orders_placed", "fetch_failures"]} />
-      <div className="file-grid"><div><p className="eyebrow">Files</p><div className="file-title"><FileText size={18} /> {strategy.output_dir}</div><dl className="status-list">{Object.entries(strategy.files ?? {}).map(([name, meta]) => <StatusRow key={name} label={name.replaceAll("_", " ")} value={meta.exists ? `${formatDemo(meta.size_bytes)} bytes` : "missing"} />)}</dl></div></div>
+      <DemoTable title="Closed Orders" rows={strategy.closed_trades} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct", "realized_move_pct"]} />
     </section>
   );
 }
