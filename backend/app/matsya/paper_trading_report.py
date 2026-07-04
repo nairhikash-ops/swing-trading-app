@@ -30,6 +30,7 @@ class PaperTradingReportService:
                 output_dir=self.v8_output_dir,
                 limit=limit,
                 signal_count_key="eligible_signals",
+                include_watch=True,
             ),
             strategy_status(
                 strategy_id="uptrend_sideways",
