@@ -196,6 +196,10 @@ h3 { font-size: 1rem; }
 .health-dot { border-radius: 999px; padding: 5px 9px; font-size: 0.69rem; font-weight: 800; }
 .health-dot.ok { color: #096143; background: #dbf1e6; }
 .health-dot.warn { color: #785600; background: #f8e9be; }
+.continuity-banner { display: flex; gap: 11px; align-items: flex-start; margin: 0 0 18px; padding: 13px 15px; border: 1px solid #e0b94e; border-radius: 11px; color: #6f4d00; background: #fff4cf; }
+.continuity-banner svg { flex: 0 0 auto; margin-top: 1px; }
+.continuity-banner div { display: grid; gap: 3px; }
+.continuity-banner span { font-size: 0.82rem; line-height: 1.4; }
 
 .strategy-detail { display: grid; gap: 18px; }
 .schedule-strip { display: flex; flex-wrap: wrap; gap: 10px 22px; border: 1px solid #e0e7e3; border-radius: 11px; padding: 12px 14px; color: #617068; background: #f8faf9; font-size: 0.8rem; }

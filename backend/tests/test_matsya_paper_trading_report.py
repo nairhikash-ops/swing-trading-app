@@ -124,3 +124,33 @@ def test_scan_schema_upgrade_preserves_legacy_target_and_movement_fields(tmp_pat
 
 def test_max_drawdown_uses_peak_to_trough_decline() -> None:
     assert max_drawdown([100, 110, 99, 120]) == pytest.approx(-0.1)
+
+
+def test_report_exposes_continuity_and_recovers_legacy_trade_signal_date(tmp_path: Path) -> None:
+    v8_dir = tmp_path / "v8"
+    sideways_dir = tmp_path / "sideways"
+    for directory in (v8_dir, sideways_dir):
+        directory.mkdir()
+        write_csv(directory / "daily_report.csv", [{"date": "2026-07-17", "equity": 100_000}])
+        (directory / "paper_broker_state.json").write_text(
+            json.dumps({"cash": 100_000, "pending_orders": [], "open_positions": []}), encoding="utf-8"
+        )
+        (directory / "continuity_status.json").write_text(
+            json.dumps({"status": "healthy", "forward_valid": True, "missing_dates": []}), encoding="utf-8"
+        )
+
+    write_csv(
+        sideways_dir / "paper_order_ledger.csv",
+        [{"symbol": "AEGISVOPAK", "signal_date": "2026-07-03", "target_allocation": 20_000}],
+    )
+    write_csv(
+        sideways_dir / "paper_trade_ledger.csv",
+        [{"symbol": "AEGISVOPAK", "entry_date": "2026-07-06", "exit_date": "2026-07-06", "pnl_value": 991.35}],
+    )
+
+    status = PaperTradingReportService(v8_dir, sideways_dir).combined_status(limit=100)
+    sideways = next(item for item in status["strategies"] if item["strategy_id"] == "uptrend_sideways")
+
+    assert sideways["continuity"]["status"] == "healthy"
+    assert sideways["continuity"]["forward_valid"] is True
+    assert sideways["closed_trades"][0]["signal_date"] == "2026-07-03"

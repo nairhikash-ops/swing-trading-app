@@ -184,6 +184,7 @@ class PaperBroker:
             self.state["cash"] += int(pos["shares"]) * effective_exit
             trade = {
                 "symbol": pos["symbol"],
+                "signal_date": pos.get("signal_date"),
                 "entry_date": pos["entry_date"],
                 "exit_date": as_of_date,
                 "reason": reason,

@@ -118,6 +118,12 @@ class MatsyaOhlcvResponse(BaseModel):
     candles: list[MatsyaOhlcvCandleResponse]
 
 
+class MatsyaTradingDatesResponse(BaseModel):
+    from_date: str
+    to_date: str
+    trading_dates: list[str]
+
+
 class MatsyaMarketValidationResponse(BaseModel):
     total_rows: int
     symbols_with_candles: int
@@ -263,6 +269,21 @@ async def market_data_latest_ohlcv(
         return MatsyaOhlcvResponse(**result)
     except HTTPException:
         raise
+    except Exception as exc:
+        raise market_data_error(exc) from exc
+
+
+@router.get("/market-data/trading-dates", response_model=MatsyaTradingDatesResponse)
+async def market_data_trading_dates(
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+) -> MatsyaTradingDatesResponse:
+    if from_date > to_date:
+        raise HTTPException(status_code=400, detail="from must be on or before to.")
+    try:
+        return MatsyaTradingDatesResponse(
+            **build_market_data_store().trading_dates(from_date=from_date, to_date=to_date)
+        )
     except Exception as exc:
         raise market_data_error(exc) from exc
 

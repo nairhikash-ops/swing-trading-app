@@ -83,6 +83,17 @@ type IntradayStatus = {
   recent_events?: DemoRow[];
 };
 
+type ContinuityStatus = {
+  status?: "healthy" | "invalid_gap" | "invalid_duplicate" | "reconstructed" | "reconstruction_failed" | "unknown" | "new_epoch" | "no_market_dates";
+  forward_valid?: boolean;
+  coverage_start?: string | null;
+  coverage_end?: string | null;
+  missing_dates?: string[];
+  replayed_dates?: string[];
+  duplicate_dates?: string[];
+  message?: string;
+};
+
 type PaperStrategyStatus = {
   strategy_id: string;
   name: string;
@@ -102,6 +113,7 @@ type PaperStrategyStatus = {
   fetch_failures: { as_of_date?: string; symbols_requested?: number; symbols_loaded?: number; fetch_failures?: Record<string, string> };
   files: Record<string, { exists: boolean; path: string; size_bytes: number; updated_at?: number | null }>;
   intraday: IntradayStatus;
+  continuity: ContinuityStatus;
 };
 
 type PaperTradingStatus = {
@@ -306,6 +318,7 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
   const allOpenPositions = strategies.flatMap((strategy) => strategy.open_positions);
   const allClosedTrades = strategies.flatMap((strategy) => strategy.closed_trades);
   const portfolioReports = aggregatePortfolioReports(strategies);
+  const continuityProblems = strategies.filter((strategy) => strategy.continuity?.status !== "healthy" || strategy.continuity?.forward_valid !== true);
 
   return (
     <section className="dashboard">
@@ -328,6 +341,13 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
         ))}
       </nav>
 
+      {continuityProblems.length > 0 ? (
+        <div className="continuity-banner" role="alert">
+          <AlertTriangle size={19} />
+          <div><strong>Forward-validation continuity is not clean.</strong><span>{continuityProblems.map((strategy) => `${strategy.name}: ${continuityLabel(strategy)}`).join(" · ")}</span></div>
+        </div>
+      ) : null}
+
       {activeView === "overview" ? (
         <>
           <div className="metric-grid portfolio-metrics">
@@ -347,7 +367,7 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
               <p className="eyebrow">Validation contract</p>
               <h3>What these numbers mean</h3>
               <div className="validation-list">
-                <div><CheckCircle2 size={17} /><span>Walk-forward paper execution only</span></div>
+                <div>{continuityProblems.length === 0 ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}<span>{continuityProblems.length === 0 ? "Walk-forward paper execution continuity verified" : "One or more ledgers are not valid forward evidence"}</span></div>
                 <div><CheckCircle2 size={17} /><span>{status?.leakage_guard ?? "Date-locked candles"}</span></div>
                 <div><CheckCircle2 size={17} /><span>{status?.intraday?.enabled ? "Entries use the first valid next-session live price" : "Entries fill at the next session open"}</span></div>
               </div>
@@ -369,7 +389,7 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
           <DemoTable
             title="Recently closed trades"
             rows={allClosedTrades.slice(-20).reverse()}
-            columns={["strategy", "symbol", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct", "bars_held"]}
+            columns={["strategy", "symbol", "signal_date", "entry_date", "exit_date", "reason", "shares", "pnl_value", "pnl_pct", "bars_held"]}
             emptyMessage="No completed paper trades yet."
           />
         </>
@@ -383,7 +403,7 @@ function StrategySummary({ strategy, onOpen }: { strategy: PaperStrategyStatus; 
   const healthy = strategyHealthOk(strategy);
   return (
     <button className="strategy-summary" onClick={onOpen}>
-      <span className="strategy-summary-top"><strong>{strategy.name}</strong><span className={`health-dot ${healthy ? "ok" : "warn"}`}>{healthy ? "Run healthy" : "Needs review"}</span></span>
+      <span className="strategy-summary-top"><strong>{strategy.name}</strong><span className={`health-dot ${healthy ? "ok" : "warn"}`}>{strategyStatusLabel(strategy)}</span></span>
       <span className="strategy-summary-value">{formatCurrency(account.equity)}</span>
       <span className={`strategy-summary-return ${toneForNumber(account.total_pnl)}`}>{formatSignedCurrency(account.total_pnl)} · {formatSignedPercent(account.return_pct)}</span>
       <span className="strategy-summary-meta">{account.open_positions_count} open · {strategy.signals.length} signals loaded · {strategy.watch_candidates.length} watches loaded</span>
@@ -410,7 +430,7 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
     <section className="strategy-detail">
       <div className="strategy-title-row">
         <div><p className="eyebrow">Individual paper ledger</p><h2>{strategy.name}</h2></div>
-        <div className={`pill ${healthy ? "ok" : "warn"}`}>{healthy ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}{healthy ? "Run healthy" : "Needs review"}</div>
+        <div className={`pill ${healthy ? "ok" : "warn"}`}>{healthy ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}{strategyStatusLabel(strategy)}</div>
       </div>
 
       <div className="schedule-strip">
@@ -437,6 +457,9 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
           <h3>{healthy ? "Latest run completed cleanly" : "Latest run needs attention"}</h3>
           <dl className="status-list compact">
             <StatusRow label="Report date" value={formatDemo(latest?.date)} />
+            <StatusRow label="Continuity" value={continuityLabel(strategy)} />
+            <StatusRow label="Coverage" value={`${strategy.continuity?.coverage_start ?? "-"} to ${strategy.continuity?.coverage_end ?? "-"}`} />
+            <StatusRow label="Missing sessions" value={(strategy.continuity?.missing_dates ?? []).join(", ") || "None"} />
             <StatusRow label="Token" value={formatDemo(latest?.matsya_token_state)} />
             <StatusRow label="Symbols loaded" value={formatDemo(latest?.symbols_loaded)} />
             <StatusRow label="Fetch failures" value={formatDemo(latest?.fetch_failures)} />
@@ -451,7 +474,7 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
       <DemoTable title="Watch candidates" description="Research watchlist only—not orders and not trade recommendations." rows={strategy.watch_candidates.slice(-30).reverse()} columns={watchColumns} emptyMessage="No watch candidates in the loaded window." />
       <DemoTable title="Pending entry orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} emptyMessage="No orders waiting for the next session open." />
       <DemoTable title="Order history" rows={strategy.order_ledger.slice(-30).reverse()} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} emptyMessage="No paper entry orders have been created." />
-      <DemoTable title="Closed trades" rows={strategy.closed_trades.slice(-30).reverse()} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "entry_price", "exit_price", "pnl_value", "pnl_pct", "bars_held"]} emptyMessage="No completed paper trades yet." />
+      <DemoTable title="Closed trades" rows={strategy.closed_trades.slice(-30).reverse()} columns={["symbol", "signal_date", "entry_date", "exit_date", "reason", "shares", "entry_price", "exit_price", "pnl_value", "pnl_pct", "bars_held"]} emptyMessage="No completed paper trades yet." />
     </section>
   );
 }
@@ -628,20 +651,45 @@ function enrichPosition(row: DemoRow, currentPrice?: number): DemoRow {
 }
 
 function aggregatePortfolioReports(strategies: PaperStrategyStatus[]): DemoRow[] {
-  const dates = new Map<string, number>();
+  const dates = new Set<string>();
   for (const strategy of strategies) {
     for (const report of strategy.daily_reports) {
       const date = String(report.date || "");
-      const equity = Number(report.equity || 0);
-      if (date && equity > 0) dates.set(date, (dates.get(date) || 0) + equity);
+      if (date) dates.add(date);
     }
   }
-  return Array.from(dates, ([date, equity]) => ({ date, equity })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return Array.from(dates).sort().map((date) => {
+    const equity = strategies.reduce((total, strategy) => {
+      let value = Number(strategy.account.starting_equity || 0);
+      const reports = [...strategy.daily_reports].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+      for (const report of reports) {
+        if (String(report.date || "") > date) break;
+        value = Number(report.equity || value);
+      }
+      return total + value;
+    }, 0);
+    return { date, equity };
+  });
 }
 
 function strategyHealthOk(strategy: PaperStrategyStatus): boolean {
   const latest = strategy.latest;
-  return latest?.matsya_token_state === "active" && Number(latest?.symbols_loaded ?? 0) === 500 && Number(latest?.fetch_failures ?? 0) === 0;
+  return strategy.continuity?.status === "healthy" && strategy.continuity?.forward_valid === true
+    && latest?.matsya_token_state === "active" && Number(latest?.symbols_loaded ?? 0) === 500 && Number(latest?.fetch_failures ?? 0) === 0;
+}
+
+function continuityLabel(strategy: PaperStrategyStatus): string {
+  const status = strategy.continuity?.status ?? "unknown";
+  if (status === "invalid_gap") return `Invalid gap (${strategy.continuity?.missing_dates?.length ?? 0})`;
+  if (status === "invalid_duplicate") return `Duplicate dates (${strategy.continuity?.duplicate_dates?.length ?? 0})`;
+  if (status === "reconstructed") return "Reconstructed history";
+  if (status === "healthy") return "Run healthy";
+  return "Continuity unknown";
+}
+
+function strategyStatusLabel(strategy: PaperStrategyStatus): string {
+  if (strategy.continuity?.status !== "healthy" || strategy.continuity?.forward_valid !== true) return continuityLabel(strategy);
+  return strategyHealthOk(strategy) ? "Run healthy" : "Latest run needs review";
 }
 
 function shortStrategyName(strategy: PaperStrategyStatus): string {

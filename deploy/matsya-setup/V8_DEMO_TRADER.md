@@ -18,6 +18,11 @@ python scripts/run_v8_demo_trader_once.py
 
 The wrapper reads Matsya's latest candle date from `http://matsya-api:8020/api/matsya/market-data/status` and skips if that date is already present in `daily_report.csv`. This prevents duplicate paper reports or duplicate pending orders when the job is run more than once for the same candle date.
 
+The wrapper also compares `daily_report.csv` with Matsya's stored trading-date
+sequence. Interior gaps fail closed and appear as invalid on the dashboard.
+Trailing recovery is chronological and permanently labeled reconstructed. See
+`docs/matsya_paper_continuity.md` for the recovery contract.
+
 ## Output
 
 The paper runner writes to the host directory:

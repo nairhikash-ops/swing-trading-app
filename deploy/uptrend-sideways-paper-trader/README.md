@@ -2,6 +2,10 @@
 
 Server-side paper runner for the uptrend-sideways branch research setup.
 
+The scheduled wrapper enforces the continuity contract documented in
+`docs/matsya_paper_continuity.md`: it uses stored Matsya sessions, refuses
+out-of-order gap repair, and exposes continuity health to the dashboard.
+
 This is intentionally paper-only. It reads Matsya OHLCV through the existing
 market-data API, records current uptrend-sideways watch candidates, and places
 paper orders only when the sideways range breaks upward first.

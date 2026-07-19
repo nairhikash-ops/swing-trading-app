@@ -216,6 +216,27 @@ class MatsyaMarketDataStore:
             "candles": [_candle(row) for row in rows],
         }
 
+    def trading_dates(self, *, from_date: date, to_date: date) -> dict[str, Any]:
+        with self._connect() as conn:
+            rows = _all(
+                conn.execute(
+                    """
+                    SELECT DISTINCT trading_date
+                    FROM matsya.ohlcv_daily
+                    WHERE provider_code = 'dhan'
+                      AND trading_date >= %s
+                      AND trading_date <= %s
+                    ORDER BY trading_date ASC
+                    """,
+                    (from_date, to_date),
+                )
+            )
+        return {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
+            "trading_dates": [_date_text(row["trading_date"]) for row in rows],
+        }
+
     def validation(self) -> dict[str, Any]:
         expected_latest = self.expected_latest_date()
         recent_dates = recent_trading_days(

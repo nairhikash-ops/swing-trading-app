@@ -76,6 +76,15 @@ def strategy_status(
     latest = coerce_report(daily_rows[-1] if daily_rows else None)
     state = read_json(output_dir / "paper_broker_state.json", default={})
     fetch_failures = read_json(output_dir / "fetch_failures.json", default={})
+    continuity = read_json(
+        output_dir / "continuity_status.json",
+        default={
+            "status": "unknown",
+            "forward_valid": False,
+            "missing_dates": [],
+            "message": "Continuity has not been checked by the current runner.",
+        },
+    )
 
     pending_orders = tag_rows(
         [derive_movement_fields(coerce_numbers(row)) for row in list(state.get("pending_orders") or [])],
@@ -87,18 +96,22 @@ def strategy_status(
         strategy_id,
         name,
     )
-    closed_trade_rows_all = read_csv_rows(output_dir / "paper_trade_ledger.csv")
+    order_ledger_all = tag_rows(
+        [derive_movement_fields(coerce_numbers(row)) for row in read_csv_rows(output_dir / "paper_order_ledger.csv")],
+        strategy_id,
+        name,
+    )
+    order_ledger = tail_rows(order_ledger_all, limit)
+    closed_trade_rows_all = attach_missing_signal_dates(
+        read_csv_rows(output_dir / "paper_trade_ledger.csv"),
+        order_ledger_all,
+    )
     closed_trades_all = tag_rows(
         [derive_movement_fields(coerce_numbers(row)) for row in closed_trade_rows_all],
         strategy_id,
         name,
     )
     closed_trades = tail_rows(closed_trades_all, limit)
-    order_ledger = tag_rows(
-        [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "paper_order_ledger.csv", limit)],
-        strategy_id,
-        name,
-    )
     signals = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "signals.csv", limit)]
     watch_candidates = [derive_movement_fields(coerce_numbers(row)) for row in read_csv_tail(output_dir / "watch_candidates.csv", limit)] if include_watch else []
 
@@ -125,6 +138,7 @@ def strategy_status(
         "watch_candidates": watch_candidates,
         "daily_reports": [coerce_report(row) for row in daily_rows],
         "fetch_failures": fetch_failures,
+        "continuity": continuity,
         "signal_count_key": signal_count_key,
         "schedule": STRATEGY_SCHEDULES.get(strategy_id, "-"),
         "last_run_at": timestamp_text(daily_meta.get("updated_at")),
@@ -137,6 +151,7 @@ def strategy_status(
             "paper_order_ledger": file_meta(output_dir / "paper_order_ledger.csv"),
             "signals": file_meta(output_dir / "signals.csv"),
             "watch_candidates": file_meta(output_dir / "watch_candidates.csv"),
+            "continuity_status": file_meta(output_dir / "continuity_status.json"),
         },
     }
 
@@ -270,6 +285,35 @@ def tag_rows(rows: list[dict[str, Any]], strategy_id: str, strategy_name: str) -
         row.setdefault("strategy", strategy_name)
         row.setdefault("strategy_id", strategy_id)
     return rows
+
+
+def attach_missing_signal_dates(
+    trades: list[dict[str, Any]],
+    orders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_symbol: dict[str, list[str]] = {}
+    for order in orders:
+        symbol = str(order.get("symbol") or "")
+        signal_date = str(order.get("signal_date") or "")
+        if symbol and signal_date:
+            by_symbol.setdefault(symbol, []).append(signal_date)
+    for dates in by_symbol.values():
+        dates.sort()
+
+    enriched = []
+    for trade in trades:
+        row = dict(trade)
+        if not row.get("signal_date"):
+            entry_date = str(row.get("entry_date") or "")
+            candidates = [
+                value
+                for value in by_symbol.get(str(row.get("symbol") or ""), [])
+                if value <= entry_date
+            ]
+            if candidates:
+                row["signal_date"] = candidates[-1]
+        enriched.append(row)
+    return enriched
 
 
 def read_json(path: Path, default: Any) -> Any:

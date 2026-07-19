@@ -21,6 +21,7 @@ class FakeMarketDataStore:
     def __init__(self) -> None:
         self.ohlcv_calls: list[dict[str, object]] = []
         self.latest_calls: list[dict[str, object]] = []
+        self.trading_date_calls: list[dict[str, date]] = []
 
     def status(self) -> dict[str, object]:
         return {
@@ -120,6 +121,14 @@ class FakeMarketDataStore:
             ],
         }
 
+    def trading_dates(self, *, from_date: date, to_date: date) -> dict[str, object]:
+        self.trading_date_calls.append({"from_date": from_date, "to_date": to_date})
+        return {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
+            "trading_dates": ["2026-06-19", "2026-06-22", "2026-06-23"],
+        }
+
     def validation(self) -> dict[str, object]:
         return {
             "total_rows": 554444,
@@ -153,6 +162,7 @@ def test_market_data_routes_are_get_only_and_read_only() -> None:
     assert '@router.get("/market-data/symbols"' in api
     assert '@router.get("/market-data/ohlcv"' in api
     assert '@router.get("/market-data/ohlcv/latest"' in api
+    assert '@router.get("/market-data/trading-dates"' in api
     assert '@router.get("/market-data/validation"' in api
     assert '@router.post("/market-data' not in api
     assert '@router.put("/market-data' not in api
@@ -226,6 +236,19 @@ def test_market_data_latest_caps_days_and_returns_ascending_candles() -> None:
     assert response.status_code == 200
     assert response.json()["days"] == 2000
     assert fake.latest_calls[0]["symbol"] == "RELIANCE"
+
+
+def test_market_data_trading_dates_returns_stored_sessions_and_validates_range() -> None:
+    fake = FakeMarketDataStore()
+    client = make_client(fake)
+
+    response = client.get("/api/matsya/market-data/trading-dates?from=2026-06-19&to=2026-06-23")
+    reversed_range = client.get("/api/matsya/market-data/trading-dates?from=2026-06-23&to=2026-06-19")
+
+    assert response.status_code == 200
+    assert response.json()["trading_dates"] == ["2026-06-19", "2026-06-22", "2026-06-23"]
+    assert fake.trading_date_calls == [{"from_date": date(2026, 6, 19), "to_date": date(2026, 6, 23)}]
+    assert reversed_range.status_code == 400
 
 
 def test_market_data_validation_is_safe_summary() -> None:
