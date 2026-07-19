@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,26 @@ UPTREND_RETURN_MIN = 0.10
 BREAKOUT_BUFFER = 1.005
 MAX_SLOTS = 5
 MAX_HOLDING_BARS = 40
+
+UPTREND_SCAN_COLUMNS = [
+    "symbol",
+    "as_of_date",
+    "status",
+    "base_duration",
+    "base_range_max",
+    "base_start_date",
+    "base_end_date",
+    "base_high",
+    "base_low",
+    "base_range_pct",
+    "pre_structure_return_60d",
+    "latest_close",
+    "latest_high",
+    "latest_low",
+    "move_from_base_high_pct",
+    "move_from_base_low_pct",
+    "target_price",
+]
 
 
 @dataclass(frozen=True)
@@ -257,6 +278,46 @@ def append_csv(file_path: Path, row_dict: dict) -> None:
         row.to_csv(file_path, index=False)
 
 
+def normalize_legacy_scan_row(row: dict[str | None, object]) -> dict[str, object]:
+    normalized = {str(key): value for key, value in row.items() if key is not None}
+    extras = row.get(None)
+    if (
+        isinstance(extras, list)
+        and len(extras) == 2
+        and "target_price" in normalized
+        and "move_from_base_high_pct" not in normalized
+    ):
+        normalized["move_from_base_high_pct"] = normalized.get("target_price")
+        normalized["move_from_base_low_pct"] = extras[0]
+        normalized["target_price"] = extras[1]
+    return normalized
+
+
+def ensure_scan_csv_schema(file_path: Path) -> None:
+    if not file_path.exists():
+        return
+    with file_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames == UPTREND_SCAN_COLUMNS:
+            return
+        rows = [normalize_legacy_scan_row(row) for row in reader]
+    temporary = file_path.with_suffix(f"{file_path.suffix}.schema-upgrade.tmp")
+    pd.DataFrame(rows, columns=UPTREND_SCAN_COLUMNS).to_csv(temporary, index=False)
+    temporary.replace(file_path)
+
+
+def append_scan_rows(file_path: Path, rows: list[dict]) -> None:
+    ensure_scan_csv_schema(file_path)
+    if not rows:
+        return
+    pd.DataFrame(rows, columns=UPTREND_SCAN_COLUMNS).to_csv(
+        file_path,
+        mode="a",
+        header=not file_path.exists(),
+        index=False,
+    )
+
+
 def health_gate(status: dict, symbols_loaded: int, fetch_failures: int, strict: bool) -> list[str]:
     errors = []
     if str(status.get("token_state", "")).lower() != "active":
@@ -392,20 +453,8 @@ def run(args: argparse.Namespace) -> None:
         if row["status"] == "upward_breakout":
             breakout_rows.append(row)
 
-    if watch_rows:
-        pd.DataFrame(watch_rows).to_csv(
-            output_dir / "watch_candidates.csv",
-            mode="a",
-            header=not (output_dir / "watch_candidates.csv").exists(),
-            index=False,
-        )
-    if breakout_rows:
-        pd.DataFrame(breakout_rows).to_csv(
-            output_dir / "signals.csv",
-            mode="a",
-            header=not (output_dir / "signals.csv").exists(),
-            index=False,
-        )
+    append_scan_rows(output_dir / "watch_candidates.csv", watch_rows)
+    append_scan_rows(output_dir / "signals.csv", breakout_rows)
 
     if args.broker != "paper":
         RealBrokerAdapterDisabled()
