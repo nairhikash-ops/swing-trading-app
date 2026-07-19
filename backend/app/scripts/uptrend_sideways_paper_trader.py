@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
+
+from app.matsya.paper_state import atomic_write_json, paper_state_lock, read_json
 
 from v7b_matsya_forward_paper_logger import (
     FRICTION_BASE,
@@ -93,6 +96,10 @@ class BrokerAdapter(Protocol):
         ...
 
 
+def _pending_key(row: dict) -> tuple[str, str]:
+    return str(row.get("symbol") or ""), str(row.get("signal_date") or "")
+
+
 class PaperBroker:
     def __init__(self, output_dir: Path, starting_equity: float) -> None:
         self.output_dir = output_dir
@@ -101,17 +108,27 @@ class PaperBroker:
         self.order_ledger_path = output_dir / "paper_order_ledger.csv"
         self.starting_equity = starting_equity
         self.state: dict = {}
+        self._loaded_pending_keys: set[tuple[str, str]] = set()
 
     def load(self) -> None:
         if self.state_path.exists():
             self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+            self._loaded_pending_keys = {_pending_key(row) for row in self.state.get("pending_orders", [])}
             return
         self.state = {"cash": float(self.starting_equity), "pending_orders": [], "open_positions": []}
 
     def save(self) -> None:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
-
+        with paper_state_lock(self.output_dir):
+            current = read_json(self.state_path, {})
+            if os.getenv("MATSYA_INTRADAY_PAPER_ENABLED", "false").lower() == "true" and current:
+                new_orders = [row for row in self.state.get("pending_orders", []) if _pending_key(row) not in self._loaded_pending_keys]
+                merged = dict(current)
+                existing = {_pending_key(row) for row in merged.get("pending_orders", [])}
+                merged["pending_orders"] = list(merged.get("pending_orders", [])) + [row for row in new_orders if _pending_key(row) not in existing]
+                self.state = merged
+            elif current.get("intraday"):
+                self.state["intraday"] = current["intraday"]
+            atomic_write_json(self.state_path, self.state)
     def slots_used(self) -> int:
         return len(self.state["pending_orders"]) + len(self.state["open_positions"])
 
@@ -460,8 +477,9 @@ def run(args: argparse.Namespace) -> None:
         RealBrokerAdapterDisabled()
     broker: BrokerAdapter = PaperBroker(output_dir, args.starting_equity)
     broker.load()
-    filled = [] if args.dry_run else broker.process_pending_entries(candles_by_symbol, as_of_date)
-    closed = [] if args.dry_run else broker.process_exits(candles_by_symbol, as_of_date)
+    intraday_enabled = os.getenv("MATSYA_INTRADAY_PAPER_ENABLED", "false").lower() == "true"
+    filled = [] if args.dry_run or intraday_enabled else broker.process_pending_entries(candles_by_symbol, as_of_date)
+    closed = [] if args.dry_run or intraday_enabled else broker.process_exits(candles_by_symbol, as_of_date)
     equity, open_value = broker.equity(candles_by_symbol, as_of_date)
 
     placed: list[str] = []

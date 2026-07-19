@@ -156,6 +156,20 @@ h3 { font-size: 1rem; }
   background: #fff;
 }
 
+.intraday-card {
+  margin-top: 18px;
+  border: 1px solid #d9e5df;
+  border-radius: 13px;
+  padding: 18px;
+  background: linear-gradient(145deg, #f8fcfa, #fff);
+}
+.intraday-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px 18px; margin-top: 16px; }
+.intraday-grid .status-row { display: grid; gap: 5px; border: 0; padding: 0; }
+.intraday-grid .status-row dd { overflow-wrap: anywhere; text-align: left; font-weight: 800; }
+.intraday-detail { margin-top: 15px; }
+.intraday-tables { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.intraday-tables .table-card { min-width: 0; }
+
 .chart-card, .insight-card { padding: 18px; }
 .chart-heading { align-items: flex-start; }
 .chart-value { display: grid; text-align: right; }
@@ -234,12 +248,15 @@ form button { margin-top: 18px; }
 
 @media (max-width: 1180px) {
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .intraday-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .intraday-tables { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 850px) {
   .shell { width: min(100% - 24px, 1440px); padding-top: 22px; }
   .topbar, .dashboard-heading, .strategy-title-row, .panel-heading, .button-row { align-items: flex-start; flex-direction: column; }
   .overview-grid, .settings-content { grid-template-columns: 1fr; }
+  .intraday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .maintenance-card { align-items: flex-start; flex-direction: column; }
   .refresh-block { width: 100%; justify-content: space-between; }
 }
@@ -285,6 +302,7 @@ form button { margin-top: 18px; }
 
 @media (max-width: 430px) {
   .metric-grid { grid-template-columns: 1fr; }
+  .intraday-grid { grid-template-columns: 1fr; }
   .header-pills { width: 100%; }
   .pill { flex: 1; justify-content: center; }
 }

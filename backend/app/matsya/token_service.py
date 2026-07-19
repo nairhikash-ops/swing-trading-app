@@ -30,6 +30,12 @@ class MatsyaStoredToken:
     updated_at: datetime | None
 
 
+@dataclass(frozen=True)
+class DhanLiveMarketCredentials:
+    dhan_client_id: str
+    access_token: str
+
+
 class MatsyaDhanTokenService:
     def __init__(self, settings: MatsyaSettings, dhan_client: DhanClient | None = None) -> None:
         self.settings = settings
@@ -45,6 +51,21 @@ class MatsyaDhanTokenService:
         if token is None:
             return _empty_status()
         return self._status_from_token(token)
+
+    def live_market_credentials(self) -> DhanLiveMarketCredentials:
+        """Return credentials only to the private read-only market-data worker."""
+        with connect(self.settings) as conn:
+            run_schema(conn)
+            token = self._get(conn)
+        if token is None:
+            raise ValueError("No Dhan token has been stored.")
+        state = _token_state(token, self.settings.renew_before_minutes)
+        if state not in {"active", "expiring_soon"}:
+            raise ValueError(f"Dhan token is not usable for live market data: {state}.")
+        return DhanLiveMarketCredentials(
+            dhan_client_id=token.dhan_client_id,
+            access_token=self._crypto().decrypt(token.encrypted_access_token),
+        )
 
     async def save_manual_token(
         self,

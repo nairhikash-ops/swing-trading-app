@@ -110,6 +110,39 @@ class DhanClient:
         response.raise_for_status()
         return response.json()
 
+    async def historical_intraday(
+        self,
+        access_token: str,
+        security_id: str,
+        exchange_segment: str,
+        instrument: str,
+        from_date: str,
+        to_date: str,
+        interval: str = "1",
+    ) -> dict[str, Any]:
+        """Read-only DhanHQ v2 minute candles used only for paper-ledger reconciliation."""
+        payload = {
+            "securityId": security_id,
+            "exchangeSegment": exchange_segment,
+            "instrument": instrument,
+            "interval": interval,
+            "oi": False,
+            "fromDate": from_date,
+            "toDate": to_date,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                f"{self.base_url}/v2/charts/intraday",
+                headers={
+                    "access-token": access_token,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        return response.json()
+
 
 def _parse_optional_datetime(value: Any) -> datetime | None:
     if value is None or str(value).strip() == "":

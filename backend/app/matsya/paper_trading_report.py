@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.matsya.intraday_paper import intraday_dashboard_state
+
 
 DEFAULT_V8_DEMO_DIR = Path(os.environ.get("V8_DEMO_OUTPUT_DIR", "/app/data/v8_demo_trader"))
 DEFAULT_UPTREND_SIDEWAYS_DIR = Path(
@@ -47,10 +49,16 @@ class PaperTradingReportService:
                 include_watch=True,
             ),
         ]
+        intraday = aggregate_intraday(strategies)
         return {
             "mode": "forward_paper_walk_forward",
-            "leakage_guard": "date-locked candles only; entries fill next open",
+            "leakage_guard": (
+                "date-locked signals; entries require the first valid next-session live price"
+                if intraday["enabled"]
+                else "date-locked candles only; entries fill next open"
+            ),
             "summary": aggregate_summary(strategies),
+            "intraday": intraday,
             "strategies": strategies,
         }
 
@@ -120,6 +128,7 @@ def strategy_status(
         "signal_count_key": signal_count_key,
         "schedule": STRATEGY_SCHEDULES.get(strategy_id, "-"),
         "last_run_at": timestamp_text(daily_meta.get("updated_at")),
+        "intraday": intraday_dashboard_state(state),
         "files": {
             "daily_report": daily_meta,
             "paper_broker_state": file_meta(output_dir / "paper_broker_state.json"),
@@ -129,6 +138,39 @@ def strategy_status(
             "signals": file_meta(output_dir / "signals.csv"),
             "watch_candidates": file_meta(output_dir / "watch_candidates.csv"),
         },
+    }
+
+
+def aggregate_intraday(strategies: list[dict[str, Any]]) -> dict[str, Any]:
+    states = [dict(strategy.get("intraday") or {}) for strategy in strategies]
+    statuses = [str(state.get("feed_status") or "disabled") for state in states]
+    if "recovery_failed" in statuses:
+        feed_status = "recovery_failed"
+    elif "reconnecting" in statuses:
+        feed_status = "reconnecting"
+    elif "live" in statuses:
+        feed_status = "live"
+    elif "idle" in statuses:
+        feed_status = "idle"
+    else:
+        feed_status = statuses[0] if statuses else "disabled"
+    return {
+        "enabled": any(bool(state.get("enabled")) for state in states),
+        "feed_status": feed_status,
+        "subscription_count": max((int(state.get("subscription_count") or 0) for state in states), default=0),
+        "pending_entries": sum(int(state.get("pending_entries") or 0) for state in states),
+        "open_positions": sum(int(state.get("open_positions") or 0) for state in states),
+        "missed_entries": sum(len(state.get("missed_entries") or []) for state in states),
+        "reconnects": max((int(state.get("reconnects") or 0) for state in states), default=0),
+        "last_packet_at": max((str(state.get("last_packet_at") or "") for state in states), default="") or None,
+        "last_reconciliation_at": max(
+            (str(state.get("last_reconciliation_at") or "") for state in states), default=""
+        ) or None,
+        "recovery_status": next(
+            (str(state.get("recovery_status")) for state in states if state.get("recovery_status")), "pending"
+        ),
+        "stops": [row for state in states for row in list(state.get("stops") or [])],
+        "targets": [row for state in states for row in list(state.get("targets") or [])],
     }
 
 

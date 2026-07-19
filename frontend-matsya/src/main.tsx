@@ -66,6 +66,23 @@ type PaperAccount = {
   max_drawdown_pct: number;
 };
 
+type IntradayStatus = {
+  enabled?: boolean;
+  feed_status?: string;
+  feed_detail?: string;
+  subscription_count?: number;
+  pending_entries?: number;
+  open_positions?: number;
+  reconnects?: number;
+  last_packet_at?: string | null;
+  last_reconciliation_at?: string | null;
+  recovery_status?: string;
+  missed_entries?: DemoRow[] | number;
+  stops?: DemoRow[];
+  targets?: DemoRow[];
+  recent_events?: DemoRow[];
+};
+
 type PaperStrategyStatus = {
   strategy_id: string;
   name: string;
@@ -84,6 +101,7 @@ type PaperStrategyStatus = {
   last_run_at?: string | null;
   fetch_failures: { as_of_date?: string; symbols_requested?: number; symbols_loaded?: number; fetch_failures?: Record<string, string> };
   files: Record<string, { exists: boolean; path: string; size_bytes: number; updated_at?: number | null }>;
+  intraday: IntradayStatus;
 };
 
 type PaperTradingStatus = {
@@ -108,6 +126,7 @@ type PaperTradingStatus = {
     total_watch_candidates_latest: number;
     total_orders_placed_latest: number;
   };
+  intraday: IntradayStatus;
   strategies: PaperStrategyStatus[];
 };
 
@@ -320,6 +339,8 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
             <MetricCard label="Today’s opportunity set" value={`${formatCount(summary?.total_signals_latest)} signals`} sub={`${formatCount(summary?.total_watch_candidates_latest)} watch candidates`} icon={<Activity size={19} />} />
           </div>
 
+          <IntradayStatusPanel intraday={status?.intraday} />
+
           <div className="overview-grid">
             <EquityCurve reports={portfolioReports} title="Combined equity curve" />
             <section className="insight-card">
@@ -328,7 +349,7 @@ function DemoTraderPanel({ status, busy, reload, refreshedAt }: { status: PaperT
               <div className="validation-list">
                 <div><CheckCircle2 size={17} /><span>Walk-forward paper execution only</span></div>
                 <div><CheckCircle2 size={17} /><span>{status?.leakage_guard ?? "Date-locked candles"}</span></div>
-                <div><CheckCircle2 size={17} /><span>Entries fill at the next session open</span></div>
+                <div><CheckCircle2 size={17} /><span>{status?.intraday?.enabled ? "Entries use the first valid next-session live price" : "Entries fill at the next session open"}</span></div>
               </div>
               <p className="muted">This is a research ledger, not a broker balance and not a live-order screen.</p>
             </section>
@@ -398,6 +419,8 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
         <span><Database size={17} /><strong>Market data:</strong> {formatDemo(latest?.matsya_latest_candle_date)}</span>
       </div>
 
+      <IntradayStatusPanel intraday={strategy.intraday} strategyName={shortStrategyName(strategy)} />
+
       <div className="metric-grid">
         <MetricCard label="Equity" value={formatCurrency(account.equity)} sub={`${formatSignedPercent(account.return_pct)} total return`} tone={toneForNumber(account.total_pnl)} />
         <MetricCard label="Total P&L" value={formatSignedCurrency(account.total_pnl)} sub={`${formatSignedCurrency(account.realized_pnl)} realized`} tone={toneForNumber(account.total_pnl)} />
@@ -429,6 +452,44 @@ function StrategyPanel({ strategy }: { strategy: PaperStrategyStatus }) {
       <DemoTable title="Pending entry orders" rows={strategy.pending_orders} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} emptyMessage="No orders waiting for the next session open." />
       <DemoTable title="Order history" rows={strategy.order_ledger.slice(-30).reverse()} columns={isSideways ? ["symbol", "signal_date", "target_allocation", "base_duration", "base_range_max", "base_high", "base_low", "target_price"] : ["symbol", "signal_date", "target_allocation", "liquidity_cap", "down_market_capture_60d"]} emptyMessage="No paper entry orders have been created." />
       <DemoTable title="Closed trades" rows={strategy.closed_trades.slice(-30).reverse()} columns={["symbol", "entry_date", "exit_date", "reason", "shares", "entry_price", "exit_price", "pnl_value", "pnl_pct", "bars_held"]} emptyMessage="No completed paper trades yet." />
+    </section>
+  );
+}
+
+function IntradayStatusPanel({ intraday, strategyName }: { intraday?: IntradayStatus; strategyName?: string }) {
+  const status = intraday?.feed_status ?? "disabled";
+  const enabled = Boolean(intraday?.enabled);
+  const missed = Array.isArray(intraday?.missed_entries) ? intraday.missed_entries.length : Number(intraday?.missed_entries ?? 0);
+  const tone = status === "live" || status === "idle" ? "ok" : status === "disabled" ? "warn" : "bad";
+  return (
+    <section className="intraday-card">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Paper execution pipeline</p>
+          <h3>{strategyName ? `${strategyName} intraday worker` : "Intraday feed and recovery"}</h3>
+        </div>
+        <div className={`pill ${tone}`}><Wifi size={17} />{enabled ? status : "Disabled"}</div>
+      </div>
+      <div className="intraday-grid">
+        <StatusRow label="Subscriptions" value={formatCount(intraday?.subscription_count)} />
+        <StatusRow label="Pending entries" value={formatCount(intraday?.pending_entries)} />
+        <StatusRow label="Open positions" value={formatCount(intraday?.open_positions)} />
+        <StatusRow label="Stops monitored" value={formatCount(intraday?.stops?.length)} />
+        <StatusRow label="Targets monitored" value={formatCount(intraday?.targets?.length)} />
+        <StatusRow label="Missed entries" value={formatCount(missed)} />
+        <StatusRow label="Reconnects" value={formatCount(intraday?.reconnects)} />
+        <StatusRow label="Recovery" value={formatDemo(intraday?.recovery_status)} />
+        <StatusRow label="Last packet" value={formatDate(intraday?.last_packet_at)} />
+        <StatusRow label="Last reconciliation" value={formatDate(intraday?.last_reconciliation_at)} />
+      </div>
+      {intraday?.feed_detail ? <p className="muted intraday-detail">{intraday.feed_detail}</p> : null}
+      {strategyName ? (
+        <div className="intraday-tables">
+          <DemoTable title="Active stops" rows={intraday?.stops ?? []} columns={["symbol", "price"]} emptyMessage="No active paper stops." />
+          <DemoTable title="Active targets" rows={intraday?.targets ?? []} columns={["symbol", "price"]} emptyMessage="No active paper targets." />
+          <DemoTable title="Missed paper entries" rows={Array.isArray(intraday?.missed_entries) ? intraday.missed_entries : []} columns={["symbol", "event_at", "reason", "label"]} emptyMessage="No missed entries recorded." />
+        </div>
+      ) : null}
     </section>
   );
 }

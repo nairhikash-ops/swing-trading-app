@@ -41,6 +41,13 @@ class MatsyaSettings:
     ohlcv_universe_name: str = "NIFTY_500"
     historical_finalized_after_hour_ist: int = 18
     market_code: str = "NSE"
+    intraday_paper_enabled: bool = False
+    dhan_live_feed_url: str = "wss://api-feed.dhan.co"
+    intraday_feed_stale_seconds: int = 45
+    intraday_subscription_refresh_seconds: int = 5
+    intraday_reconnect_max_seconds: int = 60
+    intraday_reconciliation_hour_ist: int = 15
+    intraday_reconciliation_minute_ist: int = 35
 
     @classmethod
     def from_env(cls) -> "MatsyaSettings":
@@ -97,6 +104,15 @@ class MatsyaSettings:
             ohlcv_universe_name=os.getenv("MATSYA_OHLCV_UNIVERSE_NAME", "NIFTY_500"),
             historical_finalized_after_hour_ist=int(os.getenv("MATSYA_HISTORICAL_FINALIZED_AFTER_HOUR_IST", "18")),
             market_code=os.getenv("MATSYA_MARKET_CODE", "NSE"),
+            intraday_paper_enabled=os.getenv("MATSYA_INTRADAY_PAPER_ENABLED", "false").lower() == "true",
+            dhan_live_feed_url=os.getenv("MATSYA_DHAN_LIVE_FEED_URL", "wss://api-feed.dhan.co"),
+            intraday_feed_stale_seconds=int(os.getenv("MATSYA_INTRADAY_FEED_STALE_SECONDS", "45")),
+            intraday_subscription_refresh_seconds=int(
+                os.getenv("MATSYA_INTRADAY_SUBSCRIPTION_REFRESH_SECONDS", "5")
+            ),
+            intraday_reconnect_max_seconds=int(os.getenv("MATSYA_INTRADAY_RECONNECT_MAX_SECONDS", "60")),
+            intraday_reconciliation_hour_ist=int(os.getenv("MATSYA_INTRADAY_RECONCILIATION_HOUR_IST", "15")),
+            intraday_reconciliation_minute_ist=int(os.getenv("MATSYA_INTRADAY_RECONCILIATION_MINUTE_IST", "35")),
         )
 
     def safe_database_url(self) -> str:

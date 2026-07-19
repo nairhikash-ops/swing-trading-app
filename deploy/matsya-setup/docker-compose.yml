@@ -65,6 +65,24 @@ services:
       - manual
     restart: "no"
 
+  matsya-intraday-paper-worker:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "scripts.matsya_intraday_paper_worker"]
+    env_file:
+      - .env
+    environment:
+      V8_DEMO_OUTPUT_DIR: /app/data/v8_demo_trader
+      UPTREND_SIDEWAYS_OUTPUT_DIR: /app/data/uptrend_sideways_paper_trader
+    volumes:
+      - ../../data/v8_demo_trader:/app/data/v8_demo_trader
+      - ../../data/uptrend_sideways_paper_trader:/app/data/uptrend_sideways_paper_trader
+    networks:
+      - matsya-db
+    depends_on:
+      - matsya-api
+    restart: unless-stopped
+
   matsya-renewal-worker:
     build:
       context: ../../backend
