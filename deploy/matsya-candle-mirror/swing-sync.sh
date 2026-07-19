@@ -10,6 +10,7 @@ readonly backup_dir="${MATSYA_MIRROR_BACKUP_DIR:-/var/backups/matsya-candle-mirr
 readonly container="${MATSYA_MIRROR_POSTGRES_CONTAINER:-matsya-postgres}"
 readonly database="${MATSYA_MIRROR_POSTGRES_DB:-matsya}"
 readonly database_user="${MATSYA_MIRROR_POSTGRES_USER:-matsya_user}"
+readonly full_snapshot="${MATSYA_MIRROR_FULL_SNAPSHOT:-false}"
 readonly columns="provider_code,security_id,exchange_segment,instrument,trading_date,source_timestamp,open_price,high_price,low_price,close_price,volume,open_interest,raw_candle,first_seen_at,updated_at"
 
 mkdir -p "$state_dir" "$backup_dir"
@@ -36,12 +37,23 @@ ssh_args=(
 
 watermark_file="$state_dir/watermark"
 initial_sync=false
-if [[ -s "$watermark_file" ]]; then
+replace_target=false
+if [[ "$full_snapshot" == true ]]; then
+  remote_command="snapshot"
+  replace_target=true
+  if [[ ! -s "$watermark_file" ]]; then
+    initial_sync=true
+  fi
+elif [[ -s "$watermark_file" ]]; then
   watermark="$(tr -d '\r\n' < "$watermark_file")"
   remote_command="since $watermark"
 else
   initial_sync=true
+  replace_target=true
   remote_command="snapshot"
+fi
+
+if [[ "$initial_sync" == true ]]; then
   backup="$backup_dir/matsya-before-candle-mirror-$(date -u +%Y%m%dT%H%M%SZ).dump"
   docker exec "$container" pg_dump -Fc -U "$database_user" -d "$database" > "$backup"
   chmod 600 "$backup"
@@ -54,7 +66,7 @@ gzip -dc "$payload" > "$tmp_dir/candles.csv"
 docker cp "$tmp_dir/candles.csv" "$container:$container_csv" >/dev/null
 
 mode_sql=""
-if [[ "$initial_sync" == true ]]; then
+if [[ "$replace_target" == true ]]; then
   mode_sql="TRUNCATE matsya.ohlcv_daily RESTART IDENTITY;"
 fi
 

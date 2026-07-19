@@ -1,2 +1,2 @@
 # Matsya primary-to-swing candle mirror (single writer: new VPS)
-*/2 * * * * /home/hacker/.local/bin/matsya-candle-mirror-run
+30 6 * * * /home/hacker/.local/bin/matsya-candle-mirror-run
