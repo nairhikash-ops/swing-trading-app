@@ -11,6 +11,59 @@ def _json(value: Any) -> str:
     return json.dumps(value if value is not None else {}, sort_keys=True, separators=(",", ":"))
 
 
+def upsert_ohlcv_intraday(conn: Any, row: JsonDict) -> None:
+    """Idempotently archive one intraday candle for research/backtesting reuse."""
+    conn.execute(
+        """
+        INSERT INTO matsya.ohlcv_intraday (
+            provider_code, security_id, exchange_segment, instrument,
+            interval_minutes, candle_time, open_price, high_price, low_price,
+            close_price, volume, open_interest, raw_candle
+        ) VALUES (
+            %(provider_code)s, %(security_id)s, %(exchange_segment)s, %(instrument)s,
+            %(interval_minutes)s, %(candle_time)s, %(open_price)s, %(high_price)s,
+            %(low_price)s, %(close_price)s, %(volume)s, %(open_interest)s,
+            %(raw_candle)s::jsonb
+        )
+        ON CONFLICT (provider_code, security_id, interval_minutes, candle_time) DO UPDATE
+        SET open_price = EXCLUDED.open_price,
+            high_price = EXCLUDED.high_price,
+            low_price = EXCLUDED.low_price,
+            close_price = EXCLUDED.close_price,
+            volume = EXCLUDED.volume,
+            open_interest = EXCLUDED.open_interest,
+            raw_candle = EXCLUDED.raw_candle,
+            updated_at = now()
+        """,
+        {**row, "raw_candle": _json(row.get("raw_candle", row))},
+    )
+
+
+def upsert_ohlcv_intraday_many(conn: Any, rows: list[JsonDict]) -> None:
+    if not rows:
+        return
+    statement = """
+        INSERT INTO matsya.ohlcv_intraday (
+            provider_code, security_id, exchange_segment, instrument,
+            interval_minutes, candle_time, open_price, high_price, low_price,
+            close_price, volume, open_interest, raw_candle
+        ) VALUES (
+            %(provider_code)s, %(security_id)s, %(exchange_segment)s, %(instrument)s,
+            %(interval_minutes)s, %(candle_time)s, %(open_price)s, %(high_price)s,
+            %(low_price)s, %(close_price)s, %(volume)s, %(open_interest)s,
+            %(raw_candle)s::jsonb
+        )
+        ON CONFLICT (provider_code, security_id, interval_minutes, candle_time) DO UPDATE
+        SET open_price = EXCLUDED.open_price, high_price = EXCLUDED.high_price,
+            low_price = EXCLUDED.low_price, close_price = EXCLUDED.close_price,
+            volume = EXCLUDED.volume, open_interest = EXCLUDED.open_interest,
+            raw_candle = EXCLUDED.raw_candle, updated_at = now()
+    """
+    payloads = [{**row, "raw_candle": _json(row.get("raw_candle", row))} for row in rows]
+    with conn.cursor() as cursor:
+        cursor.executemany(statement, payloads)
+
+
 def upsert_provider(conn: Any, provider_code: str, provider_name: str) -> None:
     conn.execute(
         """

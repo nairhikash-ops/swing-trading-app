@@ -198,6 +198,45 @@ CREATE TABLE IF NOT EXISTS matsya.ohlcv_daily (
 CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_security_date
 ON matsya.ohlcv_daily(provider_code, security_id, trading_date DESC);
 
+CREATE TABLE IF NOT EXISTS matsya.ohlcv_intraday (
+    id BIGSERIAL PRIMARY KEY,
+    provider_code TEXT NOT NULL DEFAULT 'dhan' REFERENCES matsya.providers(provider_code),
+    security_id TEXT NOT NULL,
+    exchange_segment TEXT NOT NULL DEFAULT '',
+    instrument TEXT NOT NULL DEFAULT '',
+    interval_minutes INTEGER NOT NULL CHECK (interval_minutes > 0),
+    candle_time TIMESTAMPTZ NOT NULL,
+    open_price NUMERIC NOT NULL,
+    high_price NUMERIC NOT NULL,
+    low_price NUMERIC NOT NULL,
+    close_price NUMERIC NOT NULL,
+    volume NUMERIC NOT NULL DEFAULT 0,
+    open_interest NUMERIC,
+    raw_candle JSONB NOT NULL,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (provider_code, security_id, interval_minutes, candle_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matsya_ohlcv_intraday_security_time
+ON matsya.ohlcv_intraday(provider_code, security_id, interval_minutes, candle_time DESC);
+
+CREATE TABLE IF NOT EXISTS matsya.ohlcv_intraday_fetch_windows (
+    id BIGSERIAL PRIMARY KEY,
+    provider_code TEXT NOT NULL DEFAULT 'dhan' REFERENCES matsya.providers(provider_code),
+    security_id TEXT NOT NULL,
+    interval_minutes INTEGER NOT NULL CHECK (interval_minutes > 0),
+    from_date DATE NOT NULL,
+    to_date DATE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    candles_received INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (provider_code, security_id, interval_minutes, from_date, to_date)
+);
+
 CREATE TABLE IF NOT EXISTS matsya.ohlcv_fetch_runs (
     id BIGSERIAL PRIMARY KEY,
     universe_name TEXT NOT NULL,
