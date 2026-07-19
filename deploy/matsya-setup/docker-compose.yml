@@ -65,6 +65,20 @@ services:
       - manual
     restart: "no"
 
+  backtest-runner:
+    build:
+      context: ../../backend
+    command: ["python", "-m", "app.backtesting.cli", "--help"]
+    env_file:
+      - .env
+    volumes:
+      - ../../data/backtests:/app/data/backtests
+    networks:
+      - matsya-db
+    profiles:
+      - manual
+    restart: "no"
+
   matsya-intraday-paper-worker:
     build:
       context: ../../backend
