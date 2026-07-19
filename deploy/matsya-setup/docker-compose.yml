@@ -73,6 +73,7 @@ services:
       - .env
     volumes:
       - ../../data/backtests:/app/data/backtests
+      - ../../data/backtest_specs:/app/specs:ro
     networks:
       - matsya-db
     profiles:

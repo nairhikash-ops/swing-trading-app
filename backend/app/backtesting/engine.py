@@ -50,6 +50,27 @@ class BacktestEngine:
         data = validate_candles(candles)
         prepared = strategy.prepare(data.copy())
         signals = strategy.generate_signals(prepared)
+        return self._run_validated(data, signals, strategy.name, strategy.parameters())
+
+    def run_signals(
+        self,
+        candles: pd.DataFrame,
+        signals: list[Signal],
+        *,
+        strategy_name: str,
+        strategy_parameters: dict[str, Any] | None = None,
+    ) -> BacktestResult:
+        """Run already-prepared signals without recalculating strategy indicators."""
+        data = validate_candles(candles)
+        return self._run_validated(data, signals, strategy_name, strategy_parameters or {})
+
+    def _run_validated(
+        self,
+        data: pd.DataFrame,
+        signals: list[Signal],
+        strategy_name: str,
+        strategy_parameters: dict[str, Any],
+    ) -> BacktestResult:
         self._validate_signals(signals, data)
         signal_rows = [self._signal_row(signal) for signal in signals]
         signal_frame = pd.DataFrame(signal_rows)
@@ -141,14 +162,14 @@ class BacktestEngine:
         equity = pd.DataFrame(equity_rows)
         trade_frame = pd.DataFrame(trades)
         summary = calculate_metrics(equity, trade_frame, self.config.initial_cash)
-        summary.update({"strategy": strategy.name, "symbols": int(data["symbol"].nunique()), "candle_rows": int(len(data)), "signal_count": len(signals), "start_date": str(data["date"].min().date()), "end_date": str(data["date"].max().date())})
+        summary.update({"strategy": strategy_name, "symbols": int(data["symbol"].nunique()), "candle_rows": int(len(data)), "signal_count": len(signals), "start_date": str(data["date"].min().date()), "end_date": str(data["date"].max().date())})
         fingerprint_source = pd.util.hash_pandas_object(data, index=False).values.tobytes()
         fingerprint_source += "|".join(data.columns).encode("utf-8")
         manifest = {
-            "engine_version": "1.0.0",
+            "engine_version": "1.1.0",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "strategy": strategy.name,
-            "strategy_parameters": strategy.parameters(),
+            "strategy": strategy_name,
+            "strategy_parameters": strategy_parameters,
             "config": self.config.to_dict(),
             "data_sha256": hashlib.sha256(fingerprint_source).hexdigest(),
             "data_rows": len(data),

@@ -1,0 +1,52 @@
+{
+  "experiment": {
+    "chronological_split_fraction": 0.7,
+    "latest_months": [12, 24],
+    "include_family_variants": true,
+    "include_leave_one_out": true
+  },
+  "rules": [
+    {
+      "name": "strong_close",
+      "description": "Close is in the configured strong portion of the candle range",
+      "family": "anatomy"
+    },
+    {
+      "name": "volume_expansion",
+      "description": "Volume exceeds the configured past-only reference",
+      "family": "volume"
+    }
+  ],
+  "cost_scenarios": {
+    "base": {
+      "commission_bps": 3,
+      "slippage_bps": 5,
+      "taxes_bps": 12
+    },
+    "harsh": {
+      "commission_bps": 8,
+      "slippage_bps": 10,
+      "taxes_bps": 17
+    }
+  },
+  "gates": [
+    {
+      "name": "oos_positive_return",
+      "scope": "oos",
+      "metric": "total_return_pct",
+      "operator": ">",
+      "threshold": 0,
+      "variant": "all_filters",
+      "cost_scenario": "base"
+    },
+    {
+      "name": "oos_minimum_trades",
+      "scope": "oos",
+      "metric": "trade_count",
+      "operator": ">=",
+      "threshold": 100,
+      "variant": "all_filters",
+      "cost_scenario": "base"
+    }
+  ]
+}

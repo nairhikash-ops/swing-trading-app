@@ -12,6 +12,41 @@ immutable result folder. It does not place orders, mutate market data, or run on
 - Each run records trades, signals, equity, metrics, parameters, and a SHA-256 data fingerprint.
 - Existing result folders are never overwritten.
 
+## Experiment and filter diagnostics
+
+Engine 1.1 adds a reusable `ExperimentStrategy` contract for strategies that expose candidate
+signals plus named boolean rule results. `ExperimentRunner` prepares indicators once, then reuses
+the candidates for:
+
+- per-signal rejection reasons and a sequential/standalone filter funnel;
+- baseline, all-filter, filter-family, custom, and leave-one-rule-out variants;
+- full-history, chronological IS/OOS, and latest 12/24-month scopes;
+- multiple portfolio-aware cost scenarios;
+- pre-declared acceptance gates; and
+- retained baseline/all-filter trade and equity ledgers for audit.
+
+The experiment report is immutable and includes `candidate_diagnostics.csv`, `filter_funnel.csv`,
+`variant_summary.csv`, `acceptance_gates.csv`, `experiment_manifest.json`, and selected full
+trade/equity ledgers. A strategy's `prepare()` method is called exactly once per experiment.
+
+Use [`experiment-spec.example.json`](experiment-spec.example.json) as the starting specification.
+The strategy plug-in must implement `generate_candidates()` and return `EvaluatedSignal` objects
+whose rule names exactly match the specification.
+
+```bash
+docker compose --profile manual run --rm backtest-runner \
+  python -m app.backtesting.experiment_cli \
+  --source matsya-postgres --universe NIFTY_500 \
+  --strategy your_package.your_strategy:YourExperimentStrategy \
+  --strategy-params '{"parameter":123}' \
+  --experiment-spec /app/specs/your-experiment.json \
+  --cache /app/data/backtests/cache/nifty500-daily.csv.gz \
+  --output-dir /app/data/backtests/experiments/your-fresh-run-id
+```
+
+Mount or include the strategy module and experiment specification in the backend image before a
+server run. Acceptance gates should be locked before results are inspected.
+
 ## Strategy plug-in
 
 Implement `app.backtesting.strategy.Strategy`: `prepare()` calculates indicators once and

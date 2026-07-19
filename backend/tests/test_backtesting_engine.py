@@ -117,3 +117,18 @@ def test_data_validation_rejects_duplicate_bars() -> None:
     ])
     with pytest.raises(ValueError, match="duplicate"):
         validate_candles(data)
+
+
+def test_prepared_signal_api_matches_standard_strategy_run() -> None:
+    data = candles([
+        ("AAA", "2026-01-01", 100, 101, 99, 100, 10),
+        ("AAA", "2026-01-02", 100, 103, 99, 102, 10),
+    ])
+    signals = [Signal("AAA", "2026-01-01", stop_price=90, target_price=102)]
+    strategy = FixedStrategy(signals)
+    engine = BacktestEngine(zero_cost_config())
+    standard = engine.run(data, strategy)
+    prepared = engine.run_signals(data, signals, strategy_name=strategy.name, strategy_parameters=strategy.parameters())
+    pd.testing.assert_frame_equal(standard.trades, prepared.trades)
+    pd.testing.assert_frame_equal(standard.equity_curve, prepared.equity_curve)
+    assert prepared.manifest["engine_version"] == "1.1.0"

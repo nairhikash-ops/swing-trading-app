@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import pandas as pd
 
 from .models import Signal
+
+if TYPE_CHECKING:
+    from .experiments import EvaluatedSignal
 
 
 @runtime_checkable
@@ -23,3 +26,17 @@ class Strategy(Protocol):
     def generate_signals(self, prepared: pd.DataFrame) -> list[Signal]:
         """Return close-known signals. The engine fills them on a later open."""
         ...
+
+
+@runtime_checkable
+class ExperimentStrategy(Protocol):
+    """Optional research contract for rule-level diagnostics and ablations."""
+
+    @property
+    def name(self) -> str: ...
+
+    def parameters(self) -> dict[str, Any]: ...
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame: ...
+
+    def generate_candidates(self, prepared: pd.DataFrame) -> list["EvaluatedSignal"]: ...
