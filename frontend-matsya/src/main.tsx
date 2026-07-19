@@ -472,6 +472,10 @@ function EquityCurve({ reports, title }: { reports: DemoRow[]; title: string }) 
 }
 
 function DemoTable({ title, description, rows, columns, emptyMessage }: { title: string; description?: string; rows: DemoRow[]; columns: string[]; emptyMessage: string }) {
+  const mobileTitleColumn = columns.includes("symbol") ? "symbol" : columns[0];
+  const mobileContextColumn = columns.includes("strategy") ? "strategy" : columns.find((column) => ["as_of_date", "signal_date", "entry_date", "exit_date"].includes(column));
+  const mobileHighlightColumns = mobileColumns(columns).filter((column) => column !== mobileTitleColumn && column !== mobileContextColumn);
+  const mobileDetailColumns = columns.filter((column) => column !== mobileTitleColumn && column !== mobileContextColumn && !mobileHighlightColumns.includes(column));
   return (
     <section className="table-card">
       <div className="table-heading"><div><h3>{title}</h3>{description ? <p>{description}</p> : null}</div><span className="row-count">{rows.length} rows</span></div>
@@ -481,8 +485,43 @@ function DemoTable({ title, description, rows, columns, emptyMessage }: { title:
           <tbody>{rows.length === 0 ? <tr><td className="empty-row" colSpan={columns.length}>{emptyMessage}</td></tr> : rows.map((row, index) => <tr key={`${title}-${String(row.symbol ?? index)}-${index}`}>{columns.map((column) => <td key={column} className={cellTone(column, row[column])}>{formatDemo(row[column], column)}</td>)}</tr>)}</tbody>
         </table>
       </div>
+      <div className="mobile-table-list">
+        {rows.length === 0 ? <p className="mobile-empty-row">{emptyMessage}</p> : rows.map((row, index) => (
+          <article className="mobile-row-card" key={`mobile-${title}-${String(row.symbol ?? index)}-${index}`}>
+            <div className="mobile-row-heading">
+              <div>
+                {mobileContextColumn ? <span>{formatDemo(row[mobileContextColumn], mobileContextColumn)}</span> : null}
+                <strong>{formatDemo(row[mobileTitleColumn], mobileTitleColumn)}</strong>
+              </div>
+              {columns.includes("status") ? <span className="mobile-status">{formatDemo(row.status, "status")}</span> : null}
+            </div>
+            <dl className="mobile-row-highlights">
+              {mobileHighlightColumns.map((column) => <MobileDatum key={column} column={column} value={row[column]} />)}
+            </dl>
+            {mobileDetailColumns.length ? (
+              <details className="mobile-row-details">
+                <summary>All details</summary>
+                <dl>{mobileDetailColumns.map((column) => <MobileDatum key={column} column={column} value={row[column]} />)}</dl>
+              </details>
+            ) : null}
+          </article>
+        ))}
+      </div>
     </section>
   );
+}
+
+function MobileDatum({ column, value }: { column: string; value: DemoRow[string] }) {
+  return <div><dt>{columnLabel(column)}</dt><dd className={cellTone(column, value)}>{formatDemo(value, column)}</dd></div>;
+}
+
+function mobileColumns(columns: string[]): string[] {
+  const priority = [
+    "current_price", "latest_close", "market_value", "unrealized_pnl", "unrealized_pnl_pct",
+    "pnl_value", "pnl_pct", "target_price", "distance_to_target_pct", "entry_price", "target_allocation",
+    "as_of_date", "signal_date", "entry_date", "exit_date", "reason", "watch_reason", "shares",
+  ];
+  return priority.filter((column) => columns.includes(column)).slice(0, 4);
 }
 
 function StatusRow({ label, value }: { label: string; value: string }) {
