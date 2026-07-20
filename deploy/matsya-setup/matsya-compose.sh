@@ -36,4 +36,11 @@ validate_abs_path MATSYA_ENV_FILE "${MATSYA_ENV_FILE-}"
 [ -f "$MATSYA_ENV_FILE" ] || fail 'MATSYA_ENV_FILE must name an existing regular file'
 [ ! -L "$MATSYA_ENV_FILE" ] || fail 'MATSYA_ENV_FILE must not be a symlink'
 
-exec docker compose --profile manual -f deploy/matsya-setup/docker-compose.yml "$@"
+if ! SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd); then
+  fail 'could not resolve wrapper directory'
+fi
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+[ -f "$COMPOSE_FILE" ] || fail "Compose file not found: $COMPOSE_FILE"
+[ ! -L "$COMPOSE_FILE" ] || fail "Compose file must not be a symlink: $COMPOSE_FILE"
+
+exec docker compose --profile manual -f "$COMPOSE_FILE" "$@"

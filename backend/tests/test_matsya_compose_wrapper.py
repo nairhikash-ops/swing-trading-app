@@ -14,7 +14,7 @@ WRAPPER = ROOT / "deploy" / "matsya-setup" / "matsya-compose.sh"
 SHA = "a" * 40
 
 
-def run_wrapper(tmp_path: Path, *, data: str | None = "/opt/data", env_file: str | None = None, sha: str | None = SHA, args: list[str] | None = None):
+def run_wrapper(tmp_path: Path, *, data: str | None = "/opt/data", env_file: str | None = None, sha: str | None = SHA, args: list[str] | None = None, cwd: Path | None = None, wrapper: Path = WRAPPER):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
     log = tmp_path / "docker-args"
@@ -27,7 +27,7 @@ def run_wrapper(tmp_path: Path, *, data: str | None = "/opt/data", env_file: str
         clean["MATSYA_ENV_FILE"] = env_file
     if sha is not None:
         clean["RELEASE_COMMIT"] = sha
-    result = subprocess.run(["sh", str(WRAPPER), *(args or ["config"])], cwd=ROOT, env=clean, capture_output=True, text=True)
+    result = subprocess.run(["sh", str(wrapper), *(args or ["config"])], cwd=cwd or ROOT, env=clean, capture_output=True, text=True)
     return result, log
 
 
@@ -64,7 +64,30 @@ def test_valid_paths_with_spaces_and_arguments_are_preserved(tmp_path: Path) -> 
     env_file.write_text("KEY=value\n", encoding="utf-8")
     result, log = run_wrapper(tmp_path, data=str(data_root), env_file=str(env_file), args=["build", "matsya-api", "--progress", "plain"])
     assert result.returncode == 0, result.stderr
-    assert log.read_text(encoding="utf-8").splitlines() == ["compose", "--profile", "manual", "-f", "deploy/matsya-setup/docker-compose.yml", "build", "matsya-api", "--progress", "plain"]
+    assert log.read_text(encoding="utf-8").splitlines() == ["compose", "--profile", "manual", "-f", str(WRAPPER.parent / "docker-compose.yml"), "build", "matsya-api", "--progress", "plain"]
+
+
+def test_root_and_other_working_directories_resolve_same_compose_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "env"
+    env_file.write_text("", encoding="utf-8")
+    root_result, root_log = run_wrapper(tmp_path, env_file=str(env_file), cwd=ROOT)
+    other_result, other_log = run_wrapper(tmp_path, env_file=str(env_file), cwd=tmp_path)
+    expected = str(WRAPPER.parent / "docker-compose.yml")
+    assert root_result.returncode == other_result.returncode == 0
+    assert root_log.read_text(encoding="utf-8").splitlines()[4] == expected
+    assert other_log.read_text(encoding="utf-8").splitlines()[4] == expected
+
+
+def test_missing_compose_file_fails_before_docker(tmp_path: Path) -> None:
+    missing_dir = tmp_path / "missing-wrapper"
+    missing_dir.mkdir()
+    wrapper = missing_dir / "matsya-compose.sh"
+    wrapper.write_text(WRAPPER.read_text(encoding="utf-8"), encoding="utf-8")
+    env_file = tmp_path / "env"
+    env_file.write_text("", encoding="utf-8")
+    result, log = run_wrapper(tmp_path, env_file=str(env_file), wrapper=wrapper)
+    assert result.returncode != 0
+    assert not log.exists()
 
 
 def test_env_file_must_be_regular_non_symlink(tmp_path: Path) -> None:
