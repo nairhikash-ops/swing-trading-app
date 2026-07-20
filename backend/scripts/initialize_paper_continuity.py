@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import errno
 import hashlib
 import io
 import json
@@ -198,34 +199,70 @@ def _pin_absolute_components(path: Path, *, label: str, final_kind: str) -> tupl
     requested = Path(path)
     if not requested.is_absolute():
         raise ContinuityInitializationError(f"{label} must be an absolute fixed path")
-    current = Path(requested.anchor)
-    components: list[PathComponentIdentity] = []
-    parts = requested.parts[1:] if requested.anchor else requested.parts
-    for index, part in enumerate(parts):
-        current = current / part
-        try:
+    if os.name == "nt":
+        current = Path(requested.anchor)
+        components: list[PathComponentIdentity] = []
+        parts = requested.parts[1:] if requested.anchor else requested.parts
+        for index, part in enumerate(parts):
+            current = current / part
             current_stat = os.lstat(current)
-        except OSError as exc:
-            raise ContinuityInitializationError(f"{label} component does not exist: {current}") from exc
-        if stat.S_ISLNK(current_stat.st_mode):
-            raise ContinuityInitializationError(f"{label} contains a symlink component: {current}")
-        if os.name != "nt":
-            if current_stat.st_uid != 0:
+            if stat.S_ISLNK(current_stat.st_mode):
+                raise ContinuityInitializationError(f"{label} contains a symlink component: {current}")
+            is_final = index == len(parts) - 1
+            if not is_final and not stat.S_ISDIR(current_stat.st_mode):
+                raise ContinuityInitializationError(f"{label} component is not a directory: {current}")
+            components.append(PathComponentIdentity(str(current), current_stat.st_dev, current_stat.st_ino))
+        if not components:
+            raise ContinuityInitializationError(f"{label} cannot be filesystem root")
+        final_stat = os.lstat(current)
+        if final_kind == "directory" and not stat.S_ISDIR(final_stat.st_mode):
+            raise ContinuityInitializationError(f"{label} is not a directory: {current}")
+        if final_kind == "file" and not stat.S_ISREG(final_stat.st_mode):
+            raise ContinuityInitializationError(f"{label} is not a regular file: {current}")
+        return current, final_stat, tuple(components)
+    parts = requested.parts[1:]
+    current = Path(requested.anchor)
+    descriptors: list[int] = []
+    components: list[PathComponentIdentity] = []
+    try:
+        root_fd = os.open(requested.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(root_fd)
+        root_stat = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != 0 or root_stat.st_mode & 0o022:
+            raise ContinuityInitializationError(f"{label} filesystem root is not trusted")
+        components.append(PathComponentIdentity(str(current), root_stat.st_dev, root_stat.st_ino))
+        final_stat = root_stat
+        for index, part in enumerate(parts):
+            current = current / part
+            is_final = index == len(parts) - 1
+            flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if not is_final or final_kind == "directory" else 0)
+            child_fd = os.open(part, flags, dir_fd=descriptors[-1])
+            descriptors.append(child_fd)
+            child_stat = os.fstat(child_fd)
+            if child_stat.st_uid != 0:
                 raise ContinuityInitializationError(f"{label} component is not root-owned: {current}")
-            if current_stat.st_mode & 0o022:
+            if child_stat.st_mode & 0o022:
                 raise ContinuityInitializationError(f"{label} component is group/world writable: {current}")
-        is_final = index == len(parts) - 1
-        if not is_final and not stat.S_ISDIR(current_stat.st_mode):
-            raise ContinuityInitializationError(f"{label} component is not a directory: {current}")
-        components.append(PathComponentIdentity(str(current), current_stat.st_dev, current_stat.st_ino))
-    if not components:
-        raise ContinuityInitializationError(f"{label} cannot be filesystem root")
-    final_stat = os.lstat(current)
-    if final_kind == "directory" and not stat.S_ISDIR(final_stat.st_mode):
-        raise ContinuityInitializationError(f"{label} is not a directory: {current}")
-    if final_kind == "file" and not stat.S_ISREG(final_stat.st_mode):
-        raise ContinuityInitializationError(f"{label} is not a regular file: {current}")
-    return current, final_stat, tuple(components)
+            if is_final:
+                if final_kind == "directory" and not stat.S_ISDIR(child_stat.st_mode):
+                    raise ContinuityInitializationError(f"{label} is not a directory: {current}")
+                if final_kind == "file" and not stat.S_ISREG(child_stat.st_mode):
+                    raise ContinuityInitializationError(f"{label} is not a regular file: {current}")
+            elif not stat.S_ISDIR(child_stat.st_mode):
+                raise ContinuityInitializationError(f"{label} component is not a directory: {current}")
+            components.append(PathComponentIdentity(str(current), child_stat.st_dev, child_stat.st_ino))
+            final_stat = child_stat
+        return current, final_stat, tuple(components)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP or ("current" in locals() and os.path.islink(current)):
+            raise ContinuityInitializationError(f"{label} contains a symlink component") from exc
+        raise ContinuityInitializationError(f"{label} component cannot be opened safely") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _pin_directory(path: Path, *, label: str) -> DirectoryIdentity:

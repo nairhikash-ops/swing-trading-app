@@ -459,6 +459,38 @@ def test_specialized_creators_have_no_filename_or_target_directory_parameter() -
     assert not hasattr(initializer, "_create_fixed_file")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX descriptor pinning")
+def test_descriptor_pin_includes_root_and_consistent_final_identity(tmp_path: Path) -> None:
+    target = tmp_path / "root" / "target"
+    target.mkdir(parents=True, mode=0o700)
+    resolved, final_stat, components = initializer._pin_absolute_components(
+        target, label="fixed directory", final_kind="directory"
+    )
+    assert components[0].path == "/"
+    assert components[0].device == os.stat("/").st_dev
+    assert components[0].inode == os.stat("/").st_ino
+    assert components[-1].device == final_stat.st_dev
+    assert components[-1].inode == final_stat.st_ino
+    assert resolved == target
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX descriptor pinning")
+def test_root_identity_revalidation_failure_is_detected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    identity = initializer._pin_directory(target, label="fixed directory")
+    original = initializer._pin_absolute_components
+
+    def forged(path: Path, *, label: str, final_kind: str):
+        resolved, final_stat, components = original(path, label=label, final_kind=final_kind)
+        forged_root = initializer.PathComponentIdentity("/", components[0].device, components[0].inode + 1)
+        return resolved, final_stat, (forged_root, *components[1:])
+
+    monkeypatch.setattr(initializer, "_pin_absolute_components", forged)
+    with pytest.raises(initializer.LedgerChangedError):
+        initializer._verify_directory(identity)
+
+
 def test_hash_includes_economic_files_and_excludes_fixed_metadata_logs_and_temps(tmp_path: Path) -> None:
     specs = make_specs(tmp_path)
     ledger = specs[0].ledger_dir
