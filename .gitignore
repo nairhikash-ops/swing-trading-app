@@ -22,6 +22,7 @@ data/
 *.sqlite3
 *.db
 *.log
+test-output/
 
 # OS/editor
 .DS_Store
