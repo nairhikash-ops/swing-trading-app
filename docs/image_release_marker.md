@@ -36,14 +36,19 @@ Use them explicitly when rendering or building Compose:
 ```bash
 export MATSYA_DATA_ROOT=/opt/matsya-persistent/data
 export MATSYA_ENV_FILE=/etc/matsya/matsya.env
-docker compose --profile manual -f deploy/matsya-setup/docker-compose.yml config
-docker compose --profile manual -f deploy/matsya-setup/docker-compose.yml build
+deploy/matsya-setup/matsya-compose.sh config
+deploy/matsya-setup/matsya-compose.sh build
 ```
 
 Provisioning `/opt/matsya-persistent/data` and `/etc/matsya/matsya.env`, and
 migrating existing data into the persistent root, are separate controlled
 operational steps. This PR does not provision, copy, migrate, or modify server
 data or secrets.
+
+The wrapper is the supported entrypoint for `config`, `build`, `up`, `run`,
+`down`, and deployment validation. Direct raw `docker compose -f
+deploy/matsya-setup/docker-compose.yml ...` usage is unsupported because it
+bypasses absolute-path and environment-file validation.
 
 The Dockerfile rejects missing or malformed values and writes
 `/app/RELEASE_COMMIT` during image build only. It is a regular root-owned

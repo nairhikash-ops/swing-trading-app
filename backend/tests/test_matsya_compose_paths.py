@@ -13,9 +13,11 @@ SHA = "a" * 40
 
 
 def compose_config(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    clean = {"PATH": os.environ.get("PATH", "")}
+    clean.update(env)
     return subprocess.run(
         ["docker", "compose", "--profile", "manual", "-f", str(COMPOSE), "config"],
-        env={**os.environ, **env}, capture_output=True, text=True, timeout=60,
+        env=clean, capture_output=True, text=True, timeout=60,
     )
 
 
