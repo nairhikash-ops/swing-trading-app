@@ -2,6 +2,8 @@ services:
   matsya-api:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command: ["uvicorn", "app.matsya_api:app", "--host", "0.0.0.0", "--port", "8020"]
     env_file:
       - .env
@@ -30,6 +32,8 @@ services:
   v8-demo-trader:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command:
       - python
       - scripts/run_v8_demo_trader_once.py
@@ -50,6 +54,8 @@ services:
   uptrend-sideways-paper-trader:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command:
       - python
       - scripts/run_uptrend_sideways_paper_trader_once.py
@@ -68,6 +74,8 @@ services:
   matsya-intraday-paper-worker:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command: ["python", "-m", "scripts.matsya_intraday_paper_worker"]
     env_file:
       - .env
@@ -86,6 +94,8 @@ services:
   matsya-renewal-worker:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command: ["python", "-m", "scripts.matsya_renewal_worker"]
     env_file:
       - .env
@@ -98,6 +108,8 @@ services:
   matsya-ohlcv-worker:
     build:
       context: ../../backend
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:?RELEASE_COMMIT must be exported from git rev-parse HEAD}
     command: ["python", "-m", "scripts.matsya_ohlcv_worker"]
     env_file:
       - .env
