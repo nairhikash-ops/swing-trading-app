@@ -46,3 +46,34 @@ GET /api/matsya/market-data/trading-dates?from=YYYY-MM-DD&to=YYYY-MM-DD
 
 It returns dates that actually exist in Matsya OHLCV storage, so weekends and
 exchange holidays are not incorrectly treated as gaps.
+
+## Initialize missing metadata without running a strategy
+
+`initialize_paper_continuity.py` imports only the continuity planner. It never
+imports or invokes either strategy runner. Stop any process that writes the
+paper-ledger directories, preserve and hash both directories, and run the CLI
+without `--write` first:
+
+```bash
+python scripts/initialize_paper_continuity.py \
+  --source-main-sha FULL_DEPLOYED_MAIN_SHA
+```
+
+The dry run must report `v8_demo=invalid_gap` and
+`uptrend_sideways=healthy`. Review the processed dates, missing dates, source
+SHA, calculation time, per-file hashes and aggregate ledger hash. To create
+only the two missing `continuity_status.json` files, repeat the command with
+the exact audit SHA printed by that dry run:
+
+```bash
+python scripts/initialize_paper_continuity.py \
+  --source-main-sha FULL_DEPLOYED_MAIN_SHA \
+  --write \
+  --expected-audit-sha256 AUDIT_SHA_FROM_DRY_RUN
+```
+
+The write is refused if either ledger changes, the current calculation does
+not match the dry-run SHA, the expected statuses differ, or conflicting
+metadata already exists. Writes use a same-directory temporary file, `fsync`,
+and atomic replacement. An identical repeat is a no-op and preserves the
+original calculation timestamp.
