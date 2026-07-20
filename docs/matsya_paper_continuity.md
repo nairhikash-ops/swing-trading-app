@@ -50,13 +50,15 @@ exchange holidays are not incorrectly treated as gaps.
 ## Initialize missing metadata without running a strategy
 
 `initialize_paper_continuity.py` imports only the continuity planner. It never
-imports or invokes either strategy runner. Stop any process that writes the
-paper-ledger directories, preserve and hash both directories, and run the CLI
-without `--write` first:
+imports or invokes a strategy, broker, or order runner. Stop every process that
+can write either paper-ledger directory, preserve and hash both directories,
+and run the CLI without `--write` first. The supplied source SHA must exactly
+match a trusted, read-only release marker from the deployed build:
 
 ```bash
 python scripts/initialize_paper_continuity.py \
-  --source-main-sha FULL_DEPLOYED_MAIN_SHA
+  --source-main-sha FULL_DEPLOYED_MAIN_SHA \
+  --release-marker /app/RELEASE_COMMIT
 ```
 
 The dry run must report `v8_demo=invalid_gap` and
@@ -68,12 +70,34 @@ the exact audit SHA printed by that dry run:
 ```bash
 python scripts/initialize_paper_continuity.py \
   --source-main-sha FULL_DEPLOYED_MAIN_SHA \
+  --release-marker /app/RELEASE_COMMIT \
   --write \
   --expected-audit-sha256 AUDIT_SHA_FROM_DRY_RUN
 ```
 
-The write is refused if either ledger changes, the current calculation does
-not match the dry-run SHA, the expected statuses differ, or conflicting
-metadata already exists. Writes use a same-directory temporary file, `fsync`,
-and atomic replacement. An identical repeat is a no-op and preserves the
-original calculation timestamp.
+Immediately before the commit boundary, the CLI re-fetches market dates,
+rebuilds both audits, and requires the resulting audit SHA to equal the
+approved dry-run SHA. It repeats that validation after the two replacements.
+The write is refused if the release marker, either ledger or its pinned
+directory/file identity, market dates, expected statuses, or approved audit
+changes. Symlink ledger directories, ledger files, metadata files, release
+markers, and transaction journals are refused. Malformed or conflicting
+metadata is never overwritten.
+
+The two metadata replacements form one recoverable group operation. Before
+writing either strategy, the CLI durably records both prior states in a
+transaction journal in the common parent directory. It stages and fsyncs both
+new files, atomically replaces V8 then Uptrend, validates the post-write audit,
+and only then removes and fsyncs the journal. Any ordinary failure restores
+both prior states before reporting failure. A process interruption can leave
+the journal and a partial pair; the next write invocation detects the journal
+and restores both prior states before proceeding.
+Do not delete or edit the journal manually.
+
+Directory fsync failure is an error, not a warning. Recovery is attempted and
+the journal is retained if restoration cannot be proven complete. A successful
+identical repeat is a no-op and preserves the original metadata bytes,
+calculation timestamp, and filesystem modification time. Economic ledger
+CSV/JSON records are read and hashed but never modified; only the two
+`continuity_status.json` files and the transient recovery journal/temp files
+are within the initializer's write set.
