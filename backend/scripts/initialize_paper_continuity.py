@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hashlib
+import io
 import json
 import os
 import re
-import secrets
 import stat
 import sys
 from dataclasses import asdict, dataclass
@@ -14,17 +15,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
-from paper_trader_continuity import build_plan, fetch_latest_date, fetch_trading_dates, read_report_dates
+from paper_trader_continuity import build_plan, fetch_latest_date, fetch_trading_dates
 
 
-DEFAULT_BASE_URL = "http://matsya-api:8020"
-DEFAULT_V8_DIR = Path("/app/data/v8_demo_trader")
-DEFAULT_UPTREND_DIR = Path("/app/data/uptrend_sideways_paper_trader")
-DEFAULT_RELEASE_MARKER = Path("/app/RELEASE_COMMIT")
-SOURCE_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+MATSYA_BASE_URL = "http://matsya-api:8020"
+V8_LEDGER_DIR = Path("/app/data/v8_demo_trader")
+UPTREND_LEDGER_DIR = Path("/app/data/uptrend_sideways_paper_trader")
+RELEASE_MARKER_PATH = Path("/app/RELEASE_COMMIT")
+COORDINATOR_STATE_DIR = Path("/var/lib/matsya-continuity-init")
+
 CONTINUITY_FILENAME = "continuity_status.json"
-TRANSACTION_FILENAME = ".paper-continuity-metadata.transaction.json"
-TRANSACTION_VERSION = 1
+DAILY_REPORT_FILENAME = "daily_report.csv"
+JOURNAL_FILENAME = "continuity-initialization.json"
+JOURNAL_VERSION = 2
+SOURCE_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+STRATEGY_IDS = ("v8_demo", "uptrend_sideways")
 
 
 class ContinuityInitializationError(RuntimeError):
@@ -75,12 +80,6 @@ class ReleaseMarker:
     source_main_sha: str
     device: int
     inode: int
-
-
-@dataclass(frozen=True)
-class InitializationResult:
-    actions: dict[str, str]
-    committed_audit: AuditBundle
 
 
 @dataclass(frozen=True)
@@ -155,8 +154,41 @@ class AuditBundle:
     source_main_sha: str
 
 
+@dataclass(frozen=True)
+class InitializationResult:
+    actions: dict[str, str]
+    committed_audit: AuditBundle
+
+
+@dataclass(frozen=True)
+class JournalTarget:
+    strategy_id: str
+    target_sha256: str
+    target_base64: str
+
+    @property
+    def content(self) -> bytes:
+        try:
+            value = base64.b64decode(self.target_base64, validate=True)
+        except ValueError as exc:
+            raise RecoveryRequiredError("fixed recovery record contains invalid base64") from exc
+        if hashlib.sha256(value).hexdigest() != self.target_sha256:
+            raise RecoveryRequiredError("fixed recovery record target hash mismatch")
+        return value
+
+
+@dataclass(frozen=True)
+class JournalRecord:
+    audit_sha256: str
+    source_main_sha: str
+    created_at: str
+    targets: tuple[JournalTarget, ...]
+
+
 def _pin_directory(path: Path, *, label: str) -> DirectoryIdentity:
     requested = Path(path)
+    if not requested.is_absolute():
+        raise ContinuityInitializationError(f"{label} must be an absolute fixed path")
     try:
         requested_stat = os.lstat(requested)
     except OSError as exc:
@@ -170,9 +202,23 @@ def _pin_directory(path: Path, *, label: str) -> DirectoryIdentity:
     return DirectoryIdentity(str(resolved), resolved_stat.st_dev, resolved_stat.st_ino)
 
 
+def _pin_protected_directory(path: Path, *, label: str) -> DirectoryIdentity:
+    identity = _pin_directory(path, label=label)
+    current = os.stat(identity.path, follow_symlinks=False)
+    if os.name != "nt":
+        if current.st_uid != 0:
+            raise ContinuityInitializationError(f"{label} must be owned by root")
+        if current.st_mode & 0o077:
+            raise ContinuityInitializationError(f"{label} must not grant group or other permissions")
+        parent = _pin_directory(Path(identity.path).parent, label=f"{label} parent")
+        parent_stat = os.stat(parent.path, follow_symlinks=False)
+        if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
+            raise ContinuityInitializationError(f"{label} parent must be root-owned and protected")
+    return identity
+
+
 def _verify_directory(identity: DirectoryIdentity) -> None:
-    current = _pin_directory(Path(identity.path), label="pinned directory")
-    if current != identity:
+    if _pin_directory(Path(identity.path), label="pinned directory") != identity:
         raise LedgerChangedError(f"directory identity changed: {identity.path}")
 
 
@@ -180,7 +226,7 @@ def _open_directory(identity: DirectoryIdentity) -> int | None:
     _verify_directory(identity)
     if os.name == "nt":
         return None
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     descriptor = os.open(identity.path, flags)
     current = os.fstat(descriptor)
     if (current.st_dev, current.st_ino) != (identity.device, identity.inode):
@@ -199,11 +245,59 @@ def _fsync_directory(identity: DirectoryIdentity) -> None:
         os.close(descriptor)
 
 
-def _include_ledger_file(path: Path) -> bool:
-    name = path.name
+def _directory_names(identity: DirectoryIdentity, descriptor: int | None) -> tuple[str, ...]:
+    if descriptor is not None:
+        return tuple(sorted(os.listdir(descriptor)))
+    return tuple(sorted(item.name for item in Path(identity.path).iterdir()))
+
+
+def _stat_relative(identity: DirectoryIdentity, descriptor: int | None, name: str) -> os.stat_result:
+    if descriptor is not None:
+        return os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    return os.stat(Path(identity.path) / name, follow_symlinks=False)
+
+
+def _open_relative_read(identity: DirectoryIdentity, descriptor: int | None, name: str) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    if descriptor is not None:
+        return os.open(name, flags, dir_fd=descriptor)
+    return os.open(Path(identity.path) / name, flags)
+
+
+def _read_opened_file(
+    identity: DirectoryIdentity,
+    descriptor: int | None,
+    name: str,
+    expected: os.stat_result,
+) -> bytes:
+    file_descriptor = _open_relative_read(identity, descriptor, name)
+    try:
+        opened = os.fstat(file_descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ContinuityInitializationError(f"ledger entry must be a regular file: {identity.path}/{name}")
+        if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+            raise LedgerChangedError(f"ledger file identity changed while opening: {identity.path}/{name}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        closed = os.fstat(file_descriptor)
+        if (closed.st_dev, closed.st_ino, closed.st_size) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+        ):
+            raise LedgerChangedError(f"ledger file changed while hashing: {identity.path}/{name}")
+        return b"".join(chunks)
+    finally:
+        os.close(file_descriptor)
+
+
+def _include_economic_file(name: str) -> bool:
     return (
         name != CONTINUITY_FILENAME
-        and not name.startswith(f".{CONTINUITY_FILENAME}.")
         and not name.endswith(".tmp")
         and not name.endswith(".log")
     )
@@ -211,82 +305,101 @@ def _include_ledger_file(path: Path) -> bool:
 
 def snapshot_ledger(directory: Path) -> LedgerSnapshot:
     identity = _pin_directory(directory, label="ledger directory")
-    resolved = Path(identity.path)
-    report = resolved / "daily_report.csv"
-    if not report.is_file():
-        raise ContinuityInitializationError(f"daily report does not exist: {report}")
-
-    evidence: list[FileIdentity] = []
-    aggregate = hashlib.sha256()
-    for path in sorted(resolved.iterdir(), key=lambda item: item.name):
-        file_stat = os.lstat(path)
-        if stat.S_ISLNK(file_stat.st_mode):
-            raise ContinuityInitializationError(f"ledger entries must not be symlinks: {path}")
-        if not stat.S_ISREG(file_stat.st_mode) or not _include_ledger_file(path):
-            continue
-        digest = hashlib.sha256()
-        size = 0
-        with path.open("rb") as handle:
-            opened = os.fstat(handle.fileno())
-            if (opened.st_dev, opened.st_ino) != (file_stat.st_dev, file_stat.st_ino):
-                raise LedgerChangedError(f"ledger file identity changed while opening: {path}")
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-                size += len(chunk)
-            closed = os.fstat(handle.fileno())
-            if (closed.st_dev, closed.st_ino, closed.st_size) != (
-                opened.st_dev,
-                opened.st_ino,
-                opened.st_size,
-            ):
-                raise LedgerChangedError(f"ledger file changed while hashing: {path}")
-        item = FileIdentity(path.name, digest.hexdigest(), size, file_stat.st_dev, file_stat.st_ino)
-        evidence.append(item)
-        aggregate.update(json.dumps(asdict(item), sort_keys=True, separators=(",", ":")).encode("utf-8"))
-        aggregate.update(b"\n")
+    descriptor = _open_directory(identity)
+    try:
+        names_before = _directory_names(identity, descriptor)
+        if DAILY_REPORT_FILENAME not in names_before:
+            raise ContinuityInitializationError(f"daily report does not exist: {identity.path}/{DAILY_REPORT_FILENAME}")
+        evidence: list[FileIdentity] = []
+        aggregate = hashlib.sha256()
+        for name in names_before:
+            file_stat = _stat_relative(identity, descriptor, name)
+            if stat.S_ISLNK(file_stat.st_mode):
+                raise ContinuityInitializationError(f"ledger entries must not be symlinks: {identity.path}/{name}")
+            if not stat.S_ISREG(file_stat.st_mode) or not _include_economic_file(name):
+                continue
+            content = _read_opened_file(identity, descriptor, name, file_stat)
+            item = FileIdentity(
+                name,
+                hashlib.sha256(content).hexdigest(),
+                len(content),
+                file_stat.st_dev,
+                file_stat.st_ino,
+            )
+            evidence.append(item)
+            aggregate.update(json.dumps(asdict(item), sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            aggregate.update(b"\n")
+        if _directory_names(identity, descriptor) != names_before:
+            raise LedgerChangedError(f"ledger directory entries changed while hashing: {identity.path}")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     _verify_directory(identity)
     return LedgerSnapshot(aggregate.hexdigest(), identity, tuple(evidence))
 
 
-def read_release_marker(path: Path, *, expected_source_main_sha: str) -> ReleaseMarker:
-    marker = Path(path)
+def _read_daily_report_dates(identity: DirectoryIdentity) -> list[str]:
+    descriptor = _open_directory(identity)
+    try:
+        report_stat = _stat_relative(identity, descriptor, DAILY_REPORT_FILENAME)
+        if stat.S_ISLNK(report_stat.st_mode) or not stat.S_ISREG(report_stat.st_mode):
+            raise ContinuityInitializationError("daily report must be a regular non-symlink file")
+        content = _read_opened_file(identity, descriptor, DAILY_REPORT_FILENAME, report_stat)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    text = content.decode("utf-8")
+    return [str(row["date"]) for row in csv.DictReader(io.StringIO(text)) if row.get("date")]
+
+
+def _validate_marker_parent(path: Path) -> None:
+    parent = _pin_directory(path.parent, label="release marker parent")
+    current = os.stat(parent.path, follow_symlinks=False)
+    if os.name != "nt":
+        if current.st_uid != 0 or current.st_mode & 0o022:
+            raise ContinuityInitializationError("fixed release marker parent is not build-owned and protected")
+
+
+def read_release_marker() -> ReleaseMarker:
+    marker = RELEASE_MARKER_PATH
+    if not marker.is_absolute():
+        raise ContinuityInitializationError("release marker path must be an absolute fixed path")
+    _validate_marker_parent(marker)
     marker_stat = os.lstat(marker)
     if stat.S_ISLNK(marker_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
-        raise ContinuityInitializationError(f"release marker must be a regular non-symlink file: {marker}")
-    # Windows does not implement Unix group/world permission bits faithfully.
-    # The deployed runtime is Linux, where a mutable release marker is refused.
-    if os.name != "nt" and marker_stat.st_mode & 0o022:
-        raise ContinuityInitializationError(f"release marker must not be group/world writable: {marker}")
+        raise ContinuityInitializationError("fixed release marker must be a regular non-symlink file")
+    if os.name != "nt":
+        if marker_stat.st_uid != 0:
+            raise ContinuityInitializationError("fixed release marker must be owned by root")
+        if marker_stat.st_mode & 0o022:
+            raise ContinuityInitializationError("fixed release marker must not be group/world writable")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(marker, flags)
     try:
         opened = os.fstat(descriptor)
         if (opened.st_dev, opened.st_ino) != (marker_stat.st_dev, marker_stat.st_ino):
-            raise ContinuityInitializationError("trusted release marker identity changed while opening")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = -1
-            value = handle.read().strip()
-            closed = os.fstat(handle.fileno())
-            if (closed.st_dev, closed.st_ino, closed.st_size) != (
-                opened.st_dev,
-                opened.st_ino,
-                opened.st_size,
-            ):
-                raise ContinuityInitializationError("trusted release marker changed while reading")
+            raise ContinuityInitializationError("fixed release marker identity changed while opening")
+        content = b""
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            content += chunk
+        closed = os.fstat(descriptor)
+        if (closed.st_dev, closed.st_ino, closed.st_size) != (opened.st_dev, opened.st_ino, opened.st_size):
+            raise ContinuityInitializationError("fixed release marker changed while reading")
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if value != expected_source_main_sha:
-        raise ContinuityInitializationError(
-            f"source main SHA does not match trusted release marker: expected {expected_source_main_sha}, found {value}"
-        )
+        os.close(descriptor)
+    value = content.decode("ascii").strip()
+    if not SOURCE_SHA_PATTERN.fullmatch(value):
+        raise ContinuityInitializationError("fixed release marker does not contain an exact commit SHA")
     return ReleaseMarker(str(marker.resolve(strict=True)), value, marker_stat.st_dev, marker_stat.st_ino)
 
 
 def verify_release_marker(marker: ReleaseMarker) -> None:
-    current = read_release_marker(Path(marker.path), expected_source_main_sha=marker.source_main_sha)
+    current = read_release_marker()
     if current != marker:
-        raise ContinuityInitializationError("trusted release marker identity changed")
+        raise ContinuityInitializationError("fixed release marker identity or content changed")
 
 
 def audit_strategy(
@@ -298,7 +411,7 @@ def audit_strategy(
     calculated_at: str,
 ) -> StrategyAudit:
     before = snapshot_ledger(spec.ledger_dir)
-    processed = read_report_dates(Path(before.directory.path) / "daily_report.csv")
+    processed = _read_daily_report_dates(before.directory)
     start = min(processed) if processed else latest_market_date
     available = tuple(str(value) for value in load_available_dates(start, latest_market_date))
     plan = build_plan(processed, list(available))
@@ -338,7 +451,7 @@ def build_audit_bundle(
     calculated_at: str | None = None,
 ) -> AuditBundle:
     if not SOURCE_SHA_PATTERN.fullmatch(source_main_sha):
-        raise ContinuityInitializationError("source main SHA must be exactly 40 lowercase hexadecimal characters")
+        raise ContinuityInitializationError("source main SHA must come from the fixed release marker")
     timestamp = calculated_at or datetime.now(timezone.utc).isoformat()
     audits = tuple(
         audit_strategy(
@@ -350,215 +463,121 @@ def build_audit_bundle(
         )
         for spec in specs
     )
+    if tuple(audit.spec.strategy_id for audit in audits) != STRATEGY_IDS:
+        raise ContinuityInitializationError("initializer supports only the fixed V8 and Uptrend strategy pair")
     stable = {"source_main_sha": source_main_sha, "strategies": [item.stable_evidence() for item in audits]}
     digest = hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     return AuditBundle(audits, digest.hexdigest(), timestamp, source_main_sha)
 
 
-def _read_relative(identity: DirectoryIdentity, name: str) -> bytes | None:
-    directory_descriptor = _open_directory(identity)
-    path = Path(identity.path) / name
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_fixed_file(identity: DirectoryIdentity, filename: str) -> bytes | None:
+    descriptor = _open_directory(identity)
     try:
         try:
-            if directory_descriptor is not None:
-                descriptor = os.open(name, flags, dir_fd=directory_descriptor)
-            else:
-                descriptor = os.open(path, flags)
+            file_stat = _stat_relative(identity, descriptor, filename)
         except FileNotFoundError:
             return None
-        try:
-            opened = os.fstat(descriptor)
-            if not stat.S_ISREG(opened.st_mode):
-                raise ContinuityInitializationError(f"metadata entry must be a regular non-symlink file: {path}")
-            with os.fdopen(descriptor, "rb") as handle:
-                descriptor = -1
-                content = handle.read()
-                closed = os.fstat(handle.fileno())
-                if (closed.st_dev, closed.st_ino, closed.st_size) != (
-                    opened.st_dev,
-                    opened.st_ino,
-                    opened.st_size,
-                ):
-                    raise LedgerChangedError(f"metadata entry changed while reading: {path}")
-                return content
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
+        if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+            raise ContinuityInitializationError(f"fixed state file must be regular and non-symlink: {filename}")
+        return _read_opened_file(identity, descriptor, filename, file_stat)
     finally:
-        if directory_descriptor is not None:
-            os.close(directory_descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
 
 
-def _stage_bytes(identity: DirectoryIdentity, name: str, payload: bytes) -> None:
+def _read_metadata(identity: DirectoryIdentity) -> bytes | None:
+    return _read_fixed_file(identity, CONTINUITY_FILENAME)
+
+
+def _read_journal(identity: DirectoryIdentity) -> bytes | None:
+    return _read_fixed_file(identity, JOURNAL_FILENAME)
+
+
+def _create_fixed_file(identity: DirectoryIdentity, filename: str, payload: bytes) -> None:
     descriptor = _open_directory(identity)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    if descriptor is not None:
-        file_descriptor = os.open(name, flags, 0o600, dir_fd=descriptor)
-    else:
-        file_descriptor = os.open(Path(identity.path) / name, flags, 0o600)
-    try:
-        with os.fdopen(file_descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_directory(identity)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _replace_relative(identity: DirectoryIdentity, source: str, destination: str) -> None:
-    descriptor = _open_directory(identity)
     try:
         if descriptor is not None:
-            os.replace(source, destination, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+            file_descriptor = os.open(filename, flags, 0o600, dir_fd=descriptor)
         else:
-            os.replace(Path(identity.path) / source, Path(identity.path) / destination)
-        _fsync_directory(identity)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _remove_relative(identity: DirectoryIdentity, name: str) -> None:
-    descriptor = _open_directory(identity)
-    try:
+            file_descriptor = os.open(Path(identity.path) / filename, flags, 0o600)
         try:
-            if descriptor is not None:
-                os.unlink(name, dir_fd=descriptor)
-            else:
-                (Path(identity.path) / name).unlink()
-        except FileNotFoundError:
-            return
+            view = memoryview(payload)
+            while view:
+                written = os.write(file_descriptor, view)
+                if written <= 0:
+                    raise OSError("fixed state file write made no progress")
+                view = view[written:]
+            os.fsync(file_descriptor)
+        finally:
+            os.close(file_descriptor)
         _fsync_directory(identity)
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
-def _atomic_write_bytes(identity: DirectoryIdentity, destination: str, payload: bytes) -> None:
-    temporary = f".{destination}.{secrets.token_hex(12)}.tmp"
-    _stage_bytes(identity, temporary, payload)
-    try:
-        _replace_relative(identity, temporary, destination)
-    finally:
-        _remove_relative(identity, temporary)
+def _create_metadata(identity: DirectoryIdentity, payload: bytes) -> None:
+    _create_fixed_file(identity, CONTINUITY_FILENAME, payload)
 
 
-def _coordinator_identity(bundle: AuditBundle) -> DirectoryIdentity:
-    parents = {str(Path(audit.ledger.directory.path).parent) for audit in bundle.audits}
-    if len(parents) != 1:
-        raise ContinuityInitializationError("V8 and Uptrend ledger directories must share one parent")
-    return _pin_directory(Path(next(iter(parents))), label="transaction coordinator directory")
+def _create_journal(identity: DirectoryIdentity, payload: bytes) -> None:
+    _create_fixed_file(identity, JOURNAL_FILENAME, payload)
 
 
-def _stable_metadata(payload: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in payload.items() if key not in {"checked_at", "calculated_at"}}
+def _target_bytes(audit: StrategyAudit) -> bytes:
+    return (json.dumps(audit.metadata_payload(), indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def _metadata_action(audit: StrategyAudit) -> str:
-    content = _read_relative(audit.ledger.directory, CONTINUITY_FILENAME)
-    if content is None:
-        return "create"
-    try:
-        existing = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ContinuityInitializationError(
-            f"invalid existing metadata: {audit.ledger.directory.path}/{CONTINUITY_FILENAME}"
-        ) from exc
-    if _stable_metadata(existing) == _stable_metadata(audit.metadata_payload()):
-        return "unchanged"
-    raise ContinuityInitializationError(
-        f"conflicting continuity metadata exists: {audit.ledger.directory.path}/{CONTINUITY_FILENAME}"
-    )
-
-
-def _transaction_payload(bundle: AuditBundle, actions: dict[str, str]) -> tuple[dict[str, object], dict[str, bytes]]:
-    staged: dict[str, bytes] = {}
-    entries: list[dict[str, object]] = []
-    for audit in bundle.audits:
-        prior = _read_relative(audit.ledger.directory, CONTINUITY_FILENAME)
-        target = (json.dumps(audit.metadata_payload(), indent=2, sort_keys=True) + "\n").encode("utf-8")
-        temporary = f".{CONTINUITY_FILENAME}.{secrets.token_hex(12)}.tmp"
-        staged[audit.spec.strategy_id] = target
-        entries.append(
+def _journal_bytes(bundle: AuditBundle, targets: dict[str, bytes]) -> bytes:
+    record = {
+        "version": JOURNAL_VERSION,
+        "audit_sha256": bundle.audit_sha256,
+        "source_main_sha": bundle.source_main_sha,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "targets": [
             {
-                "strategy_id": audit.spec.strategy_id,
-                "directory": asdict(audit.ledger.directory),
-                "action": actions[audit.spec.strategy_id],
-                "prior_exists": prior is not None,
-                "prior_base64": base64.b64encode(prior or b"").decode("ascii"),
-                "prior_sha256": hashlib.sha256(prior or b"").hexdigest(),
-                "target_sha256": hashlib.sha256(target).hexdigest(),
-                "temporary": temporary,
+                "strategy_id": strategy_id,
+                "target_sha256": hashlib.sha256(targets[strategy_id]).hexdigest(),
+                "target_base64": base64.b64encode(targets[strategy_id]).decode("ascii"),
             }
-        )
-    return (
-        {
-            "version": TRANSACTION_VERSION,
-            "audit_sha256": bundle.audit_sha256,
-            "source_main_sha": bundle.source_main_sha,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "entries": entries,
-        },
-        staged,
-    )
-
-
-def _decode_identity(value: dict[str, object]) -> DirectoryIdentity:
-    return DirectoryIdentity(str(value["path"]), int(value["device"]), int(value["inode"]))
-
-
-def recover_interrupted_transaction(bundle: AuditBundle) -> bool:
-    coordinator = _coordinator_identity(bundle)
-    raw = _read_relative(coordinator, TRANSACTION_FILENAME)
-    if raw is None:
-        return False
-    try:
-        journal = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RecoveryRequiredError(f"invalid recovery journal: {coordinator.path}/{TRANSACTION_FILENAME}") from exc
-    if journal.get("version") != TRANSACTION_VERSION:
-        raise RecoveryRequiredError("unsupported continuity recovery journal version")
-    if journal.get("source_main_sha") != bundle.source_main_sha:
-        raise RecoveryRequiredError("continuity recovery journal belongs to a different source release")
-    entries = journal.get("entries")
-    if not isinstance(entries, list) or len(entries) != len(bundle.audits):
-        raise RecoveryRequiredError("continuity recovery journal has invalid entries")
-
-    expected_directories = {
-        audit.spec.strategy_id: audit.ledger.directory for audit in bundle.audits
+            for strategy_id in STRATEGY_IDS
+        ],
     }
-    journal_ids = [str(entry.get("strategy_id")) for entry in entries if isinstance(entry, dict)]
-    if len(journal_ids) != len(entries) or set(journal_ids) != set(expected_directories):
-        raise RecoveryRequiredError("continuity recovery journal has unexpected strategy entries")
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
-    decoded: list[tuple[dict[str, object], DirectoryIdentity, bytes | None, bytes | None]] = []
-    for entry in entries:
-        identity = _decode_identity(entry["directory"])
-        strategy_id = str(entry["strategy_id"])
-        if identity != expected_directories[strategy_id]:
-            raise RecoveryRequiredError(f"continuity recovery journal directory mismatch for {strategy_id}")
-        _verify_directory(identity)
-        prior = base64.b64decode(str(entry["prior_base64"]), validate=True) if entry["prior_exists"] else None
-        current = _read_relative(identity, CONTINUITY_FILENAME)
-        current_hash = hashlib.sha256(current or b"").hexdigest()
-        allowed = {str(entry["prior_sha256"]), str(entry["target_sha256"])}
-        if current_hash not in allowed:
-            raise RecoveryRequiredError(
-                f"metadata changed outside interrupted transaction: {identity.path}/{CONTINUITY_FILENAME}"
-            )
-        decoded.append((entry, identity, prior, current))
 
-    for entry, identity, prior, _current in decoded:
-        if prior is None:
-            _remove_relative(identity, CONTINUITY_FILENAME)
-        else:
-            _atomic_write_bytes(identity, CONTINUITY_FILENAME, prior)
-        _remove_relative(identity, str(entry["temporary"]))
-    _remove_relative(coordinator, TRANSACTION_FILENAME)
-    return True
+def _parse_journal(raw: bytes) -> JournalRecord:
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RecoveryRequiredError("fixed recovery record is malformed") from exc
+    expected_keys = {"version", "audit_sha256", "source_main_sha", "created_at", "targets"}
+    if not isinstance(value, dict) or set(value) != expected_keys or value["version"] != JOURNAL_VERSION:
+        raise RecoveryRequiredError("fixed recovery record has an invalid schema")
+    raw_targets = value["targets"]
+    if not isinstance(raw_targets, list) or len(raw_targets) != len(STRATEGY_IDS):
+        raise RecoveryRequiredError("fixed recovery record has invalid targets")
+    targets: list[JournalTarget] = []
+    target_keys = {"strategy_id", "target_sha256", "target_base64"}
+    for raw_target in raw_targets:
+        if not isinstance(raw_target, dict) or set(raw_target) != target_keys:
+            raise RecoveryRequiredError("fixed recovery record target schema is invalid")
+        target = JournalTarget(
+            str(raw_target["strategy_id"]),
+            str(raw_target["target_sha256"]),
+            str(raw_target["target_base64"]),
+        )
+        target.content
+        targets.append(target)
+    if tuple(target.strategy_id for target in targets) != STRATEGY_IDS:
+        raise RecoveryRequiredError("fixed recovery record strategy order is invalid")
+    return JournalRecord(
+        str(value["audit_sha256"]),
+        str(value["source_main_sha"]),
+        str(value["created_at"]),
+        tuple(targets),
+    )
 
 
 def _assert_bundle_current(bundle: AuditBundle) -> None:
@@ -567,71 +586,92 @@ def _assert_bundle_current(bundle: AuditBundle) -> None:
             raise LedgerChangedError(f"{audit.spec.strategy_id} ledger changed at write boundary")
 
 
+def _fixed_coordinator() -> DirectoryIdentity:
+    return _pin_protected_directory(COORDINATOR_STATE_DIR, label="fixed coordinator state directory")
+
+
+def _existing_target_state(bundle: AuditBundle, record: JournalRecord) -> dict[str, str]:
+    expected = {target.strategy_id: target.content for target in record.targets}
+    states: dict[str, str] = {}
+    for audit in bundle.audits:
+        current = _read_metadata(audit.ledger.directory)
+        if current is None:
+            states[audit.spec.strategy_id] = "absent"
+        elif current == expected[audit.spec.strategy_id]:
+            states[audit.spec.strategy_id] = "exact"
+        else:
+            states[audit.spec.strategy_id] = "unexpected"
+    return states
+
+
 def initialize_metadata(
     bundle: AuditBundle,
     *,
     expected_audit_sha256: str,
     trusted_marker: ReleaseMarker,
     refresh_audit: Callable[[], AuditBundle],
-    after_replace: Callable[[str, int], None] | None = None,
+    after_create: Callable[[str, int], None] | None = None,
 ) -> InitializationResult:
     if expected_audit_sha256 != bundle.audit_sha256:
-        raise ContinuityInitializationError("expected audit SHA does not match current evidence")
+        raise ContinuityInitializationError("expected audit SHA does not match the approved dry run")
     verify_release_marker(trusted_marker)
-    recovered = recover_interrupted_transaction(bundle)
+    coordinator = _fixed_coordinator()
+    existing_journal = _read_journal(coordinator)
+    if existing_journal is not None:
+        record = _parse_journal(existing_journal)
+        if record.source_main_sha != trusted_marker.source_main_sha or record.audit_sha256 != expected_audit_sha256:
+            raise RecoveryRequiredError("fixed recovery record belongs to different approved evidence")
+        refreshed = refresh_audit()
+        if refreshed.audit_sha256 != expected_audit_sha256:
+            raise RecoveryRequiredError("current market/ledger evidence differs from the fixed recovery record")
+        states = _existing_target_state(refreshed, record)
+        if set(states.values()) == {"exact"}:
+            for audit in refreshed.audits:
+                _fsync_directory(audit.ledger.directory)
+            _fsync_directory(coordinator)
+            return InitializationResult({strategy_id: "unchanged" for strategy_id in STRATEGY_IDS}, refreshed)
+        raise RecoveryRequiredError(
+            "interrupted or inconsistent create-only initialization; fixed recovery record retained; "
+            f"explicit operator recovery required: {states}"
+        )
 
     refreshed = refresh_audit()
     if refreshed.audit_sha256 != expected_audit_sha256:
         raise ContinuityInitializationError("write-boundary market/ledger audit differs from approved dry run")
     verify_release_marker(trusted_marker)
     _assert_bundle_current(refreshed)
-    actions = {audit.spec.strategy_id: _metadata_action(audit) for audit in refreshed.audits}
-    unique_actions = set(actions.values())
-    if unique_actions == {"unchanged"}:
-        return InitializationResult(actions, refreshed)
-    if unique_actions != {"create"}:
-        reason = " after interrupted-transaction recovery" if recovered else ""
-        raise RecoveryRequiredError(f"partial continuity metadata state{reason}; refusing unjournaled completion")
+    if any(_read_metadata(audit.ledger.directory) is not None for audit in refreshed.audits):
+        raise ContinuityInitializationError("create-only initialization requires both metadata files to be absent")
 
-    coordinator = _coordinator_identity(refreshed)
-    journal, staged = _transaction_payload(refreshed, actions)
-    journal_bytes = (json.dumps(journal, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    if _read_relative(coordinator, TRANSACTION_FILENAME) is not None:
-        raise RecoveryRequiredError("continuity transaction journal already exists")
-    _atomic_write_bytes(coordinator, TRANSACTION_FILENAME, journal_bytes)
+    targets = {audit.spec.strategy_id: _target_bytes(audit) for audit in refreshed.audits}
+    _create_journal(coordinator, _journal_bytes(refreshed, targets))
 
-    try:
-        for entry in journal["entries"]:
-            identity = _decode_identity(entry["directory"])
-            strategy_id = str(entry["strategy_id"])
-            _stage_bytes(identity, str(entry["temporary"]), staged[strategy_id])
-        verify_release_marker(trusted_marker)
-        final_boundary = refresh_audit()
-        if final_boundary.audit_sha256 != expected_audit_sha256:
-            raise ContinuityInitializationError("market/ledger evidence changed before metadata commit")
-        _assert_bundle_current(final_boundary)
-        for index, entry in enumerate(journal["entries"]):
-            identity = _decode_identity(entry["directory"])
-            strategy_id = str(entry["strategy_id"])
-            _replace_relative(identity, str(entry["temporary"]), CONTINUITY_FILENAME)
-            if after_replace is not None:
-                after_replace(strategy_id, index)
-        verify_release_marker(trusted_marker)
-        post_write = refresh_audit()
-        if post_write.audit_sha256 != expected_audit_sha256:
-            raise ContinuityInitializationError("market/ledger evidence changed during metadata commit")
-        _assert_bundle_current(post_write)
-        _remove_relative(coordinator, TRANSACTION_FILENAME)
-        return InitializationResult(actions, refreshed)
-    except Exception:
-        try:
-            recover_interrupted_transaction(refreshed)
-        except Exception as recovery_exc:
+    final_boundary = refresh_audit()
+    if final_boundary.audit_sha256 != expected_audit_sha256:
+        raise RecoveryRequiredError("market/ledger evidence changed after durable recovery record creation")
+    verify_release_marker(trusted_marker)
+    _assert_bundle_current(final_boundary)
+    for index, audit in enumerate(final_boundary.audits):
+        if _read_metadata(audit.ledger.directory) is not None:
             raise RecoveryRequiredError(
-                f"metadata initialization failed and automatic recovery is incomplete; journal retained at "
-                f"{coordinator.path}/{TRANSACTION_FILENAME}: {recovery_exc}"
-            ) from recovery_exc
-        raise
+                f"concurrent metadata creation detected for {audit.spec.strategy_id}; recovery record retained"
+            )
+        _create_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+        if after_create is not None:
+            after_create(audit.spec.strategy_id, index)
+
+    verify_release_marker(trusted_marker)
+    post_write = refresh_audit()
+    if post_write.audit_sha256 != expected_audit_sha256:
+        raise RecoveryRequiredError("market/ledger evidence changed after metadata creation; recovery record retained")
+    _assert_bundle_current(post_write)
+    record = _parse_journal(_read_journal(coordinator) or b"")
+    if set(_existing_target_state(post_write, record).values()) != {"exact"}:
+        raise RecoveryRequiredError("post-create metadata validation failed; recovery record retained")
+    for audit in post_write.audits:
+        _fsync_directory(audit.ledger.directory)
+    _fsync_directory(coordinator)
+    return InitializationResult({strategy_id: "create" for strategy_id in STRATEGY_IDS}, refreshed)
 
 
 def public_result(bundle: AuditBundle, *, mode: str, actions: dict[str, str] | None = None) -> dict[str, object]:
@@ -640,11 +680,16 @@ def public_result(bundle: AuditBundle, *, mode: str, actions: dict[str, str] | N
         "audit_sha256": bundle.audit_sha256,
         "calculated_at": bundle.calculated_at,
         "source_main_sha": bundle.source_main_sha,
+        "fixed_release_marker": str(RELEASE_MARKER_PATH),
+        "fixed_coordinator_state": str(COORDINATOR_STATE_DIR),
         "strategies": [
             {
                 **audit.stable_evidence(),
                 "calculated_at": audit.calculated_at,
-                "metadata_action": (actions or {}).get(audit.spec.strategy_id, _metadata_action(audit)),
+                "metadata_action": (actions or {}).get(
+                    audit.spec.strategy_id,
+                    "create" if _read_metadata(audit.ledger.directory) is None else "present",
+                ),
             }
             for audit in bundle.audits
         ],
@@ -653,14 +698,9 @@ def public_result(bundle: AuditBundle, *, mode: str, actions: dict[str, str] | N
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit and initialize paper-ledger continuity metadata without running strategy logic."
+        description="Audit and create fixed paper-ledger continuity metadata without strategy execution."
     )
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--v8-dir", type=Path, default=DEFAULT_V8_DIR)
-    parser.add_argument("--uptrend-dir", type=Path, default=DEFAULT_UPTREND_DIR)
-    parser.add_argument("--source-main-sha", required=True)
-    parser.add_argument("--release-marker", type=Path, default=DEFAULT_RELEASE_MARKER)
-    parser.add_argument("--write", action="store_true", help="Commit missing metadata after a matching dry run.")
+    parser.add_argument("--write", action="store_true", help="Create both missing fixed metadata files.")
     parser.add_argument("--expected-audit-sha256", help="Required with --write; copy from the preceding dry run.")
     args = parser.parse_args(argv)
     if args.write and not args.expected_audit_sha256:
@@ -673,21 +713,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     specs = (
-        StrategySpec("v8_demo", args.v8_dir, "invalid_gap"),
-        StrategySpec("uptrend_sideways", args.uptrend_dir, "healthy"),
+        StrategySpec("v8_demo", V8_LEDGER_DIR, "invalid_gap"),
+        StrategySpec("uptrend_sideways", UPTREND_LEDGER_DIR, "healthy"),
     )
-
-    def current_audit() -> AuditBundle:
-        latest = fetch_latest_date(args.base_url)
-        return build_audit_bundle(
-            specs,
-            latest_market_date=latest,
-            load_available_dates=lambda start, end: fetch_trading_dates(args.base_url, start, end),
-            source_main_sha=args.source_main_sha,
-        )
-
     try:
-        marker = read_release_marker(args.release_marker, expected_source_main_sha=args.source_main_sha)
+        marker = read_release_marker()
+
+        def current_audit() -> AuditBundle:
+            latest = fetch_latest_date(MATSYA_BASE_URL)
+            return build_audit_bundle(
+                specs,
+                latest_market_date=latest,
+                load_available_dates=lambda start, end: fetch_trading_dates(MATSYA_BASE_URL, start, end),
+                source_main_sha=marker.source_main_sha,
+            )
+
         bundle = current_audit()
         if args.write:
             initialization = initialize_metadata(

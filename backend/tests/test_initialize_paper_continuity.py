@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import ast
 import csv
+import hashlib
 import json
 import os
 import stat
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable
 
 import pytest
@@ -43,8 +44,8 @@ def write_report(directory: Path, dates: list[str]) -> None:
 
 
 def make_specs(tmp_path: Path) -> tuple[initializer.StrategySpec, initializer.StrategySpec]:
-    v8_dir = tmp_path / "v8"
-    uptrend_dir = tmp_path / "uptrend"
+    v8_dir = tmp_path / "ledgers" / "v8"
+    uptrend_dir = tmp_path / "ledgers" / "uptrend"
     write_report(v8_dir, V8_DATES)
     write_report(uptrend_dir, UPTREND_DATES)
     return (
@@ -53,11 +54,25 @@ def make_specs(tmp_path: Path) -> tuple[initializer.StrategySpec, initializer.St
     )
 
 
-def write_marker(tmp_path: Path, value: str = SOURCE_MAIN_SHA) -> Path:
-    marker = tmp_path / "RELEASE_COMMIT"
-    marker.write_text(value + "\n", encoding="utf-8")
+def configure_fixed_state(
+    tmp_path: Path,
+    specs: tuple[initializer.StrategySpec, initializer.StrategySpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    release_dir = tmp_path / "protected-release"
+    release_dir.mkdir(mode=0o700)
+    release_dir.chmod(0o700)
+    marker = release_dir / "RELEASE_COMMIT"
+    marker.write_text(SOURCE_MAIN_SHA + "\n", encoding="ascii")
     marker.chmod(0o644)
-    return marker
+    coordinator = tmp_path / "protected-coordinator"
+    coordinator.mkdir(mode=0o700)
+    coordinator.chmod(0o700)
+    monkeypatch.setattr(initializer, "RELEASE_MARKER_PATH", marker)
+    monkeypatch.setattr(initializer, "COORDINATOR_STATE_DIR", coordinator)
+    monkeypatch.setattr(initializer, "V8_LEDGER_DIR", specs[0].ledger_dir)
+    monkeypatch.setattr(initializer, "UPTREND_LEDGER_DIR", specs[1].ledger_dir)
+    return marker, coordinator
 
 
 def build_bundle(
@@ -78,50 +93,86 @@ def build_bundle(
 
 def initialize(
     bundle: initializer.AuditBundle,
-    marker_path: Path,
     *,
     refresh: Callable[[], initializer.AuditBundle] | None = None,
-    after_replace: Callable[[str, int], None] | None = None,
-) -> dict[str, str]:
-    marker = initializer.read_release_marker(marker_path, expected_source_main_sha=SOURCE_MAIN_SHA)
+    after_create: Callable[[str, int], None] | None = None,
+) -> initializer.InitializationResult:
+    marker = initializer.read_release_marker()
     return initializer.initialize_metadata(
         bundle,
         expected_audit_sha256=bundle.audit_sha256,
         trusted_marker=marker,
         refresh_audit=refresh or (lambda: build_bundle(tuple(item.spec for item in bundle.audits))),
-        after_replace=after_replace,
-    ).actions
+        after_create=after_create,
+    )
 
 
-def transaction_path(specs: tuple[initializer.StrategySpec, initializer.StrategySpec]) -> Path:
-    return specs[0].ledger_dir.parent / initializer.TRANSACTION_FILENAME
+def journal_path(coordinator: Path) -> Path:
+    return coordinator / initializer.JOURNAL_FILENAME
 
 
-def test_missing_metadata_is_dry_run_only_by_default(tmp_path: Path) -> None:
+def metadata_paths(
+    specs: tuple[initializer.StrategySpec, initializer.StrategySpec],
+) -> list[Path]:
+    return [spec.ledger_dir / initializer.CONTINUITY_FILENAME for spec in specs]
+
+
+def economic_identity(specs: tuple[initializer.StrategySpec, initializer.StrategySpec]) -> dict[str, tuple[int, int, str]]:
+    result: dict[str, tuple[int, int, str]] = {}
+    for spec in specs:
+        for path in spec.ledger_dir.iterdir():
+            if path.name == initializer.CONTINUITY_FILENAME:
+                continue
+            file_stat = path.stat()
+            result[str(path)] = (file_stat.st_dev, file_stat.st_ino, hashlib.sha256(path.read_bytes()).hexdigest())
+    return result
+
+
+def test_dry_run_uses_fixed_paths_and_never_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     result = initializer.public_result(build_bundle(specs), mode="dry-run")
 
     assert result["mode"] == "dry-run"
     assert [item["metadata_action"] for item in result["strategies"]] == ["create", "create"]
-    assert not list(tmp_path.rglob("continuity_status.json"))
+    assert not journal_path(coordinator).exists()
+    assert not any(path.exists() for path in metadata_paths(specs))
     with pytest.raises(SystemExit):
-        initializer.parse_args(["--source-main-sha", SOURCE_MAIN_SHA, "--write"])
+        initializer.parse_args(["--release-marker", str(tmp_path / "forged")])
+    with pytest.raises(SystemExit):
+        initializer.parse_args(["--coordinator-dir", str(tmp_path / "forged")])
 
 
 def test_v8_gap_and_healthy_uptrend_use_production_plan(tmp_path: Path) -> None:
     v8, uptrend = build_bundle(make_specs(tmp_path)).audits
 
     assert (v8.status, v8.forward_valid) == ("invalid_gap", False)
-    assert list(v8.processed_dates) == V8_DATES
     assert list(v8.missing_dates) == TRADING_DATES[3:-1]
     assert (uptrend.status, uptrend.forward_valid) == ("healthy", True)
-    assert list(uptrend.processed_dates) == UPTREND_DATES
     assert uptrend.missing_dates == uptrend.run_dates == ()
 
 
-def test_market_dates_changing_at_write_boundary_are_refused(tmp_path: Path) -> None:
+def test_success_retains_journal_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     specs = make_specs(tmp_path)
-    initial = build_bundle(specs)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    bundle = build_bundle(specs)
+
+    first = initialize(bundle)
+    original = [(path.read_bytes(), path.stat().st_mtime_ns) for path in metadata_paths(specs)]
+    repeated = initialize(build_bundle(specs, calculated_at="2026-07-20T13:00:00+00:00"))
+
+    assert first.actions == {"v8_demo": "create", "uptrend_sideways": "create"}
+    assert repeated.actions == {"v8_demo": "unchanged", "uptrend_sideways": "unchanged"}
+    assert journal_path(coordinator).exists()
+    assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in metadata_paths(specs)] == original
+
+
+def test_stale_market_dates_after_journal_creation_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    bundle = build_bundle(specs)
     calls = 0
 
     def mutable_refresh() -> initializer.AuditBundle:
@@ -137,29 +188,40 @@ def test_market_dates_changing_at_write_boundary_are_refused(tmp_path: Path) -> 
         )
 
     with pytest.raises(initializer.ContinuityInitializationError):
-        initialize(initial, write_marker(tmp_path), refresh=mutable_refresh)
-    assert not list(tmp_path.rglob("continuity_status.json"))
-    assert not transaction_path(specs).exists()
+        initialize(bundle, refresh=mutable_refresh)
+    assert journal_path(coordinator).exists()
+    assert not any(path.exists() for path in metadata_paths(specs))
 
 
-def test_ledger_change_during_first_replacement_restores_prior_state(tmp_path: Path) -> None:
+def test_concurrent_metadata_creation_is_preserved_and_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     bundle = build_bundle(specs)
+    calls = 0
+    external = b'{"status":"external"}\n'
 
-    def mutate_after_first(_strategy: str, index: int) -> None:
-        if index == 0:
-            (specs[0].ledger_dir / "paper_broker_state.json").write_text(
-                json.dumps({"cash": 99_999, "positions": []}), encoding="utf-8"
-            )
+    def concurrent_refresh() -> initializer.AuditBundle:
+        nonlocal calls
+        calls += 1
+        current = build_bundle(specs)
+        if calls == 2:
+            metadata_paths(specs)[0].write_bytes(external)
+        return current
 
-    with pytest.raises(initializer.ContinuityInitializationError):
-        initialize(bundle, write_marker(tmp_path), after_replace=mutate_after_first)
-    assert not list(tmp_path.rglob("continuity_status.json"))
-    assert not transaction_path(specs).exists()
+    with pytest.raises(initializer.RecoveryRequiredError, match="concurrent metadata"):
+        initialize(bundle, refresh=concurrent_refresh)
+    assert metadata_paths(specs)[0].read_bytes() == external
+    assert not metadata_paths(specs)[1].exists()
+    assert journal_path(coordinator).exists()
 
 
-def test_interruption_between_replacements_is_detected_and_recovered(tmp_path: Path) -> None:
+def test_interruption_after_first_create_retains_fixed_recovery_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     bundle = build_bundle(specs)
 
     def interrupt(_strategy: str, index: int) -> None:
@@ -167,139 +229,232 @@ def test_interruption_between_replacements_is_detected_and_recovered(tmp_path: P
             raise KeyboardInterrupt("simulated process death")
 
     with pytest.raises(KeyboardInterrupt):
-        initialize(bundle, write_marker(tmp_path), after_replace=interrupt)
-    assert (specs[0].ledger_dir / "continuity_status.json").exists()
-    assert not (specs[1].ledger_dir / "continuity_status.json").exists()
-    assert transaction_path(specs).exists()
+        initialize(bundle, after_create=interrupt)
+    assert [path.exists() for path in metadata_paths(specs)] == [True, False]
+    assert journal_path(coordinator).exists()
 
-    assert initializer.recover_interrupted_transaction(bundle) is True
-    assert not list(tmp_path.rglob("continuity_status.json"))
-    assert not transaction_path(specs).exists()
+    with pytest.raises(initializer.RecoveryRequiredError, match="explicit operator recovery"):
+        initialize(bundle)
+    assert [path.exists() for path in metadata_paths(specs)] == [True, False]
 
 
-def test_atomic_group_write_and_idempotency_preserve_timestamp(tmp_path: Path) -> None:
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX directory fsync")
+def test_recovery_record_is_file_and_directory_fsynced_before_metadata_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     specs = make_specs(tmp_path)
-    marker = write_marker(tmp_path)
-    first = build_bundle(specs)
-    actions = initialize(first, marker)
-    paths = [spec.ledger_dir / "continuity_status.json" for spec in specs]
-    original = [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths]
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    bundle = build_bundle(specs)
+    original_fsync = initializer.os.fsync
+    original_create_metadata = initializer._create_metadata
+    fsync_kinds: list[str] = []
 
-    second = build_bundle(specs, calculated_at="2026-07-20T13:00:00+00:00")
-    repeated = initialize(second, marker)
+    def record_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        fsync_kinds.append("directory" if stat.S_ISDIR(mode) else "file")
+        original_fsync(descriptor)
 
-    assert actions == {"v8_demo": "create", "uptrend_sideways": "create"}
-    assert repeated == {"v8_demo": "unchanged", "uptrend_sideways": "unchanged"}
-    assert second.audit_sha256 == first.audit_sha256
-    assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths] == original
-    assert json.loads(paths[0].read_text(encoding="utf-8"))["calculated_at"] == "2026-07-20T12:00:00+00:00"
+    def prove_journal_first(identity: initializer.DirectoryIdentity, payload: bytes) -> None:
+        assert journal_path(coordinator).exists()
+        assert fsync_kinds[:2] == ["file", "directory"]
+        original_create_metadata(identity, payload)
+
+    monkeypatch.setattr(initializer.os, "fsync", record_fsync)
+    monkeypatch.setattr(initializer, "_create_metadata", prove_journal_first)
+    initialize(bundle)
 
 
-@pytest.mark.parametrize("content", ["not-json", json.dumps({"status": "healthy"})])
-def test_malformed_or_conflicting_metadata_is_refused(tmp_path: Path, content: str) -> None:
+def test_final_coordinator_fsync_failure_keeps_documentation_and_retries_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     specs = make_specs(tmp_path)
-    (specs[0].ledger_dir / "continuity_status.json").write_text(content, encoding="utf-8")
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    bundle = build_bundle(specs)
+    original = initializer._fsync_directory
+    coordinator_calls = 0
 
-    with pytest.raises(initializer.ContinuityInitializationError):
-        initialize(build_bundle(specs), write_marker(tmp_path))
-    assert not (specs[1].ledger_dir / "continuity_status.json").exists()
+    def fail_final(identity: initializer.DirectoryIdentity) -> None:
+        nonlocal coordinator_calls
+        if identity.path == str(coordinator.resolve()):
+            coordinator_calls += 1
+            if coordinator_calls == 2:
+                raise OSError("simulated final coordinator fsync failure")
+        original(identity)
+
+    monkeypatch.setattr(initializer, "_fsync_directory", fail_final)
+    with pytest.raises(OSError, match="final coordinator"):
+        initialize(bundle)
+    assert journal_path(coordinator).exists()
+    assert [path.exists() for path in metadata_paths(specs)] == [True, True]
+
+    monkeypatch.setattr(initializer, "_fsync_directory", original)
+    assert initialize(bundle).actions == {"v8_demo": "unchanged", "uptrend_sideways": "unchanged"}
 
 
-def test_hash_includes_economic_files_and_excludes_metadata_logs_and_temps(tmp_path: Path) -> None:
+@pytest.mark.parametrize("malicious", ["daily_report.csv", "../v8/daily_report.csv", "../../victim"])
+def test_malicious_journal_filename_or_traversal_is_rejected_without_economic_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malicious: str
+) -> None:
+    specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    bundle = build_bundle(specs)
+    targets = {audit.spec.strategy_id: initializer._target_bytes(audit) for audit in bundle.audits}
+    journal = json.loads(initializer._journal_bytes(bundle, targets))
+    journal["targets"][0]["temporary"] = malicious
+    journal_path(coordinator).write_text(json.dumps(journal), encoding="utf-8")
+    before = economic_identity(specs)
+
+    with pytest.raises(initializer.RecoveryRequiredError, match="schema"):
+        initialize(bundle)
+    assert economic_identity(specs) == before
+
+
+def test_malformed_journal_never_changes_ledgers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = make_specs(tmp_path)
+    _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    journal_path(coordinator).write_text("not-json", encoding="utf-8")
+    before = economic_identity(specs)
+
+    with pytest.raises(initializer.RecoveryRequiredError, match="malformed"):
+        initialize(build_bundle(specs))
+    assert economic_identity(specs) == before
+
+
+def test_existing_metadata_without_fixed_journal_is_never_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = make_specs(tmp_path)
+    configure_fixed_state(tmp_path, specs, monkeypatch)
+    external = b'{"status":"existing"}\n'
+    metadata_paths(specs)[0].write_bytes(external)
+
+    with pytest.raises(initializer.ContinuityInitializationError, match="both metadata files to be absent"):
+        initialize(build_bundle(specs))
+    assert metadata_paths(specs)[0].read_bytes() == external
+
+
+def test_economic_files_are_never_deleted_renamed_or_modified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = make_specs(tmp_path)
+    configure_fixed_state(tmp_path, specs, monkeypatch)
+    before = economic_identity(specs)
+    initialize(build_bundle(specs))
+    assert economic_identity(specs) == before
+
+    source = (SCRIPTS_DIR / "initialize_paper_continuity.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    forbidden = {"unlink", "remove", "removedirs", "rename", "renames", "replace"}
+    invoked = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert invoked.isdisjoint(forbidden)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX O_NOFOLLOW")
+def test_symlink_substitution_during_descriptor_relative_open_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = make_specs(tmp_path)
+    target = specs[0].ledger_dir / "paper_broker_state.json"
+    moved = specs[0].ledger_dir / "moved-economic.json"
+    original = initializer._open_relative_read
+    substituted = False
+
+    def substitute(identity: initializer.DirectoryIdentity, descriptor: int | None, name: str) -> int:
+        nonlocal substituted
+        if identity.path == str(specs[0].ledger_dir.resolve()) and name == target.name and not substituted:
+            substituted = True
+            target.rename(moved)
+            target.symlink_to(moved.name)
+        return original(identity, descriptor, name)
+
+    monkeypatch.setattr(initializer, "_open_relative_read", substitute)
+    with pytest.raises(OSError):
+        initializer.snapshot_ledger(specs[0].ledger_dir)
+    assert substituted is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX ownership")
+def test_forged_release_marker_owner_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = make_specs(tmp_path)
+    marker, _coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    if os.geteuid() == 0:
+        os.chown(marker, 65534, 65534)
+    with pytest.raises(initializer.ContinuityInitializationError, match="owned by root"):
+        initializer.read_release_marker()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX permissions")
+def test_forged_release_marker_parent_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = make_specs(tmp_path)
+    marker, _coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
+    marker.parent.chmod(0o777)
+    with pytest.raises(initializer.ContinuityInitializationError, match="build-owned and protected"):
+        initializer.read_release_marker()
+
+
+def test_hash_includes_economic_files_and_excludes_fixed_metadata_logs_and_temps(tmp_path: Path) -> None:
     specs = make_specs(tmp_path)
     ledger = specs[0].ledger_dir
     initial = initializer.snapshot_ledger(ledger)
     (ledger / "runner.log").write_text("changed", encoding="utf-8")
     (ledger / "pending.tmp").write_text("changed", encoding="utf-8")
-    (ledger / "continuity_status.json").write_text("changed", encoding="utf-8")
-    assert initializer.snapshot_ledger(ledger) == initial
+    (ledger / initializer.CONTINUITY_FILENAME).write_text("changed", encoding="utf-8")
+    assert initializer.snapshot_ledger(ledger).sha256 == initial.sha256
 
     (ledger / "paper_order_ledger.csv").write_text("order_id\n1\n", encoding="utf-8")
-    assert initializer.snapshot_ledger(ledger) != initial
+    assert initializer.snapshot_ledger(ledger).sha256 != initial.sha256
 
 
-def test_symlink_ledger_directory_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    real = tmp_path / "real"
-    write_report(real, V8_DATES)
-    real_lstat = initializer.os.lstat
-
-    def symlinked_directory(path: Path) -> os.stat_result | SimpleNamespace:
-        if Path(path) == real:
-            return SimpleNamespace(st_mode=stat.S_IFLNK)
-        return real_lstat(path)
-
-    monkeypatch.setattr(initializer.os, "lstat", symlinked_directory)
-
-    with pytest.raises(initializer.ContinuityInitializationError, match="must not be a symlink"):
-        initializer.snapshot_ledger(real)
-
-
-def test_symlink_ledger_file_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    ledger = tmp_path / "ledger"
-    write_report(ledger, V8_DATES)
-    state = ledger / "paper_broker_state.json"
-    real_lstat = initializer.os.lstat
-
-    def symlinked_file(path: Path) -> os.stat_result | SimpleNamespace:
-        if Path(path) == state:
-            return SimpleNamespace(st_mode=stat.S_IFLNK)
-        return real_lstat(path)
-
-    monkeypatch.setattr(initializer.os, "lstat", symlinked_file)
-
-    with pytest.raises(initializer.ContinuityInitializationError, match="must not be symlinks"):
-        initializer.snapshot_ledger(ledger)
-
-
-def test_directory_fsync_failure_restores_and_retains_no_partial_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_marker_change_is_rejected_before_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     specs = make_specs(tmp_path)
+    marker_path, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     bundle = build_bundle(specs)
-    original = initializer._fsync_directory
-    failed = False
+    marker = initializer.read_release_marker()
+    marker_path.write_text("0" * 40 + "\n", encoding="ascii")
 
-    def fail_once(identity: initializer.DirectoryIdentity) -> None:
-        nonlocal failed
-        if identity.path == str(specs[0].ledger_dir.resolve()) and not failed:
-            failed = True
-            raise OSError("simulated directory fsync failure")
-        original(identity)
-
-    monkeypatch.setattr(initializer, "_fsync_directory", fail_once)
-    with pytest.raises(OSError, match="fsync"):
-        initialize(bundle, write_marker(tmp_path))
-    assert failed is True
-    assert not list(tmp_path.rglob("continuity_status.json"))
-    assert not transaction_path(specs).exists()
+    with pytest.raises(initializer.ContinuityInitializationError, match="changed"):
+        initializer.initialize_metadata(
+            bundle,
+            expected_audit_sha256=bundle.audit_sha256,
+            trusted_marker=marker,
+            refresh_audit=lambda: build_bundle(specs),
+        )
+    assert not journal_path(coordinator).exists()
 
 
-def test_trusted_release_marker_mismatch_is_refused(tmp_path: Path) -> None:
-    marker = write_marker(tmp_path, "0" * 40)
-
-    with pytest.raises(initializer.ContinuityInitializationError, match="does not match"):
-        initializer.read_release_marker(marker, expected_source_main_sha=SOURCE_MAIN_SHA)
-
-
-def test_mutable_api_end_to_end_dry_run_write_refuses_changed_dates(
+def test_mutable_api_end_to_end_refuses_stale_dry_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     specs = make_specs(tmp_path)
-    marker = write_marker(tmp_path)
+    configure_fixed_state(tmp_path, specs, monkeypatch)
     dates = list(TRADING_DATES)
     latest = "2026-07-17"
     monkeypatch.setattr(initializer, "fetch_latest_date", lambda _url: latest)
     monkeypatch.setattr(initializer, "fetch_trading_dates", lambda _url, _start, _end: list(dates))
-    args = [
-        "--v8-dir", str(specs[0].ledger_dir),
-        "--uptrend-dir", str(specs[1].ledger_dir),
-        "--source-main-sha", SOURCE_MAIN_SHA,
-        "--release-marker", str(marker),
-    ]
 
-    assert initializer.main(args) == 0
+    assert initializer.main([]) == 0
     dry_run = json.loads(capsys.readouterr().out)
     dates.append("2026-07-20")
     latest = "2026-07-20"
-    assert initializer.main(args + ["--write", "--expected-audit-sha256", dry_run["audit_sha256"]]) == 2
-    assert not list(tmp_path.rglob("continuity_status.json"))
+    assert initializer.main(["--write", "--expected-audit-sha256", dry_run["audit_sha256"]]) == 2
+    assert not any(path.exists() for path in metadata_paths(specs))
+
+
+def test_runtime_imports_have_no_strategy_broker_or_order_path() -> None:
+    source = (SCRIPTS_DIR / "initialize_paper_continuity.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert not any(token in name for name in imports for token in ("strategy", "broker", "order", "dhan"))

@@ -52,14 +52,17 @@ exchange holidays are not incorrectly treated as gaps.
 `initialize_paper_continuity.py` imports only the continuity planner. It never
 imports or invokes a strategy, broker, or order runner. Stop every process that
 can write either paper-ledger directory, preserve and hash both directories,
-and run the CLI without `--write` first. The supplied source SHA must exactly
-match a trusted, read-only release marker from the deployed build:
+and run the CLI without `--write` first:
 
 ```bash
-python scripts/initialize_paper_continuity.py \
-  --source-main-sha FULL_DEPLOYED_MAIN_SHA \
-  --release-marker /app/RELEASE_COMMIT
+python scripts/initialize_paper_continuity.py
 ```
+
+The CLI accepts no path, source-SHA, release-marker, coordinator, or API
+override. It derives the source SHA only from the fixed build-owned
+`/app/RELEASE_COMMIT`. The fixed coordinator directory
+`/var/lib/matsya-continuity-init` must already exist, be owned by root, grant
+no group/other permissions, and have a protected root-owned parent.
 
 The dry run must report `v8_demo=invalid_gap` and
 `uptrend_sideways=healthy`. Review the processed dates, missing dates, source
@@ -69,35 +72,38 @@ the exact audit SHA printed by that dry run:
 
 ```bash
 python scripts/initialize_paper_continuity.py \
-  --source-main-sha FULL_DEPLOYED_MAIN_SHA \
-  --release-marker /app/RELEASE_COMMIT \
   --write \
   --expected-audit-sha256 AUDIT_SHA_FROM_DRY_RUN
 ```
 
-Immediately before the commit boundary, the CLI re-fetches market dates,
-rebuilds both audits, and requires the resulting audit SHA to equal the
-approved dry-run SHA. It repeats that validation after the two replacements.
-The write is refused if the release marker, either ledger or its pinned
-directory/file identity, market dates, expected statuses, or approved audit
-changes. Symlink ledger directories, ledger files, metadata files, release
-markers, and transaction journals are refused. Malformed or conflicting
-metadata is never overwritten.
+This is a create-only operation. Both fixed metadata targets must be absent.
+Before creating either one, the CLI re-fetches market dates, rebuilds both
+audits, requires an exact match with the approved dry-run SHA, and durably
+creates the fixed immutable intent record
+`/var/lib/matsya-continuity-init/continuity-initialization.json`. The intent
+record contains hashes and content for the two fixed targets but contains no
+filesystem paths or filenames.
 
-The two metadata replacements form one recoverable group operation. Before
-writing either strategy, the CLI durably records both prior states in a
-transaction journal in the common parent directory. It stages and fsyncs both
-new files, atomically replaces V8 then Uptrend, validates the post-write audit,
-and only then removes and fsyncs the journal. Any ordinary failure restores
-both prior states before reporting failure. A process interruption can leave
-the journal and a partial pair; the next write invocation detects the journal
-and restores both prior states before proceeding.
-Do not delete or edit the journal manually.
+Each metadata target is re-read immediately before creation and is opened with
+`O_CREAT|O_EXCL|O_NOFOLLOW`. Concurrent creation is refused and never
+overwritten. The files and ledger directories are fsynced, the audits and
+fixed release marker are revalidated, and the coordinator directory is
+fsynced last. The intent record is deliberately retained after success. An
+identical repeat verifies the record and both fixed targets, fsyncs again, and
+returns unchanged without rewriting timestamps.
 
-Directory fsync failure is an error, not a warning. Recovery is attempted and
-the journal is retained if restoration cannot be proven complete. A successful
-identical repeat is a no-op and preserves the original metadata bytes,
-calculation timestamp, and filesystem modification time. Economic ledger
-CSV/JSON records are read and hashed but never modified; only the two
-`continuity_status.json` files and the transient recovery journal/temp files
-are within the initializer's write set.
+There is no automatic rollback. The initializer contains no unlink, remove,
+rename, replace, or restore operation. If it is interrupted after creating one
+target, the durable fixed intent record and partial fixed state remain. Every
+later invocation fails closed and requires an explicit, separately reviewed
+operator recovery procedure. Do not delete, edit, or attempt to resume from
+the record during this runbook.
+
+Economic ledger files are enumerated and opened relative to pinned directory
+descriptors with `O_NOFOLLOW`; device and inode identity are verified using
+`fstat` on the opened descriptors. Economic CSV/JSON files are never opened
+for writing and cannot be deleted or renamed by this CLI. Any symlink,
+economic-ledger mutation, market-date change, marker change, metadata race, or
+fsync failure is an error. Because the fixed intent record is durable before
+metadata creation and is never cleaned up, a final coordinator-fsync failure
+cannot leave undocumented committed metadata.
