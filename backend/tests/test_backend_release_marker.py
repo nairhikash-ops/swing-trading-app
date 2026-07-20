@@ -22,7 +22,7 @@ def test_dockerfile_has_strict_marker_guard() -> None:
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker unavailable")
-@pytest.mark.parametrize("value", [None, "ABC", "g" * 40, "a" * 39])
+@pytest.mark.parametrize("value", [None, "ABC", "A" * 40, "g" * 40, "a" * 39, "a" * 41])
 def test_missing_or_malformed_build_arg_fails(value: str | None) -> None:
     tag = f"matsya-marker-invalid-{os.getpid()}"
     command = ["docker", "build", "-f", str(DOCKERFILE), "-t", tag]
@@ -31,6 +31,28 @@ def test_missing_or_malformed_build_arg_fails(value: str | None) -> None:
     command.append(str(ROOT / "backend"))
     result = subprocess.run(command, capture_output=True, text=True, timeout=180)
     assert result.returncode != 0
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker unavailable")
+def test_compose_requires_release_commit() -> None:
+    compose = ROOT / "deploy" / "matsya-setup" / "docker-compose.yml"
+    env_file = compose.parent / ".env"
+    created = not env_file.exists()
+    if created:
+        env_file.write_text("", encoding="utf-8")
+    try:
+        missing = subprocess.run(["docker", "compose", "--profile", "manual", "-f", str(compose), "config"], capture_output=True, text=True)
+        assert missing.returncode != 0
+        env = os.environ.copy()
+        env["RELEASE_COMMIT"] = SHA
+        valid = subprocess.run(["docker", "compose", "--profile", "manual", "-f", str(compose), "config"], env=env, capture_output=True, text=True)
+        assert valid.returncode == 0, valid.stderr
+        for service in ("matsya-api", "v8-demo-trader", "uptrend-sideways-paper-trader", "matsya-intraday-paper-worker", "matsya-renewal-worker", "matsya-ohlcv-worker"):
+            assert f"{service}:" in valid.stdout
+        assert valid.stdout.count(f"RELEASE_COMMIT: {SHA}") == 6
+    finally:
+        if created:
+            env_file.unlink()
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker unavailable")

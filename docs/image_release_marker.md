@@ -8,6 +8,21 @@ docker build --build-arg "RELEASE_COMMIT=$RELEASE_COMMIT" \
   -f backend/Dockerfile -t "matsya-backend:$RELEASE_COMMIT" backend
 ```
 
+For the Matsya deployment Compose stack, use the checked-out commit directly;
+the command fails closed when the value is missing or malformed:
+
+```bash
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+test "$(git rev-parse --verify HEAD)" = "$RELEASE_COMMIT"
+printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+export RELEASE_COMMIT
+docker compose -f deploy/matsya-setup/docker-compose.yml build
+```
+
+The required argument is applied to `matsya-api`, `v8-demo-trader`,
+`uptrend-sideways-paper-trader`, `matsya-intraday-paper-worker`,
+`matsya-renewal-worker`, and `matsya-ohlcv-worker`. No SHA is defaulted.
+
 The Dockerfile rejects missing or malformed values and writes
 `/app/RELEASE_COMMIT` during image build only. It is a regular root-owned
 file with mode `0444` and one trailing newline; no runtime generation occurs.
