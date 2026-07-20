@@ -246,7 +246,7 @@ def test_recovery_record_is_file_and_directory_fsynced_before_metadata_creation(
     _marker, coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     bundle = build_bundle(specs)
     original_fsync = initializer.os.fsync
-    original_create_metadata = initializer._create_metadata
+    original_create_metadata = initializer._create_v8_metadata
     fsync_kinds: list[str] = []
 
     def record_fsync(descriptor: int) -> None:
@@ -260,7 +260,7 @@ def test_recovery_record_is_file_and_directory_fsynced_before_metadata_creation(
         original_create_metadata(identity, payload)
 
     monkeypatch.setattr(initializer.os, "fsync", record_fsync)
-    monkeypatch.setattr(initializer, "_create_metadata", prove_journal_first)
+    monkeypatch.setattr(initializer, "_create_v8_metadata", prove_journal_first)
     initialize(bundle)
 
 
@@ -383,7 +383,7 @@ def test_forged_release_marker_owner_is_rejected(tmp_path: Path, monkeypatch: py
     marker, _coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     if os.geteuid() == 0:
         os.chown(marker, 65534, 65534)
-    with pytest.raises(initializer.ContinuityInitializationError, match="owned by root"):
+    with pytest.raises(initializer.ContinuityInitializationError, match="root-owned"):
         initializer.read_release_marker()
 
 
@@ -392,8 +392,70 @@ def test_forged_release_marker_parent_is_rejected(tmp_path: Path, monkeypatch: p
     specs = make_specs(tmp_path)
     marker, _coordinator = configure_fixed_state(tmp_path, specs, monkeypatch)
     marker.parent.chmod(0o777)
-    with pytest.raises(initializer.ContinuityInitializationError, match="build-owned and protected"):
+    with pytest.raises(initializer.ContinuityInitializationError, match="group/world writable"):
         initializer.read_release_marker()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX path ownership and permissions")
+def test_writable_grandparent_is_rejected_for_fixed_paths(tmp_path: Path) -> None:
+    grandparent = tmp_path / "grandparent"
+    parent = grandparent / "parent"
+    target = parent / "target"
+    target.mkdir(parents=True, mode=0o700)
+    grandparent.chmod(0o777)
+
+    with pytest.raises(initializer.ContinuityInitializationError, match="group/world writable"):
+        initializer._pin_directory(target, label="hostile fixed ledger")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX path ownership")
+def test_non_root_owned_ancestor_is_rejected(tmp_path: Path) -> None:
+    grandparent = tmp_path / "grandparent"
+    target = grandparent / "target"
+    target.mkdir(parents=True, mode=0o700)
+    if os.geteuid() != 0:
+        pytest.skip("test requires root to create a non-root-owned ancestor")
+    os.chown(grandparent, 65534, 65534)
+
+    with pytest.raises(initializer.ContinuityInitializationError, match="not root-owned"):
+        initializer._pin_directory(target, label="hostile fixed ledger")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink semantics")
+def test_ancestor_symlink_is_rejected(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(initializer.ContinuityInitializationError, match="symlink component"):
+        initializer._pin_directory(link / "target", label="hostile fixed ledger")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX directory replacement")
+def test_ancestor_replacement_after_pinning_is_detected(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    target = root / "target"
+    target.mkdir(parents=True, mode=0o700)
+    identity = initializer._pin_directory(target, label="fixed ledger")
+    root.rename(tmp_path / "old-root")
+    (tmp_path / "root" / "target").mkdir(parents=True, mode=0o700)
+
+    with pytest.raises(initializer.LedgerChangedError):
+        initializer._verify_directory(identity)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX fixed-path creation")
+def test_specialized_creators_have_no_filename_or_target_directory_parameter() -> None:
+    import inspect
+
+    for function in (
+        initializer._create_intent_record,
+        initializer._create_v8_metadata,
+        initializer._create_uptrend_metadata,
+    ):
+        assert "filename" not in inspect.signature(function).parameters
+    assert not hasattr(initializer, "_create_fixed_file")
 
 
 def test_hash_includes_economic_files_and_excludes_fixed_metadata_logs_and_temps(tmp_path: Path) -> None:

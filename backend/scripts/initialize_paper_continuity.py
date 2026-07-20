@@ -52,10 +52,18 @@ class StrategySpec:
 
 
 @dataclass(frozen=True)
+class PathComponentIdentity:
+    path: str
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
 class DirectoryIdentity:
     path: str
     device: int
     inode: int
+    components: tuple[PathComponentIdentity, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,7 @@ class ReleaseMarker:
     source_main_sha: str
     device: int
     inode: int
+    components: tuple[PathComponentIdentity, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,36 +194,47 @@ class JournalRecord:
     targets: tuple[JournalTarget, ...]
 
 
-def _pin_directory(path: Path, *, label: str) -> DirectoryIdentity:
+def _pin_absolute_components(path: Path, *, label: str, final_kind: str) -> tuple[Path, os.stat_result, tuple[PathComponentIdentity, ...]]:
     requested = Path(path)
     if not requested.is_absolute():
         raise ContinuityInitializationError(f"{label} must be an absolute fixed path")
-    try:
-        requested_stat = os.lstat(requested)
-    except OSError as exc:
-        raise ContinuityInitializationError(f"{label} does not exist: {requested}") from exc
-    if stat.S_ISLNK(requested_stat.st_mode):
-        raise ContinuityInitializationError(f"{label} must not be a symlink: {requested}")
-    resolved = requested.resolve(strict=True)
-    resolved_stat = os.lstat(resolved)
-    if not stat.S_ISDIR(resolved_stat.st_mode):
-        raise ContinuityInitializationError(f"{label} is not a directory: {resolved}")
-    return DirectoryIdentity(str(resolved), resolved_stat.st_dev, resolved_stat.st_ino)
+    current = Path(requested.anchor)
+    components: list[PathComponentIdentity] = []
+    parts = requested.parts[1:] if requested.anchor else requested.parts
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            current_stat = os.lstat(current)
+        except OSError as exc:
+            raise ContinuityInitializationError(f"{label} component does not exist: {current}") from exc
+        if stat.S_ISLNK(current_stat.st_mode):
+            raise ContinuityInitializationError(f"{label} contains a symlink component: {current}")
+        if os.name != "nt":
+            if current_stat.st_uid != 0:
+                raise ContinuityInitializationError(f"{label} component is not root-owned: {current}")
+            if current_stat.st_mode & 0o022:
+                raise ContinuityInitializationError(f"{label} component is group/world writable: {current}")
+        is_final = index == len(parts) - 1
+        if not is_final and not stat.S_ISDIR(current_stat.st_mode):
+            raise ContinuityInitializationError(f"{label} component is not a directory: {current}")
+        components.append(PathComponentIdentity(str(current), current_stat.st_dev, current_stat.st_ino))
+    if not components:
+        raise ContinuityInitializationError(f"{label} cannot be filesystem root")
+    final_stat = os.lstat(current)
+    if final_kind == "directory" and not stat.S_ISDIR(final_stat.st_mode):
+        raise ContinuityInitializationError(f"{label} is not a directory: {current}")
+    if final_kind == "file" and not stat.S_ISREG(final_stat.st_mode):
+        raise ContinuityInitializationError(f"{label} is not a regular file: {current}")
+    return current, final_stat, tuple(components)
+
+
+def _pin_directory(path: Path, *, label: str) -> DirectoryIdentity:
+    resolved, resolved_stat, components = _pin_absolute_components(path, label=label, final_kind="directory")
+    return DirectoryIdentity(str(resolved), resolved_stat.st_dev, resolved_stat.st_ino, components)
 
 
 def _pin_protected_directory(path: Path, *, label: str) -> DirectoryIdentity:
-    identity = _pin_directory(path, label=label)
-    current = os.stat(identity.path, follow_symlinks=False)
-    if os.name != "nt":
-        if current.st_uid != 0:
-            raise ContinuityInitializationError(f"{label} must be owned by root")
-        if current.st_mode & 0o077:
-            raise ContinuityInitializationError(f"{label} must not grant group or other permissions")
-        parent = _pin_directory(Path(identity.path).parent, label=f"{label} parent")
-        parent_stat = os.stat(parent.path, follow_symlinks=False)
-        if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
-            raise ContinuityInitializationError(f"{label} parent must be root-owned and protected")
-    return identity
+    return _pin_directory(path, label=label)
 
 
 def _verify_directory(identity: DirectoryIdentity) -> None:
@@ -352,27 +372,12 @@ def _read_daily_report_dates(identity: DirectoryIdentity) -> list[str]:
     return [str(row["date"]) for row in csv.DictReader(io.StringIO(text)) if row.get("date")]
 
 
-def _validate_marker_parent(path: Path) -> None:
-    parent = _pin_directory(path.parent, label="release marker parent")
-    current = os.stat(parent.path, follow_symlinks=False)
-    if os.name != "nt":
-        if current.st_uid != 0 or current.st_mode & 0o022:
-            raise ContinuityInitializationError("fixed release marker parent is not build-owned and protected")
-
-
 def read_release_marker() -> ReleaseMarker:
-    marker = RELEASE_MARKER_PATH
-    if not marker.is_absolute():
-        raise ContinuityInitializationError("release marker path must be an absolute fixed path")
-    _validate_marker_parent(marker)
-    marker_stat = os.lstat(marker)
-    if stat.S_ISLNK(marker_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
-        raise ContinuityInitializationError("fixed release marker must be a regular non-symlink file")
-    if os.name != "nt":
-        if marker_stat.st_uid != 0:
-            raise ContinuityInitializationError("fixed release marker must be owned by root")
-        if marker_stat.st_mode & 0o022:
-            raise ContinuityInitializationError("fixed release marker must not be group/world writable")
+    marker, marker_stat, components = _pin_absolute_components(
+        RELEASE_MARKER_PATH,
+        label="fixed release marker",
+        final_kind="file",
+    )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(marker, flags)
     try:
@@ -393,7 +398,7 @@ def read_release_marker() -> ReleaseMarker:
     value = content.decode("ascii").strip()
     if not SOURCE_SHA_PATTERN.fullmatch(value):
         raise ContinuityInitializationError("fixed release marker does not contain an exact commit SHA")
-    return ReleaseMarker(str(marker.resolve(strict=True)), value, marker_stat.st_dev, marker_stat.st_ino)
+    return ReleaseMarker(str(marker), value, marker_stat.st_dev, marker_stat.st_ino, components)
 
 
 def verify_release_marker(marker: ReleaseMarker) -> None:
@@ -493,14 +498,15 @@ def _read_journal(identity: DirectoryIdentity) -> bytes | None:
     return _read_fixed_file(identity, JOURNAL_FILENAME)
 
 
-def _create_fixed_file(identity: DirectoryIdentity, filename: str, payload: bytes) -> None:
+def _create_intent_record(payload: bytes) -> None:
+    identity = _fixed_coordinator()
     descriptor = _open_directory(identity)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         if descriptor is not None:
-            file_descriptor = os.open(filename, flags, 0o600, dir_fd=descriptor)
+            file_descriptor = os.open(JOURNAL_FILENAME, flags, 0o600, dir_fd=descriptor)
         else:
-            file_descriptor = os.open(Path(identity.path) / filename, flags, 0o600)
+            file_descriptor = os.open(Path(identity.path) / JOURNAL_FILENAME, flags, 0o600)
         try:
             view = memoryview(payload)
             while view:
@@ -517,12 +523,58 @@ def _create_fixed_file(identity: DirectoryIdentity, filename: str, payload: byte
             os.close(descriptor)
 
 
-def _create_metadata(identity: DirectoryIdentity, payload: bytes) -> None:
-    _create_fixed_file(identity, CONTINUITY_FILENAME, payload)
+def _create_v8_metadata(expected_identity: DirectoryIdentity, payload: bytes) -> None:
+    identity = _pin_directory(V8_LEDGER_DIR, label="fixed V8 ledger directory")
+    if identity != expected_identity:
+        raise LedgerChangedError("fixed V8 ledger directory identity changed")
+    descriptor = _open_directory(identity)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        if descriptor is not None:
+            file_descriptor = os.open(CONTINUITY_FILENAME, flags, 0o600, dir_fd=descriptor)
+        else:
+            file_descriptor = os.open(Path(identity.path) / CONTINUITY_FILENAME, flags, 0o600)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(file_descriptor, view)
+                if written <= 0:
+                    raise OSError("V8 metadata write made no progress")
+                view = view[written:]
+            os.fsync(file_descriptor)
+        finally:
+            os.close(file_descriptor)
+        _fsync_directory(identity)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
-def _create_journal(identity: DirectoryIdentity, payload: bytes) -> None:
-    _create_fixed_file(identity, JOURNAL_FILENAME, payload)
+def _create_uptrend_metadata(expected_identity: DirectoryIdentity, payload: bytes) -> None:
+    identity = _pin_directory(UPTREND_LEDGER_DIR, label="fixed Uptrend ledger directory")
+    if identity != expected_identity:
+        raise LedgerChangedError("fixed Uptrend ledger directory identity changed")
+    descriptor = _open_directory(identity)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        if descriptor is not None:
+            file_descriptor = os.open(CONTINUITY_FILENAME, flags, 0o600, dir_fd=descriptor)
+        else:
+            file_descriptor = os.open(Path(identity.path) / CONTINUITY_FILENAME, flags, 0o600)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(file_descriptor, view)
+                if written <= 0:
+                    raise OSError("Uptrend metadata write made no progress")
+                view = view[written:]
+            os.fsync(file_descriptor)
+        finally:
+            os.close(file_descriptor)
+        _fsync_directory(identity)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _target_bytes(audit: StrategyAudit) -> bytes:
@@ -644,7 +696,7 @@ def initialize_metadata(
         raise ContinuityInitializationError("create-only initialization requires both metadata files to be absent")
 
     targets = {audit.spec.strategy_id: _target_bytes(audit) for audit in refreshed.audits}
-    _create_journal(coordinator, _journal_bytes(refreshed, targets))
+    _create_intent_record(_journal_bytes(refreshed, targets))
 
     final_boundary = refresh_audit()
     if final_boundary.audit_sha256 != expected_audit_sha256:
@@ -656,7 +708,12 @@ def initialize_metadata(
             raise RecoveryRequiredError(
                 f"concurrent metadata creation detected for {audit.spec.strategy_id}; recovery record retained"
             )
-        _create_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+        if audit.spec.strategy_id == "v8_demo":
+            _create_v8_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+        elif audit.spec.strategy_id == "uptrend_sideways":
+            _create_uptrend_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+        else:
+            raise ContinuityInitializationError("unexpected fixed strategy identifier")
         if after_create is not None:
             after_create(audit.spec.strategy_id, index)
 
