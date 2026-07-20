@@ -254,10 +254,10 @@ def test_recovery_record_is_file_and_directory_fsynced_before_metadata_creation(
         fsync_kinds.append("directory" if stat.S_ISDIR(mode) else "file")
         original_fsync(descriptor)
 
-    def prove_journal_first(identity: initializer.DirectoryIdentity, payload: bytes) -> None:
+    def prove_journal_first(payload: bytes) -> None:
         assert journal_path(coordinator).exists()
         assert fsync_kinds[:2] == ["file", "directory"]
-        original_create_metadata(identity, payload)
+        original_create_metadata(payload)
 
     monkeypatch.setattr(initializer.os, "fsync", record_fsync)
     monkeypatch.setattr(initializer, "_create_v8_metadata", prove_journal_first)
@@ -455,6 +455,7 @@ def test_specialized_creators_have_no_filename_or_target_directory_parameter() -
         initializer._create_uptrend_metadata,
     ):
         assert "filename" not in inspect.signature(function).parameters
+        assert "identity" not in inspect.signature(function).parameters
     assert not hasattr(initializer, "_create_fixed_file")
 
 

@@ -523,10 +523,8 @@ def _create_intent_record(payload: bytes) -> None:
             os.close(descriptor)
 
 
-def _create_v8_metadata(expected_identity: DirectoryIdentity, payload: bytes) -> None:
+def _create_v8_metadata(payload: bytes) -> None:
     identity = _pin_directory(V8_LEDGER_DIR, label="fixed V8 ledger directory")
-    if identity != expected_identity:
-        raise LedgerChangedError("fixed V8 ledger directory identity changed")
     descriptor = _open_directory(identity)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -550,10 +548,8 @@ def _create_v8_metadata(expected_identity: DirectoryIdentity, payload: bytes) ->
             os.close(descriptor)
 
 
-def _create_uptrend_metadata(expected_identity: DirectoryIdentity, payload: bytes) -> None:
+def _create_uptrend_metadata(payload: bytes) -> None:
     identity = _pin_directory(UPTREND_LEDGER_DIR, label="fixed Uptrend ledger directory")
-    if identity != expected_identity:
-        raise LedgerChangedError("fixed Uptrend ledger directory identity changed")
     descriptor = _open_directory(identity)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -709,9 +705,13 @@ def initialize_metadata(
                 f"concurrent metadata creation detected for {audit.spec.strategy_id}; recovery record retained"
             )
         if audit.spec.strategy_id == "v8_demo":
-            _create_v8_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+            if _pin_directory(V8_LEDGER_DIR, label="fixed V8 ledger directory") != audit.ledger.directory:
+                raise LedgerChangedError("fixed V8 ledger directory identity changed")
+            _create_v8_metadata(targets[audit.spec.strategy_id])
         elif audit.spec.strategy_id == "uptrend_sideways":
-            _create_uptrend_metadata(audit.ledger.directory, targets[audit.spec.strategy_id])
+            if _pin_directory(UPTREND_LEDGER_DIR, label="fixed Uptrend ledger directory") != audit.ledger.directory:
+                raise LedgerChangedError("fixed Uptrend ledger directory identity changed")
+            _create_uptrend_metadata(targets[audit.spec.strategy_id])
         else:
             raise ContinuityInitializationError("unexpected fixed strategy identifier")
         if after_create is not None:
