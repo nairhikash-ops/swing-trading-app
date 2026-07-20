@@ -5,6 +5,13 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+ARG RELEASE_COMMIT
+RUN test -n "$RELEASE_COMMIT" \
+    && printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+    && printf '%s\n' "$RELEASE_COMMIT" > /app/RELEASE_COMMIT \
+    && chown root:root /app/RELEASE_COMMIT \
+    && chmod 0444 /app/RELEASE_COMMIT
+
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e .
 
