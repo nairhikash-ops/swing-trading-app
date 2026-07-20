@@ -45,6 +45,8 @@ def test_compose_requires_release_commit() -> None:
         assert missing.returncode != 0
         env = os.environ.copy()
         env["RELEASE_COMMIT"] = SHA
+        env["MATSYA_DATA_ROOT"] = str(compose.parent / "test-data")
+        env["MATSYA_ENV_FILE"] = str(env_file)
         valid = subprocess.run(["docker", "compose", "--profile", "manual", "-f", str(compose), "config"], env=env, capture_output=True, text=True)
         assert valid.returncode == 0, valid.stderr
         for service in ("matsya-api", "v8-demo-trader", "uptrend-sideways-paper-trader", "matsya-intraday-paper-worker", "matsya-renewal-worker", "matsya-ohlcv-worker"):
