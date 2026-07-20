@@ -120,7 +120,7 @@ class DhanClient:
         to_date: str,
         interval: str = "1",
     ) -> dict[str, Any]:
-        """Read-only DhanHQ v2 minute candles used only for paper-ledger reconciliation."""
+        """Read-only DhanHQ v2 intraday historical candles."""
         payload = {
             "securityId": security_id,
             "exchangeSegment": exchange_segment,
